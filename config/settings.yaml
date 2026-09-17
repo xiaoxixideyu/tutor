@@ -1,0 +1,24 @@
+# tutor 模型接入配置（设计文档 §6.3 + §4.1 判断三：分级调度）
+# 这是模板：scripts/agent.mjs 读取 .env 后替换 ${...} 占位符，
+# 生成运行时副本 $DSH_HOME/settings.yaml。三要素（base_url/api_key/model）统一在 .env 维护。
+llm-pi-ai:
+  providers:
+    tutor:
+      displayName: Tutor
+      apiKeyEnv: TUTOR_LLM_API_KEY
+      api: openai-completions
+      baseURL: ${TUTOR_LLM_BASE_URL}
+      # 通用网关兼容开关（providers.md 故障排查推荐基线）
+      compat:
+        supportsDeveloperRole: false
+        maxTokensField: max_tokens
+      models:
+        # 便宜档（第一期默认档）；contextWindow 为占位估值，待实测校准
+        - id: ${TUTOR_LLM_MODEL}
+          name: Tutor cheap tier
+          contextWindow: 262144
+
+# 新建 agent 的默认模型（便宜档默认）
+agent-default-model:
+  provider: tutor
+  model: ${TUTOR_LLM_MODEL}

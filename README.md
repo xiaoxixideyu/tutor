@@ -10,7 +10,23 @@
 
 ## 状态
 
-设计定稿，第一期实施中（单课程教学闭环）。
+设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建 + 最小 agent 循环（第一期任务 1、2）。
+
+## 环境要求
+
+- **Node ≥ 22.19，建议 24 LTS**（Harness 依赖 `import.meta.main`，仅官方实测 22.19/24/26；Node 23 会静默失效）
+- Harness 锁定 `@deepseek-ai/dsh@0.1.5-rc.1`（开发预览期，升级需显式变更）
+
+## 快速开始
+
+```sh
+npm install
+cp .env.example .env   # 填入 base_url / api_key / model 三要素
+npm run agent -- "你好" # 一次性 agent 任务（headless 档案）
+```
+
+- 模型接入模板：`config/settings.yaml`（由 `scripts/agent.mjs` 渲染为运行时副本）
+- 会话日志：`data/dsh-home/sessions/`（JSONL 压缩存储，唯一事实来源，勿手改）
 
 ## 相关仓库
 

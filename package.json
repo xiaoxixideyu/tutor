@@ -1,0 +1,16 @@
+{
+  "name": "tutor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "个性化教学 agent：从需求澄清、教研、摸底、规划，到讲授、检验、复习，全程因材施教",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "agent": "node scripts/agent.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.5-rc.1"
+  }
+}
