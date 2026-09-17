@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 运行时数据（课程状态与会话日志，属个人数据不入库）
+data/
+courses/
+*.session.jsonl
+
+# 环境变量与密钥
+.env
+.env.local
+.env.*.local
+
+# 系统文件
+.DS_Store
+*.log
