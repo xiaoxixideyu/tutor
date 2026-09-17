@@ -10,7 +10,9 @@
 
 ## 状态
 
-设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建 + 最小 agent 循环（第一期任务 1、2）。
+设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建、最小 agent 循环、课程状态插件（第一期任务 1-3）。
+
+核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/course-state.ts` 以 dsh 插件形态暴露 `ctx.courseState` 服务（`config/cordis.patch.yml` 模板 + `scripts/agent.mjs` 渲染挂载）。
 
 ## 环境要求
 

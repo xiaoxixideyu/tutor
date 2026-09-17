@@ -1,0 +1,6 @@
+# tutor 插件接入模板：scripts/agent.mjs 渲染占位符后经 --patch 挂载到 headless 档案
+- insert:
+    - id: course-state
+      name: '${TUTOR_PLUGIN_PATH}'
+      config:
+        root: '${TUTOR_COURSES_ROOT}'

@@ -1,0 +1,3 @@
+- insert:
+    - id: tutor-probe
+      name: '/Users/yu.chen/Dev/code/github/tutor/test/fixtures/probe-plugin.ts'

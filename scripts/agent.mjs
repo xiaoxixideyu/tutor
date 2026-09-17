@@ -12,7 +12,7 @@ const dshHome = path.join(root, 'data', 'dsh-home')
 fs.mkdirSync(dshHome, { recursive: true })
 
 // .env：模型接入三要素（base_url/api_key/model）的单一来源；不覆盖已有环境变量
-const env = { ...process.env }
+const env = { ...process.env, DSH_HOME: dshHome }
 const envFile = path.join(root, '.env')
 if (fs.existsSync(envFile)) {
   for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
@@ -21,14 +21,28 @@ if (fs.existsSync(envFile)) {
   }
 }
 
-// config/settings.yaml 是模板：替换 ${VAR} 占位符生成运行时副本
-const template = fs.readFileSync(path.join(root, 'config', 'settings.yaml'), 'utf8')
-const rendered = template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (raw, name) => {
-  if (!(name in env)) throw new Error(`scripts/agent.mjs: 缺少环境变量 ${name}（见 .env.example）`)
-  const value = env[name]
-  return name === 'TUTOR_LLM_BASE_URL' ? value.replace(/\/+$/, '') : value
-})
-fs.writeFileSync(path.join(dshHome, 'settings.yaml'), rendered)
+// 渲染 config/ 下的模板（替换 ${VAR} 占位符）到运行时目录
+env.TUTOR_PLUGIN_PATH ??= path.join(root, 'src', 'plugin', 'course-state.ts')
+env.TUTOR_COURSES_ROOT ??= path.join(root, 'courses')
+
+function renderTemplate(name, output) {
+  const src = path.join(root, 'config', name)
+  if (!fs.existsSync(src)) return null
+  const rendered = fs
+    .readFileSync(src, 'utf8')
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (raw, varName) => {
+      if (!(varName in env)) throw new Error(`scripts/agent.mjs: 模板 ${name} 缺少环境变量 ${varName}（见 .env.example）`)
+      const value = env[varName]
+      return varName === 'TUTOR_LLM_BASE_URL' ? value.replace(/\/+$/, '') : value
+    })
+  const dst = path.join(dshHome, output)
+  fs.writeFileSync(dst, rendered)
+  return dst
+}
+
+const settingsPath = renderTemplate('settings.yaml', 'settings.yaml')
+if (!settingsPath) throw new Error('scripts/agent.mjs: 缺少 config/settings.yaml')
+const patchPath = renderTemplate('cordis.patch.yml', 'tutor.patch.yml')
 
 const require = createRequire(import.meta.url)
 const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
@@ -45,8 +59,9 @@ function resolveRuntimeNode() {
   return process.execPath
 }
 
-const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...process.argv.slice(2)], {
-  env: { ...env, DSH_HOME: dshHome },
+const patchArgs = patchPath ? ['--patch', patchPath] : []
+const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...process.argv.slice(2)], {
+  env,
   stdio: 'inherit',
   cwd: root,
 })
