@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // tutor 薄壳：驱动 Harness headless 档案跑一次性 agent 任务（设计文档 §4.3：壳不承载业务逻辑）
-// 用法：npm run agent -- "任务文本" ｜ echo 任务 | npm run agent
+// 用法：
+//   npm run agent -- "任务文本"          一次性任务
+//   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import yaml from 'yaml'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dshHome = path.join(root, 'data', 'dsh-home')
@@ -60,7 +63,47 @@ function resolveRuntimeNode() {
 }
 
 const patchArgs = patchPath ? ['--patch', patchPath] : []
-const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...process.argv.slice(2)], {
+
+// tutor new <课程名>：需求澄清访谈——换访谈人格、禁用 headless 运行器、挂访谈运行器
+const argv = process.argv.slice(2)
+let interviewArgs = []
+if (argv[0] === 'new') {
+  const courseId = argv[1] ?? ''
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(courseId)) {
+    throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
+  }
+  const persona = fs.readFileSync(path.join(root, 'config', 'persona', 'interview.md'), 'utf8').trim()
+  const interviewPatch = [
+    {
+      id: 'system-prompt',
+      config: {
+        personaPrefix: persona,
+        personaSuffix: '',
+        includeHarnessIdentity: false,
+        includeRuntimeContext: false,
+      },
+    },
+    { id: 'headless-runner', disabled: true },
+    { id: 'headless-startup', disabled: true },
+    {
+      insert: [
+        {
+          id: 'tutor-interview-runner',
+          name: path.join(root, 'src', 'plugin', 'interview-runner.ts'),
+          inject: ['agentDefaultModel', 'agents', 'sessions', 'courseState'],
+          config: { courseId, maxTurns: 24 },
+        },
+      ],
+    },
+  ]
+  const interviewPatchPath = path.join(dshHome, 'interview.patch.yml')
+  fs.writeFileSync(interviewPatchPath, yaml.stringify(interviewPatch))
+  interviewArgs = ['--patch', interviewPatchPath]
+}
+
+const isInterview = interviewArgs.length > 0
+const innerArgs = isInterview ? [] : argv
+const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...interviewArgs, ...innerArgs], {
   env,
   stdio: 'inherit',
   cwd: root,

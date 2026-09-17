@@ -10,9 +10,9 @@
 
 ## 状态
 
-设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建、最小 agent 循环、课程状态插件（第一期任务 1-3）。
+设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建、最小 agent 循环、课程状态插件、需求澄清访谈（第一期任务 1-4）。
 
-核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/course-state.ts` 以 dsh 插件形态暴露 `ctx.courseState` 服务（`config/cordis.patch.yml` 模板 + `scripts/agent.mjs` 渲染挂载）。
+核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
 
 ## 环境要求
 
@@ -23,8 +23,10 @@
 
 ```sh
 npm install
-cp .env.example .env   # 填入 base_url / api_key / model 三要素
-npm run agent -- "你好" # 一次性 agent 任务（headless 档案）
+cp .env.example .env            # 填入 base_url / api_key / model 三要素
+npm test                        # 核心单元测试（无需模型）
+npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
+npm run agent -- "..."          # 一次性 agent 任务
 ```
 
 - 模型接入模板：`config/settings.yaml`（由 `scripts/agent.mjs` 渲染为运行时副本）
