@@ -11,6 +11,8 @@ const FILES: Record<DocKind, string> = {
   'learner-profile': 'learner-profile.yaml',
   plan: 'plan.yaml',
   mastery: 'mastery.yaml',
+  'question-bank': 'question-bank.yaml',
+  assessment: 'assessment.yaml',
 }
 
 export class CourseStore {
@@ -54,9 +56,18 @@ export class CourseStore {
     return this.validate(kind, data)
   }
 
+  has(id: string, kind: DocKind): boolean {
+    return this.exists(id) && fs.existsSync(this.courseFile(id, kind))
+  }
+
   write(id: string, kind: DocKind, data: unknown): void {
     if (kind !== 'profile' && !this.exists(id)) throw new Error(`课程 "${id}" 不存在`)
     this.writeFile(id, kind, this.validate(kind, data))
+  }
+
+  remove(id: string, kind: DocKind): void {
+    const file = this.courseFile(id, kind)
+    if (fs.existsSync(file)) fs.unlinkSync(file)
   }
 
   private writeFile(id: string, kind: DocKind, validated: unknown): void {

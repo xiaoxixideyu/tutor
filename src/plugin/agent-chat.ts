@@ -1,0 +1,95 @@
+import { randomUUID } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
+
+interface SessionEventView {
+  type: string
+  data?: {
+    reason?: { kind: string; error?: { code: string; message: string } }
+    message?: { content: { type: string; text?: string }[] }
+  }
+}
+
+interface SessionView {
+  seq: number
+  eventAt(seq: unknown): SessionEventView | undefined
+}
+
+export interface AgentChat {
+  sessionId: string
+  ask(prompt: string): Promise<string>
+  flush(): Promise<void>
+}
+
+interface AgentLike {
+  session: SessionView & { id?: unknown }
+  whenIdle(): Promise<void>
+  followup(message: unknown): void
+}
+
+interface AgentsRegistry {
+  create(options: Record<string, unknown>): Promise<{ agent: AgentLike }>
+}
+
+interface SessionsRegistry {
+  flush(session: unknown): Promise<void>
+}
+
+export async function createAgentChat(ctx: Context): Promise<AgentChat> {
+  await (ctx.get('loader' as never) as { await(): Promise<void> } | undefined)?.await()
+  const agentDefaultModel = ctx.get('agentDefaultModel') as
+    | { currentSelection(): { provider: string; model: string } }
+    | undefined
+  const agents = ctx.get('agents') as AgentsRegistry | undefined
+  const sessions = ctx.get('sessions') as SessionsRegistry | undefined
+  if (!agentDefaultModel || !agents || !sessions) throw new Error('tutor: 核心服务未就绪')
+  const selection = agentDefaultModel.currentSelection()
+  const { agent } = await agents.create({
+    sessionId: brandString(`session-${randomUUID()}`) as never,
+    meta: { cwd: process.cwd() },
+    agentOptions: { provider: selection.provider, model: selection.model },
+    setup: (agentCtx: Context) => {
+      installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
+    },
+  })
+  await agent.whenIdle()
+
+  return {
+    sessionId: String(agent.session.id ?? ''),
+    async ask(prompt: string): Promise<string> {
+      const cursor = agent.session.seq
+      agent.followup(
+        createUserMessage({
+          content: [{ type: 'text', text: prompt }],
+          source: { kind: 'user' },
+        })
+      )
+      await agent.whenIdle()
+      let text = ''
+      for (let seq = cursor; seq < agent.session.seq; seq++) {
+        const event = agent.session.eventAt(SessionSeq(seq))
+        if (!event) continue
+        if (event.type === 'assistant/message' && event.data?.message) {
+          const joined = event.data.message.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text ?? '')
+            .join('')
+          if (joined !== '') text = joined
+        }
+        if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
+          const detail = event.data.reason.error
+            ? `${event.data.reason.error.code}: ${event.data.reason.error.message}`
+            : event.data.reason.kind
+          throw new Error(`tutor: 模型回合失败（${detail}）`)
+        }
+      }
+      return text
+    },
+    async flush(): Promise<void> {
+      await sessions.flush(agent.session)
+    },
+  }
+}

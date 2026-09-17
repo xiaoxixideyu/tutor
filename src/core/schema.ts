@@ -77,7 +77,63 @@ const MasteryEntrySchema = z.object({
 
 export const MasterySchema = z.dict(MasteryEntrySchema) as unknown as Schema<any, Mastery>
 
-export type DocKind = 'profile' | 'knowledge-map' | 'learner-profile' | 'plan' | 'mastery'
+export interface Question {
+  id: string
+  difficulty: 1 | 2 | 3
+  type: 'choice' | 'short'
+  question: string
+  choices?: string[]
+  answer: string
+  accept?: string[]
+}
+
+export interface QuestionBank {
+  [nodeId: string]: Question[]
+}
+
+export interface AssessmentState {
+  node_order: string[]
+  current_node: string
+  asked: { node: string; qid: string; difficulty: 1 | 2 | 3; correct: boolean }[]
+  scores: Record<string, number>
+}
+
+const questionChoiceSchema = z.object({
+  id: z.string().required(),
+  difficulty: z.union([z.const(1), z.const(2), z.const(3)]).required(),
+  type: z.union([z.const('choice'), z.const('short')]).required(),
+  question: z.string().required(),
+  choices: z.array(z.string()),
+  answer: z.string().required(),
+  accept: z.array(z.string()),
+})
+
+export const QuestionBankSchema = z.dict(z.array(questionChoiceSchema).default([])) as unknown as Schema<any, QuestionBank>
+
+export const AssessmentStateSchema = z.object({
+  node_order: z.array(z.string()).required(),
+  current_node: z.string().required(),
+  asked: z
+    .array(
+      z.object({
+        node: z.string().required(),
+        qid: z.string().required(),
+        difficulty: z.union([z.const(1), z.const(2), z.const(3)]).required(),
+        correct: z.boolean().required(),
+      })
+    )
+    .default([]),
+  scores: z.dict(z.number().min(0).max(1)).default({}),
+}) as unknown as Schema<any, AssessmentState>
+
+export type DocKind =
+  | 'profile'
+  | 'knowledge-map'
+  | 'learner-profile'
+  | 'plan'
+  | 'mastery'
+  | 'question-bank'
+  | 'assessment'
 
 export const DocumentSchemas = {
   profile: ProfileSchema,
@@ -85,4 +141,6 @@ export const DocumentSchemas = {
   'learner-profile': LearnerProfileSchema,
   plan: PlanSchema,
   mastery: MasterySchema,
+  'question-bank': QuestionBankSchema,
+  assessment: AssessmentStateSchema,
 } satisfies Record<DocKind, Schema<any, unknown>>

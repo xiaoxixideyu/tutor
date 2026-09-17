@@ -3,6 +3,7 @@
 // 用法：
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
+//   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -64,16 +65,21 @@ function resolveRuntimeNode() {
 
 const patchArgs = patchPath ? ['--patch', patchPath] : []
 
-// tutor new <课程名>：需求澄清访谈——换访谈人格、禁用 headless 运行器、挂访谈运行器
+// tutor new <课程名> / tutor assess <课程名>：按模式生成 patch（换人格、禁用 headless 运行器、挂对应运行器）
 const argv = process.argv.slice(2)
-let interviewArgs = []
-if (argv[0] === 'new') {
+let runnerArgs = []
+let runnerMode = null
+if (argv[0] === 'new' || argv[0] === 'assess') {
+  runnerMode = argv[0]
   const courseId = argv[1] ?? ''
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
-  const persona = fs.readFileSync(path.join(root, 'config', 'persona', 'interview.md'), 'utf8').trim()
-  const interviewPatch = [
+  const personaFile = runnerMode === 'new' ? 'interview.md' : 'assess.md'
+  const runnerId = runnerMode === 'new' ? 'tutor-interview-runner' : 'tutor-assess-runner'
+  const runnerModule = runnerMode === 'new' ? 'interview-runner.ts' : 'assess-runner.ts'
+  const persona = fs.readFileSync(path.join(root, 'config', 'persona', personaFile), 'utf8').trim()
+  const modePatch = [
     {
       id: 'system-prompt',
       config: {
@@ -88,22 +94,21 @@ if (argv[0] === 'new') {
     {
       insert: [
         {
-          id: 'tutor-interview-runner',
-          name: path.join(root, 'src', 'plugin', 'interview-runner.ts'),
+          id: runnerId,
+          name: path.join(root, 'src', 'plugin', runnerModule),
           inject: ['agentDefaultModel', 'agents', 'sessions', 'courseState'],
-          config: { courseId, maxTurns: 24 },
+          config: { courseId },
         },
       ],
     },
   ]
-  const interviewPatchPath = path.join(dshHome, 'interview.patch.yml')
-  fs.writeFileSync(interviewPatchPath, yaml.stringify(interviewPatch))
-  interviewArgs = ['--patch', interviewPatchPath]
+  const modePatchPath = path.join(dshHome, `${runnerMode}.patch.yml`)
+  fs.writeFileSync(modePatchPath, yaml.stringify(modePatch))
+  runnerArgs = ['--patch', modePatchPath]
 }
 
-const isInterview = interviewArgs.length > 0
-const innerArgs = isInterview ? [] : argv
-const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...interviewArgs, ...innerArgs], {
+const innerArgs = runnerMode ? [] : argv
+const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...runnerArgs, ...innerArgs], {
   env,
   stdio: 'inherit',
   cwd: root,
