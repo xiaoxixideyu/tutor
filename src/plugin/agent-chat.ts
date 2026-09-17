@@ -60,33 +60,46 @@ export async function createAgentChat(ctx: Context): Promise<AgentChat> {
   return {
     sessionId: String(agent.session.id ?? ''),
     async ask(prompt: string): Promise<string> {
-      const cursor = agent.session.seq
-      agent.followup(
-        createUserMessage({
-          content: [{ type: 'text', text: prompt }],
-          source: { kind: 'user' },
-        })
-      )
-      await agent.whenIdle()
-      let text = ''
-      for (let seq = cursor; seq < agent.session.seq; seq++) {
-        const event = agent.session.eventAt(SessionSeq(seq))
-        if (!event) continue
-        if (event.type === 'assistant/message' && event.data?.message) {
-          const joined = event.data.message.content
-            .filter((block) => block.type === 'text')
-            .map((block) => block.text ?? '')
-            .join('')
-          if (joined !== '') text = joined
-        }
-        if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
-          const detail = event.data.reason.error
-            ? `${event.data.reason.error.code}: ${event.data.reason.error.message}`
-            : event.data.reason.kind
-          throw new Error(`tutor: 模型回合失败（${detail}）`)
+      let lastError: unknown
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const cursor = agent.session.seq
+          agent.followup(
+            createUserMessage({
+              content: [{ type: 'text', text: prompt }],
+              source: { kind: 'user' },
+            })
+          )
+          await agent.whenIdle()
+          let text = ''
+          let turnError: string | null = null
+          for (let seq = cursor; seq < agent.session.seq; seq++) {
+            const event = agent.session.eventAt(SessionSeq(seq))
+            if (!event) continue
+            if (event.type === 'assistant/message' && event.data?.message) {
+              const joined = event.data.message.content
+                .filter((block) => block.type === 'text')
+                .map((block) => block.text ?? '')
+                .join('')
+              if (joined !== '') text = joined
+            }
+            if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
+              turnError = event.data.reason.error
+                ? `${event.data.reason.error.code}: ${event.data.reason.error.message}`
+                : event.data.reason.kind
+            }
+          }
+          if (turnError !== null) throw new Error(turnError)
+          return text
+        } catch (error) {
+          lastError = error
+          if (attempt === 0) {
+            process.stderr.write(`tutor: 模型回合异常（${error instanceof Error ? error.message : String(error)}），重试一次…\n`)
+            await new Promise((resolve) => setTimeout(resolve, 1500))
+          }
         }
       }
-      return text
+      throw new Error(`模型回合失败——${lastError instanceof Error ? lastError.message : String(lastError)}`)
     },
     async flush(): Promise<void> {
       await sessions.flush(agent.session)

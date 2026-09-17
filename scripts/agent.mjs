@@ -4,6 +4,7 @@
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 //   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
+//   npm run agent -- plan <课程名>       生成/更新教学计划（设计 §6.4 tutor plan）
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -69,15 +70,26 @@ const patchArgs = patchPath ? ['--patch', patchPath] : []
 const argv = process.argv.slice(2)
 let runnerArgs = []
 let runnerMode = null
-if (argv[0] === 'new' || argv[0] === 'assess') {
+if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan') {
   runnerMode = argv[0]
   const courseId = argv[1] ?? ''
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
-  const personaFile = runnerMode === 'new' ? 'interview.md' : 'assess.md'
-  const runnerId = runnerMode === 'new' ? 'tutor-interview-runner' : 'tutor-assess-runner'
-  const runnerModule = runnerMode === 'new' ? 'interview-runner.ts' : 'assess-runner.ts'
+  const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md' }
+  const runnerByMode = {
+    new: 'tutor-interview-runner',
+    assess: 'tutor-assess-runner',
+    plan: 'tutor-plan-runner',
+  }
+  const moduleByMode = {
+    new: 'interview-runner.ts',
+    assess: 'assess-runner.ts',
+    plan: 'plan-runner.ts',
+  }
+  const personaFile = personaByMode[runnerMode]
+  const runnerId = runnerByMode[runnerMode]
+  const runnerModule = moduleByMode[runnerMode]
   const persona = fs.readFileSync(path.join(root, 'config', 'persona', personaFile), 'utf8').trim()
   const modePatch = [
     {
