@@ -25,6 +25,8 @@
 npm install
 cp .env.example .env            # 填入 base_url / api_key / model 三要素
 npm test                        # 核心单元测试（无需模型）
+npm run agent -- list           # 课程列表（零模型）
+npm run agent -- status golang  # 进度看板（知识点掌握状态/里程碑/复习到期）
 npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml

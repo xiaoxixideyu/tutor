@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // tutor 薄壳：驱动 Harness headless 档案跑一次性 agent 任务（设计文档 §4.3：壳不承载业务逻辑）
 // 用法：
+//   npm run agent -- list                课程列表（设计 §6.4 tutor list，零模型）
+//   npm run agent -- status <课程名>     进度看板（设计 §6.4 tutor status，零模型）
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 //   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
@@ -66,9 +68,19 @@ function resolveRuntimeNode() {
 }
 
 const patchArgs = patchPath ? ['--patch', patchPath] : []
-
-// tutor new <课程名> / tutor assess <课程名>：按模式生成 patch（换人格、禁用 headless 运行器、挂对应运行器）
 const argv = process.argv.slice(2)
+
+// list/status：只读视图，零模型调用，直接用受支持运行时执行视图脚本（不经 dsh）
+if (argv[0] === 'list' || argv[0] === 'status') {
+  const view = path.join(root, 'scripts', 'view.mjs')
+  const viewResult = spawnSync(resolveRuntimeNode(), [view, ...argv], {
+    env: { ...env, TUTOR_COURSES_ROOT: env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses') },
+    stdio: 'inherit',
+    cwd: root,
+  })
+  process.exit(viewResult.status ?? 1)
+}
+
 let runnerArgs = []
 let runnerMode = null
 if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn') {
