@@ -135,6 +135,31 @@ export type DocKind =
   | 'question-bank'
   | 'assessment'
 
+export interface LessonPractice {
+  question: string
+  answer: string
+}
+
+export interface LessonDraft {
+  node: string
+  title: string
+  hook: string
+  structure: string[]
+  example: string
+  practice: LessonPractice[]
+  misconceptions?: string[]
+}
+
+export const LessonDraftSchema = z.object({
+  node: z.string().required(),
+  title: z.string().required(),
+  hook: z.string().required(),
+  structure: z.array(z.string()).required(),
+  example: z.string().required(),
+  practice: z.array(z.object({ question: z.string().required(), answer: z.string().required() })).required(),
+  misconceptions: z.array(z.string()),
+}) as unknown as Schema<any, LessonDraft>
+
 export const DocumentSchemas = {
   profile: ProfileSchema,
   'knowledge-map': KnowledgeMapSchema,
