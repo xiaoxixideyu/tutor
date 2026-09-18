@@ -34,7 +34,14 @@ export interface Plan {
   current?: string
 }
 
-export type Mastery = Record<string, { status: MasteryStatusId; score?: number; review_due?: string }>
+export interface MasteryEntry {
+  status: MasteryStatusId
+  score?: number
+  review_due?: string
+  review_stage?: number
+}
+
+export type Mastery = Record<string, MasteryEntry>
 
 export const ProfileSchema = z.object({
   goal: z.string().required(),
@@ -73,6 +80,7 @@ const MasteryEntrySchema = z.object({
     .required(),
   score: z.number().min(0).max(1),
   review_due: dateStr,
+  review_stage: z.number().min(1).max(4),
 }) as unknown as Schema<any, Mastery[string]>
 
 export const MasterySchema = z.dict(MasteryEntrySchema) as unknown as Schema<any, Mastery>

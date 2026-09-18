@@ -31,6 +31,7 @@ npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/gola
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
 npm run agent -- learn golang   # 开始/继续本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；中断后重跑自动续学）
+npm run agent -- review golang  # 复习到期知识点（1/3/7/14 天阶梯；掌握度差节点指针留原地=补救课）
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 

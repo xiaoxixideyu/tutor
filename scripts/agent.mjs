@@ -3,6 +3,7 @@
 // 用法：
 //   npm run agent -- list                课程列表（设计 §6.4 tutor list，零模型）
 //   npm run agent -- status <课程名>     进度看板（设计 §6.4 tutor status，零模型）
+//   npm run agent -- review <课程名>     复习到期知识点（设计 §6.4 tutor review，零模型）
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 //   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
@@ -70,10 +71,10 @@ function resolveRuntimeNode() {
 const patchArgs = patchPath ? ['--patch', patchPath] : []
 const argv = process.argv.slice(2)
 
-// list/status：只读视图，零模型调用，直接用受支持运行时执行视图脚本（不经 dsh）
-if (argv[0] === 'list' || argv[0] === 'status') {
-  const view = path.join(root, 'scripts', 'view.mjs')
-  const viewResult = spawnSync(resolveRuntimeNode(), [view, ...argv], {
+// list/status/review：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
+if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review') {
+  const script = path.join(root, 'scripts', argv[0] === 'review' ? 'review.mjs' : 'view.mjs')
+  const viewResult = spawnSync(resolveRuntimeNode(), [script, ...argv], {
     env: { ...env, TUTOR_COURSES_ROOT: env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses') },
     stdio: 'inherit',
     cwd: root,

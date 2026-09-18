@@ -209,17 +209,58 @@ export function judgeQuizAnswer(item: LessonPractice, raw: string): boolean {
   return judgeAnswer(question, raw)
 }
 
+export const REVIEW_INTERVALS = [1, 3, 7, 14]
+
+export function nextReviewStage(previous: Mastery[string] | undefined): number {
+  const stage = previous?.review_stage ?? 0
+  return Math.min(stage + 1, REVIEW_INTERVALS.length)
+}
+
 export function updateMasteryForNode(mastery: Mastery | undefined, node: string, quizScore: number, today: string): Mastery {
   const previous = mastery?.[node]
   const status = statusForScore(quizScore)
-  const reviewDue =
-    status === 'weak' ? undefined : addDays(today, previous?.review_due !== undefined ? 3 : 1)
+  if (status === 'weak') {
+    return {
+      ...mastery,
+      [node]: { status, score: quizScore },
+    }
+  }
+  const stage = nextReviewStage(previous)
   return {
     ...mastery,
     [node]: {
       status,
       score: quizScore,
-      ...(reviewDue !== undefined ? { review_due: reviewDue } : {}),
+      review_due: addDays(today, REVIEW_INTERVALS[stage - 1]),
+      review_stage: stage,
+    },
+  }
+}
+
+export function applyReviewResult(
+  mastery: Mastery,
+  node: string,
+  quizScore: number,
+  today: string
+): Mastery {
+  const previous = mastery[node]
+  const passed = quizScore >= 0.5
+  const score = passed ? Math.max(previous.score ?? 0, quizScore) : quizScore
+  const status = statusForScore(score)
+  if (!passed || status === 'weak') {
+    return {
+      ...mastery,
+      [node]: { status, score },
+    }
+  }
+  const stage = nextReviewStage(previous)
+  return {
+    ...mastery,
+    [node]: {
+      status: previous.status === 'mastered' || status === 'mastered' ? 'mastered' : status,
+      score,
+      review_due: addDays(today, REVIEW_INTERVALS[stage - 1]),
+      review_stage: stage,
     },
   }
 }

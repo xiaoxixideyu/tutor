@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildPrepPrompt, buildTeachingIntro, currentNode, validateLessonDraft } from '../core/lesson.ts'
 import { judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
+import { dueReviews } from '../core/review.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../core/schema.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
@@ -81,6 +82,10 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
+  const due = mastery ? dueReviews(mastery, today()) : []
+  if (due.length > 0) {
+    out.write(`提醒：${due.length} 个知识点到复习期（${due.map((d) => d.node).join('、')}）——回访先复习再继续：npm run agent -- review ${config.courseId}\n\n`)
+  }
   const node = currentNode(plan, mastery)
   if (!node) {
     out.write('计划内知识点均已掌握，无课可上。可运行 assess 重新摸底或 plan 修订计划。\n')
