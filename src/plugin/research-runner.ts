@@ -65,6 +65,33 @@ function batchPrompt(profile: Profile, batch: { id: string; title?: string; summ
 
 type ParseResult = { ok: true; value: unknown } | { ok: false; error: string }
 
+async function checkUrl(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal })
+    clearTimeout(timer)
+    return response.status >= 200 && response.status < 400
+  } catch {
+    return false
+  }
+}
+
+async function pruneDeadResources(
+  resources: { node: string; title: string; url?: string; note?: string; material?: string }[],
+  out: NodeJS.WriteStream
+): Promise<void> {
+  const withUrl = resources.filter((r) => r.url !== undefined)
+  const verdicts = await Promise.all(withUrl.map((r) => checkUrl(r.url!)))
+  for (let i = withUrl.length - 1; i >= 0; i--) {
+    if (verdicts[i]) continue
+    const resource = withUrl[i]
+    out.write(`  ⚠ 来源失效，已剔除：${resource.title}（${resource.url}）\n`)
+    const index = resources.indexOf(resource)
+    if (index >= 0) resources.splice(index, 1)
+  }
+}
+
 function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
   const schemaResult = trySchema(BatchSchema, data)
   if (!schemaResult.ok) return schemaResult
@@ -176,6 +203,9 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
       if (!data.ok) return data
       return validateBatch(data.value, batchIds)
     })) as BatchResult
+    if (result.resources && result.resources.length > 0) {
+      await pruneDeadResources(result.resources, out)
+    }
     mergeBatch(map, result)
     map.verified = map.nodes.every((n) => n.verified)
     map.researched_at = today()
