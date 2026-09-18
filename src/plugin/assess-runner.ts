@@ -6,6 +6,7 @@ import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type Know
 import { createAgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
+import { printSessionTotal } from './cost-line.ts'
 
 const name = 'tutor-assess-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -154,6 +155,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   store.remove(config.courseId, 'assessment')
   out.write(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
   await chat.flush()
+  printSessionTotal(chat, out)
   exit(0)
 }
 

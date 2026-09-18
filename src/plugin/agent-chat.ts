@@ -4,12 +4,14 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
+import { addUsage, type UsageSample } from '../core/cost.ts'
 
 interface SessionEventView {
   type: string
   data?: {
     reason?: { kind: string; error?: { code: string; message: string } }
-    message?: { content: { type: string; text?: string }[] }
+    usage?: { inputTokens?: number; outputTokens?: number }
+    message?: { content: { type: string; text?: string }[]; usage?: { inputTokens?: number; outputTokens?: number } }
   }
 }
 
@@ -20,7 +22,10 @@ interface SessionView {
 
 export interface AgentChat {
   sessionId: string
+  model: string
   ask(prompt: string): Promise<string>
+  lastTurnUsage(): UsageSample
+  totalUsage(): UsageSample
   lastReply(): string
   flush(): Promise<void>
 }
@@ -81,8 +86,27 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
   }
   await agent.whenIdle()
 
+  function usageAt(event: SessionEventView): UsageSample | null {
+    const usage = event.data?.usage ?? event.data?.message?.usage
+    if (!usage || typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') return null
+    return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+  }
+
+  const initialTotal: UsageSample = { inputTokens: 0, outputTokens: 0 }
+  for (let seq = 0; seq < agent.session.seq; seq++) {
+    const event = agent.session.eventAt(SessionSeq(seq))
+    if (event?.type === 'assistant/message') {
+      const usage = usageAt(event)
+      if (usage) initialTotal.inputTokens += usage.inputTokens
+      if (usage) initialTotal.outputTokens += usage.outputTokens
+    }
+  }
+  let turnUsage: UsageSample = { inputTokens: 0, outputTokens: 0 }
+  let total: UsageSample = { ...initialTotal }
+
   return {
     sessionId: String(agent.session.id ?? ''),
+    model: selection.model,
     lastReply(): string {
       let text = ''
       for (let seq = 0; seq < agent.session.seq; seq++) {
@@ -111,6 +135,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
           await agent.whenIdle()
           let text = ''
           let turnError: string | null = null
+          let usage: UsageSample = { inputTokens: 0, outputTokens: 0 }
           for (let seq = cursor; seq < agent.session.seq; seq++) {
             const event = agent.session.eventAt(SessionSeq(seq))
             if (!event) continue
@@ -120,6 +145,10 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
                 .map((block) => block.text ?? '')
                 .join('')
               if (joined !== '') text = joined
+              const sample = usageAt(event)
+              if (sample) {
+                usage = addUsage(usage, sample)
+              }
             }
             if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
               turnError = event.data.reason.error
@@ -128,6 +157,8 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
             }
           }
           if (turnError !== null) throw new Error(turnError)
+          turnUsage = usage
+          total = addUsage(total, usage)
           return text
         } catch (error) {
           lastError = error
@@ -138,6 +169,12 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
         }
       }
       throw new Error(`模型回合失败——${lastError instanceof Error ? lastError.message : String(lastError)}`)
+    },
+    lastTurnUsage(): UsageSample {
+      return { ...turnUsage }
+    },
+    totalUsage(): UsageSample {
+      return { ...total }
     },
     async flush(): Promise<void> {
       await sessions.flush(agent.session)

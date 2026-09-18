@@ -6,6 +6,8 @@ import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } f
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock } from './generation.ts'
+import { loadCostConfigFromRepo, printSessionTotal } from './cost-line.ts'
+import { formatTurnCost } from '../core/cost.ts'
 
 const name = 'tutor-learn-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -114,8 +116,11 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   if (chat === null || draft === null) throw new Error('tutor: 课堂会话初始化失败')
 
   const readAnswer = createLineReader(process.stdin)
+  const costConfig = loadCostConfigFromRepo()
+  const colorEnabled = out.isTTY === true
   const pause = async () => {
     await chat.flush()
+    printSessionTotal(chat, out)
     out.write('\n本课暂停（进度已保存）。重新运行 learn 将从断点继续。\n')
     exit(0)
   }
@@ -156,11 +161,12 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       out.write(`掌握度更新：${node} → ${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，复习到期 ${entry.review_due}` : ''}\n`)
       out.write(pointer ? `计划指针：${node} → ${pointer}\n` : '计划内知识点均已掌握，课程完成。\n')
       await chat.flush()
+      printSessionTotal(chat, out)
       exit(0)
       return
     }
     const reply = await chat.ask(command)
-    out.write(`\n${reply}`)
+    out.write(`\n${reply}\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
   }
 }
 

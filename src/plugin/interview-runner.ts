@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { extractProfileJson, parseProfile, profileValidationError } from '../core/interview.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
+import { printSessionTotal } from './cost-line.ts'
 
 const name = 'tutor-interview-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -34,6 +35,7 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
       store.create(config.courseId, profile)
       process.stdout.write(`\n课程 "${config.courseId}" 已创建，档案位于 ${store.root}/${config.courseId}/profile.yaml\n`)
       await chat.flush()
+      printSessionTotal(chat, process.stdout)
       exit(0)
       return
     }

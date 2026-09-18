@@ -1,0 +1,15 @@
+# 成本透明（设计 §4.1 判断三 / §6.2 成本颜色标注）
+# rates 单位：每 1M tokens 的估算单价（按网关实际计费修改；default 为兜底）
+currency: "¥"
+rates:
+  default:
+    input: 2.0
+    output: 8.0
+  # 按模型名覆盖，如：
+  # glm-5.3-flash:
+  #   input: 1.0
+  #   output: 4.0
+# 每回合成本颜色阈值（货币单位）
+turn_cost:
+  warn: 0.05
+  alarm: 0.20

@@ -4,6 +4,7 @@ import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, 
 import type { KnowledgeMap, LearnerProfile, Mastery, Plan } from '../core/schema.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { generateTurn, parseJsonBlock } from './generation.ts'
+import { printSessionTotal } from './cost-line.ts'
 
 const name = 'tutor-plan-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -95,6 +96,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   }
   out.write(`当前指针：${plan.current ?? '（无）'}\n`)
   await chat.flush()
+  printSessionTotal(chat, out)
   exit(0)
 }
 
