@@ -15,11 +15,20 @@ export interface Profile {
   style?: string
 }
 
+export interface KnowledgeMapResource {
+  node: string
+  title: string
+  url?: string
+  note?: string
+  material?: string
+}
+
 export interface KnowledgeMap {
   verified: boolean
-  nodes: { id: string; title: string; summary?: string }[]
+  researched_at?: string
+  nodes: { id: string; title: string; summary?: string; verified?: boolean }[]
   edges: [string, string][]
-  resources?: { node: string; title: string; url?: string; note?: string }[]
+  resources?: KnowledgeMapResource[]
 }
 
 export interface LearnerProfile {
@@ -53,10 +62,21 @@ export const ProfileSchema = z.object({
 
 export const KnowledgeMapSchema = z.object({
   verified: z.boolean().default(false),
-  nodes: z.array(z.object({ id: nodeId.required(), title: z.string().required(), summary: z.string() })).required(),
+  researched_at: dateStr,
+  nodes: z
+    .array(z.object({ id: nodeId.required(), title: z.string().required(), summary: z.string(), verified: z.boolean() }))
+    .required(),
   edges: z.array(z.tuple([z.string(), z.string()])).default([]),
   resources: z
-    .array(z.object({ node: z.string().required(), title: z.string().required(), url: z.string(), note: z.string() }))
+    .array(
+      z.object({
+        node: z.string().required(),
+        title: z.string().required(),
+        url: z.string(),
+        note: z.string(),
+        material: z.string(),
+      })
+    )
     .default([]),
 }) as unknown as Schema<any, KnowledgeMap>
 

@@ -1,4 +1,28 @@
-import { LessonDraftSchema, type KnowledgeMap, type LessonDraft, type Mastery, type Plan, type Profile } from './schema.ts'
+import { LessonDraftSchema, type KnowledgeMapResource, type KnowledgeMap, type LessonDraft, type Mastery, type Plan, type Profile } from './schema.ts'
+
+export interface LessonResourceView {
+  index: number
+  title: string
+  url?: string
+  note?: string
+  material?: string
+}
+
+export function resourcesForNode(resources: KnowledgeMapResource[] | undefined, node: string): LessonResourceView[] {
+  return (resources ?? [])
+    .filter((r) => r.node === node)
+    .map((r, i) => ({ index: i + 1, title: r.title, ...(r.url !== undefined ? { url: r.url } : {}), ...(r.note !== undefined ? { note: r.note } : {}), ...(r.material !== undefined ? { material: r.material } : {}) }))
+}
+
+function resourceLines(resources: LessonResourceView[], materialLimit: number): string[] {
+  const lines: string[] = []
+  for (const r of resources) {
+    lines.push(`${r.index}. ${r.title}${r.url ? ` ${r.url}` : ''}`)
+    if (r.note) lines.push(`   评注：${r.note}`)
+    if (r.material) lines.push(`   摘要：${r.material.slice(0, materialLimit)}`)
+  }
+  return lines
+}
 
 export function validateLessonDraft(draft: unknown, expectedNode?: string): { ok: true; value: LessonDraft } | { ok: false; error: string } {
   let value: LessonDraft
@@ -38,6 +62,34 @@ export function currentNode(plan: Plan, mastery: Mastery | undefined): string | 
   return null
 }
 
+export function extractCitations(text: string): number[] {
+  const markers = [...text.matchAll(/\[资料[:：](\d+)\]/g)].map((m) => Number(m[1]))
+  return [...new Set(markers)].sort((a, b) => a - b)
+}
+
+export function checkCitations(text: string, resourceCount: number): { cited: number[]; invalid: number[]; uncitedWarning: boolean } {
+  const cited = extractCitations(text)
+  const invalid = cited.filter((n) => n < 1 || n > resourceCount)
+  const assertionWords = /(事实上|一般来说|通常|必须|不能|标准|官方|规范|定义是|指的是|区别在于|核心是)/
+  return { cited, invalid, uncitedWarning: resourceCount > 0 && cited.length === 0 && assertionWords.test(text) }
+}
+
+export function buildCheckPrompt(replies: string[], resources: LessonResourceView[]): string {
+  return [
+    '任务：核对一节课中助教（模型）的事实断言是否与资料一致。',
+    '',
+    '【资料】',
+    ...resourceLines(resources, 500),
+    '',
+    '【本课讲授记录（助教发言）】',
+    ...replies.map((r, i) => `--- 第${i + 1}段 ---\n${r.slice(0, 1500)}`),
+    '',
+    '输出 JSON（```json 代码块）：',
+    '{"claims": [{"claim": "断言原文（≤50字）", "verdict": "supported 或 unverified 或 contradicted", "evidence": "资料编号或说明"}]}',
+    'verdict 判定：断言被资料直接支撑=supported；资料无法证实=unverified；与资料矛盾=contradicted。只列事实断言（方法性建议、类比不算）。',
+  ].join('\n')
+}
+
 export function prerequisiteIds(map: KnowledgeMap, node: string): string[] {
   return map.edges.filter(([target]) => target === node).map(([, prerequisite]) => prerequisite)
 }
@@ -61,6 +113,7 @@ export interface PrepInput {
 export function buildPrepPrompt(input: PrepInput): string {
   const node = input.map.nodes.find((n) => n.id === input.node)
   const prerequisites = prerequisiteIds(input.map, input.node)
+  const resources = resourcesForNode(input.map.resources, input.node)
   const lines = [
     `任务：为课程《${input.courseId}》的下一节课备课。`,
     '',
@@ -77,6 +130,9 @@ export function buildPrepPrompt(input: PrepInput): string {
     '【学员掌握度】',
     masteryLine(input.mastery, input.node, node?.title ?? input.node),
     ...prerequisites.map((p) => masteryLine(input.mastery, p, input.map.nodes.find((n) => n.id === p)?.title ?? p)),
+    ...(resources.length > 0
+      ? ['', '【已验证资料】（教学设计应基于这些资料；不得引入与其矛盾的说法）', ...resourceLines(resources, 400)]
+      : []),
     '',
     '【要求】',
     '- 单节课容量：适合 1 次课讲完（学员每日约 ' + (input.profile.daily_minutes ?? 30) + ' 分钟）',
@@ -100,13 +156,18 @@ export interface TeachingIntroInput {
   profile: Profile
   mastery?: Mastery
   draft: LessonDraft
+  resources?: LessonResourceView[]
 }
 
 export function buildTeachingIntro(input: TeachingIntroInput): string {
+  const resources = input.resources ?? []
   const lines = [
     `【课程】${input.courseId}`,
     `【学员档案】目的：${input.profile.goal}｜基础：${input.profile.background || '未填写'}｜偏好：${input.profile.style || '未填写'}｜每日投入：${input.profile.daily_minutes ?? '未填写'} 分钟`,
     `【本课知识点】${input.draft.node}（${input.draft.title}）`,
+    ...(resources.length > 0
+      ? ['', '【本课资料】（讲授中引用事实时标注 [资料:编号]）', ...resourceLines(resources, 500)]
+      : []),
     '',
     '【本课计划】',
     `开场：${input.draft.hook}`,

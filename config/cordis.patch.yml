@@ -4,3 +4,14 @@
       name: '${TUTOR_PLUGIN_PATH}'
       config:
         root: '${TUTOR_COURSES_ROOT}'
+    # 第二期教研网搜：searchix MCP（Streamable HTTP，工具名 mcp__searchix__*）
+    # 令牌经 !!js 从进程环境读取（.env 注入），不落配置文件
+    - id: mcp-searchix
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: searchix
+        transport: streamable-http
+        url: ${TUTOR_MCP_SEARCH_URL}
+        headers:
+          Authorization: !!js '`Bearer ${process.env.TUTOR_MCP_SEARCH_TOKEN}`'
+        toolCallTimeoutMs: 120000

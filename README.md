@@ -10,7 +10,7 @@
 
 ## 状态
 
-设计定稿。第一期（单课程教学闭环）10 项任务全部完成，验收标准逐项通过：访谈建档、摸底区分画像、计划跳过已掌握且依赖排序、对话式讲授（课中练习/换讲法）、小测判分与掌握度更新、断点续学上下文不膨胀、每回合与会话成本可见（绿/黄/红）、核心不依赖命令行壳。
+设计定稿。第一期（单课程教学闭环）10 项任务全部完成，验收标准逐项通过。第二期（教研系统）进行中：联网教研（MCP 搜索 + 交叉验证 → 带来源知识地图）、备课资料注入、讲授引用红线、/check 事实核对已落地。
 
 核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
 
@@ -32,11 +32,13 @@ npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续�
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
 npm run agent -- learn golang   # 开始/继续本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；中断后重跑自动续学）
 npm run agent -- review golang  # 复习到期知识点（1/3/7/14 天阶梯；掌握度差节点指针留原地=补救课）
+npm run agent -- research golang # 联网教研（二期）：MCP 搜索+交叉验证 → 带来源知识地图（分批、可中断续研）
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 
 - 模型接入模板：`config/settings.yaml`（由 `scripts/agent.mjs` 渲染为运行时副本）
 - 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）
+- 联网教研（二期，可选）：`.env` 配置 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（MCP 搜索服务）；讲授红线——事实断言须标 [资料:n]，`/check` 自动核对
 - 会话日志：`data/dsh-home/sessions/`（JSONL 压缩存储，唯一事实来源，勿手改）
 
 ## 相关仓库

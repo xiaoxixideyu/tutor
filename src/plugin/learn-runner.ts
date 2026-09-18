@@ -1,8 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { buildPrepPrompt, buildTeachingIntro, currentNode, validateLessonDraft } from '../core/lesson.ts'
+import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
 import { judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
 import { dueReviews } from '../core/review.ts'
+import { extractProfileJson } from '../core/interview.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../core/schema.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
@@ -35,7 +36,8 @@ async function startFreshLesson(
   map: KnowledgeMap,
   profile: Profile,
   mastery: Mastery | undefined,
-  node: string
+  node: string,
+  resources: LessonResourceView[]
 ): Promise<{ chat: AgentChat; draft: LessonDraft }> {
   const out = process.stdout
   const prepChat = await createAgentChat(ctx)
@@ -57,7 +59,7 @@ async function startFreshLesson(
     started_at: today(),
     draft,
   })
-  const reply = await teachChat.ask(buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft }))
+  const reply = await teachChat.ask(buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources }))
   out.write(`\n${reply}`)
   return { chat: teachChat, draft }
 }
@@ -113,12 +115,14 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       out.write('上次课堂已失效，重新备课。\n')
     }
   }
+  const resources = resourcesForNode(map.resources, node)
   if (!resumed || chat === null || draft === null) {
-    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node)
+    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node, resources)
     chat = fresh.chat
     draft = fresh.draft
   }
   if (chat === null || draft === null) throw new Error('tutor: 课堂会话初始化失败')
+  const replies: string[] = [chat.lastReply()].filter((r) => r !== '')
 
   const readAnswer = createLineReader(process.stdin)
   const costConfig = loadCostConfigFromRepo()
@@ -136,6 +140,35 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     if (!line || command === '/exit') {
       await pause()
       return
+    }
+    if (command === '/check') {
+      if (replies.length === 0) {
+        out.write('\n本课尚无讲授内容，无需核对。\n')
+        continue
+      }
+      out.write('\n事实核对（规则引用检查 + 模型断言核对）…\n')
+      const citation = checkCitations(replies.join('\n'), resources.length)
+      out.write(`引用标记：${citation.cited.length > 0 ? `使用了 [资料:${citation.cited.join('] [资料:')}]` : '未使用'}${citation.invalid.length > 0 ? `，无效编号：${citation.invalid.join('、')}` : ''}\n`)
+      if (resources.length === 0) {
+        out.write('本课知识点无联网资料（先运行 research），仅做规则检查。\n')
+        continue
+      }
+      const checkReply = await chat.ask(buildCheckPrompt(replies, resources))
+      const checkData = extractProfileJson(checkReply)
+      const claims = (checkData && typeof checkData === 'object' ? (checkData as { claims?: unknown }).claims : null) as
+        | { claim: string; verdict: string; evidence?: string }[]
+        | null
+      if (Array.isArray(claims) && claims.length > 0) {
+        const mark: Record<string, string> = { supported: '✓', unverified: '?', contradicted: '✗' }
+        for (const claim of claims) {
+          out.write(`  ${mark[claim.verdict] ?? '?'} ${claim.claim}${claim.evidence ? `（${claim.evidence}）` : ''}\n`)
+        }
+        const bad = claims.filter((c) => c.verdict !== 'supported').length
+        out.write(bad === 0 ? '核对通过：全部断言有资料支撑。\n' : `发现 ${bad} 处需注意的断言，讲授中请以此为准。\n`)
+      } else {
+        out.write('核对结果解析失败，请重试。\n')
+      }
+      continue
     }
     if (command === '/quiz') {
       out.write(`\n单元小测（${draft.quiz.length} 题，规则判分）\n`)
@@ -171,6 +204,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       return
     }
     const reply = await chat.ask(command)
+    replies.push(reply)
     out.write(`\n${reply}\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
   }
 }

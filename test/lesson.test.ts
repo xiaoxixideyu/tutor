@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildPrepPrompt, buildTeachingIntro, currentNode, prerequisiteIds, validateLessonDraft } from '../src/core/lesson.ts'
+import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, prerequisiteIds, resourcesForNode, validateLessonDraft } from '../src/core/lesson.ts'
 import { judgeQuizAnswer, statusForScore, updateMasteryForNode } from '../src/core/assessment.ts'
 import { CourseStore } from '../src/core/store.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../src/core/schema.ts'
@@ -198,5 +198,51 @@ describe('LessonState（断点续学状态）', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('资料注入与引用核对（二期）', () => {
+  const resources = [
+    { index: 1, title: '官方入门', url: 'https://go.dev/doc/tutorial', material: '官方第一课…'.repeat(80) },
+    { index: 2, title: '模块指南', note: '与官方交叉验证一致' },
+  ]
+
+  it('resourcesForNode 过滤并编号', () => {
+    const map = { verified: true, nodes: [], edges: [], resources: [
+      { node: 'a', title: 'A 资源' },
+      { node: 'b', title: 'B 资源' },
+    ] }
+    assert.equal(resourcesForNode(map.resources, 'a').length, 1)
+    assert.equal(resourcesForNode(map.resources, 'a')[0].index, 1)
+    assert.equal(resourcesForNode(undefined, 'a').length, 0)
+  })
+
+  it('备课 prompt 与教学首消息包含资料清单', () => {
+    const prompt = buildPrepPrompt({ courseId: 'golang', node: 'goroutines', map: { verified: true, nodes: [], edges: [], resources: [] }, plan: { path: ['goroutines'], milestones: [], current: 'goroutines' }, profile })
+    assert.doesNotMatch(prompt, /已验证资料/)
+    const promptWith = buildPrepPrompt({ courseId: 'golang', node: 'x', map: { verified: true, nodes: [], edges: [], resources: [{ node: 'x', title: 'T', url: 'https://x', material: '正文' }] }, plan: { path: ['x'], milestones: [], current: 'x' }, profile })
+    assert.match(promptWith, /已验证资料/)
+    assert.match(promptWith, /https:\/\/x/)
+    const intro = buildTeachingIntro({ courseId: 'golang', node: 'x', plan: { path: ['x'], milestones: [], current: 'x' }, profile, draft, resources })
+    assert.match(intro, /本课资料/)
+    assert.match(intro, /1\. 官方入门 https:\/\/go\.dev\/doc\/tutorial/)
+  })
+
+  it('checkCitations：有效/无效标记与未引用警告', () => {
+    const ok = checkCitations('Go 是静态编译语言 [资料:1]。', 2)
+    assert.deepEqual(ok.cited, [1])
+    assert.deepEqual(ok.invalid, [])
+    const bad = checkCitations('见 [资料:9]。', 2)
+    assert.deepEqual(bad.invalid, [9])
+    const uncited = checkCitations('事实上，goroutine 的初始栈很小。', 2)
+    assert.equal(uncited.uncitedWarning, true)
+    assert.equal(checkCitations('你可以先跑一下这个例子。', 2).uncitedWarning, false)
+  })
+
+  it('buildCheckPrompt 包含资料与讲授记录', () => {
+    const prompt = buildCheckPrompt(['第一段发言', '第二段发言'], resources)
+    assert.match(prompt, /【资料】/)
+    assert.match(prompt, /--- 第2段 ---/)
+    assert.match(prompt, /第二段发言/)
   })
 })
