@@ -2,8 +2,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildPrepPrompt, buildTeachingIntro, currentNode, validateLessonDraft } from '../core/lesson.ts'
 import { judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
-import type { KnowledgeMap, LessonDraft, Mastery, Plan, Profile } from '../core/schema.ts'
-import { createAgentChat } from './agent-chat.ts'
+import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../core/schema.ts'
+import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock } from './generation.ts'
 
@@ -17,10 +17,46 @@ interface StoreView {
   has(id: string, kind: string): boolean
   read(id: string, kind: string): unknown
   write(id: string, kind: string, data: unknown): void
+  remove(id: string, kind: string): void
 }
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+async function startFreshLesson(
+  ctx: Context,
+  config: { courseId: string },
+  store: StoreView,
+  plan: Plan,
+  map: KnowledgeMap,
+  profile: Profile,
+  mastery: Mastery | undefined,
+  node: string
+): Promise<{ chat: AgentChat; draft: LessonDraft }> {
+  const out = process.stdout
+  const prepChat = await createAgentChat(ctx)
+  if (!prepChat) throw new Error('tutor: 备课会话创建失败')
+  out.write(`正在备课：${node}…\n`)
+  const draft = (await generateTurn(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery }), (text) => {
+    const data = parseJsonBlock(text)
+    if (!data.ok) return data
+    return validateLessonDraft(data.value, node)
+  })) as LessonDraft
+  await prepChat.flush()
+  out.write('备课完成，开始上课。\n')
+
+  const teachChat = await createAgentChat(ctx)
+  if (!teachChat) throw new Error('tutor: 课堂会话创建失败')
+  store.write(config.courseId, 'lesson', {
+    session_id: teachChat.sessionId,
+    node,
+    started_at: today(),
+    draft,
+  })
+  const reply = await teachChat.ask(buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft }))
+  out.write(`\n${reply}`)
+  return { chat: teachChat, draft }
 }
 
 async function run(ctx: Context, config: { courseId: string }): Promise<void> {
@@ -50,26 +86,41 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     return
   }
 
-  const prepChat = await createAgentChat(ctx)
-  out.write(`正在备课：${node}…\n`)
-  const draft = (await generateTurn(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery }), (text) => {
-    const data = parseJsonBlock(text)
-    if (!data.ok) return data
-    return validateLessonDraft(data.value, node)
-  })) as LessonDraft
-  await prepChat.flush()
-  out.write('备课完成，开始上课。\n')
+  let chat: AgentChat | null = null
+  let draft: LessonDraft | null = null
+  let resumed = false
+  if (store.has(config.courseId, 'lesson')) {
+    const lesson = store.read(config.courseId, 'lesson') as LessonState
+    const draftValid = validateLessonDraft(lesson.draft, lesson.node).ok
+    if (draftValid && lesson.node === node && lesson.session_id) {
+      const adopted = await createAgentChat(ctx, { resumeSessionId: lesson.session_id })
+      if (adopted) {
+        chat = adopted
+        draft = lesson.draft
+        resumed = true
+        out.write(`从上次断点继续本课（${node}）。\n\n${chat.lastReply()}`)
+      }
+    }
+    if (!resumed) {
+      store.remove(config.courseId, 'lesson')
+      out.write('上次课堂已失效，重新备课。\n')
+    }
+  }
+  if (!resumed || chat === null || draft === null) {
+    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node)
+    chat = fresh.chat
+    draft = fresh.draft
+  }
+  if (chat === null || draft === null) throw new Error('tutor: 课堂会话初始化失败')
 
-  const teachChat = await createAgentChat(ctx)
   const readAnswer = createLineReader(process.stdin)
   const pause = async () => {
-    await teachChat.flush()
-    out.write('\n本课暂停（进度已保存在会话日志）。重新运行 learn 可继续本课。\n')
+    await chat.flush()
+    out.write('\n本课暂停（进度已保存）。重新运行 learn 将从断点继续。\n')
     exit(0)
   }
-  let reply = await teachChat.ask(buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft }))
   while (true) {
-    out.write(`\n${reply}\n\n> `)
+    out.write('\n> ')
     const line = await readAnswer()
     const command = line?.trim() ?? ''
     if (!line || command === '/exit') {
@@ -84,7 +135,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
         for (const choice of item.choices ?? []) out.write(`  ${choice}\n`)
         const answer = await readAnswer()
         if (!answer || !answer.trim()) {
-          out.write('小测中止，本次不做掌握度更新。\n')
+          out.write('小测中止，本次不做掌握度更新，本课保留断点。\n')
           await pause()
           return
         }
@@ -99,15 +150,17 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       const pointer = currentNode(plan, updatedMastery)
       const updatedPlan: Plan = pointer ? { ...plan, current: pointer } : { ...plan, current: undefined }
       store.write(config.courseId, 'plan', updatedPlan)
+      store.remove(config.courseId, 'lesson')
       const entry = updatedMastery[node]
       out.write(`\n小测得分：${score}（${correct}/${draft.quiz.length}）\n`)
       out.write(`掌握度更新：${node} → ${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，复习到期 ${entry.review_due}` : ''}\n`)
       out.write(pointer ? `计划指针：${node} → ${pointer}\n` : '计划内知识点均已掌握，课程完成。\n')
-      await teachChat.flush()
+      await chat.flush()
       exit(0)
       return
     }
-    reply = await teachChat.ask(command)
+    const reply = await chat.ask(command)
+    out.write(`\n${reply}`)
   }
 }
 

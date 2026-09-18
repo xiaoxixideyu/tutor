@@ -70,6 +70,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   out.write(`教学路径：${path.length} 个知识点待学。正在设计里程碑…\n`)
 
   const chat = await createAgentChat(ctx)
+  if (!chat) throw new Error('tutor: 模型会话创建失败')
   const prompt = [
     '任务：为下列教学路径设计里程碑。',
     '',

@@ -134,6 +134,7 @@ export type DocKind =
   | 'mastery'
   | 'question-bank'
   | 'assessment'
+  | 'lesson'
 
 export interface LessonPractice {
   question: string
@@ -171,6 +172,20 @@ export const LessonDraftSchema = z.object({
   misconceptions: z.array(z.string()),
 }) as unknown as Schema<any, LessonDraft>
 
+export interface LessonState {
+  session_id: string
+  node: string
+  started_at: string
+  draft: LessonDraft
+}
+
+export const LessonStateSchema = z.object({
+  session_id: z.string().required(),
+  node: z.string().required(),
+  started_at: z.string().required(),
+  draft: LessonDraftSchema.required(),
+}) as unknown as Schema<any, LessonState>
+
 export const DocumentSchemas = {
   profile: ProfileSchema,
   'knowledge-map': KnowledgeMapSchema,
@@ -179,4 +194,5 @@ export const DocumentSchemas = {
   mastery: MasterySchema,
   'question-bank': QuestionBankSchema,
   assessment: AssessmentStateSchema,
+  lesson: LessonStateSchema,
 } satisfies Record<DocKind, Schema<any, unknown>>

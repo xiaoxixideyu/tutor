@@ -1,8 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { buildPrepPrompt, buildTeachingIntro, currentNode, prerequisiteIds, validateLessonDraft } from '../src/core/lesson.ts'
 import { judgeQuizAnswer, statusForScore, updateMasteryForNode } from '../src/core/assessment.ts'
-import type { KnowledgeMap, LessonDraft, Mastery, Plan, Profile } from '../src/core/schema.ts'
+import { CourseStore } from '../src/core/store.ts'
+import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../src/core/schema.ts'
 
 const map: KnowledgeMap = {
   verified: false,
@@ -158,10 +162,41 @@ describe('statusForScore / updateMasteryForNode', () => {
     assert.equal(backToWeak.goroutines.status, 'weak')
     assert.equal('review_due' in (backToWeak.goroutines ?? {}), false)
   })
+})
 
+describe('updateMasteryForNode 保留其他节点', () => {
   it('更新保留其他节点', () => {
     const base: Mastery = { channels: { status: 'learning', score: 0.6, review_due: '2026-09-18' } }
     const updated = updateMasteryForNode(base, 'goroutines', 0.9, '2026-09-17')
     assert.deepEqual(updated.channels, { status: 'learning', score: 0.6, review_due: '2026-09-18' })
+  })
+})
+
+describe('LessonState（断点续学状态）', () => {
+  it('lesson.yaml 写读删 round-trip，草稿嵌套校验生效', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-lesson-'))
+    try {
+      const store = new CourseStore(dir)
+      store.create('golang', { goal: 'x' })
+      const state: LessonState = {
+        session_id: 'session-abc',
+        node: 'goroutines',
+        started_at: '2026-09-17',
+        draft,
+      }
+      store.write('golang', 'lesson', state)
+      const restored = store.read('golang', 'lesson') as LessonState
+      assert.equal(restored.session_id, 'session-abc')
+      assert.equal(restored.node, 'goroutines')
+      assert.equal(restored.draft.node, 'goroutines')
+      assert.equal(restored.draft.quiz.length, 2)
+      assert.equal(restored.draft.quiz[1].choices?.length, 4)
+      const broken = { ...state, draft: { ...draft, example: 123 } }
+      assert.throws(() => store.write('golang', 'lesson', broken), /校验失败/)
+      store.remove('golang', 'lesson')
+      assert.equal(store.has('golang', 'lesson'), false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

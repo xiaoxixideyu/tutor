@@ -10,7 +10,7 @@
 
 ## 状态
 
-设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建、最小 agent 循环、课程状态插件、需求澄清访谈、摸底测评、教学计划生成、讲授循环、单元小测与掌握度闭环（第一期任务 1-8）。
+设计定稿，第一期实施中（单课程教学闭环）。已完成：环境搭建、最小 agent 循环、课程状态插件、需求澄清访谈、摸底测评、教学计划生成、讲授循环、单元小测与掌握度闭环、断点续学（第一期任务 1-9）。
 
 核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
 
@@ -28,7 +28,7 @@ npm test                        # 核心单元测试（无需模型）
 npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
-npm run agent -- learn golang   # 开始本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；/exit 暂停）
+npm run agent -- learn golang   # 开始/继续本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；/exit 或中断后重跑自动续学）
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 

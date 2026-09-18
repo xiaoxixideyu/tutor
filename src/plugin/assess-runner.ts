@@ -113,6 +113,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   }
   const profile = store.read(config.courseId, 'profile') as Profile
   const chat = await createAgentChat(ctx)
+  if (!chat) throw new Error('tutor: 模型会话创建失败')
 
   if (!store.has(config.courseId, 'knowledge-map')) {
     out.write('正在生成知识地图（模型自带知识，未联网验证）…\n')

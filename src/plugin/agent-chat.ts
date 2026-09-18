@@ -21,6 +21,7 @@ interface SessionView {
 export interface AgentChat {
   sessionId: string
   ask(prompt: string): Promise<string>
+  lastReply(): string
   flush(): Promise<void>
 }
 
@@ -32,13 +33,18 @@ interface AgentLike {
 
 interface AgentsRegistry {
   create(options: Record<string, unknown>): Promise<{ agent: AgentLike }>
+  resume(options: Record<string, unknown>): Promise<{ agent: AgentLike }>
 }
 
 interface SessionsRegistry {
   flush(session: unknown): Promise<void>
 }
 
-export async function createAgentChat(ctx: Context): Promise<AgentChat> {
+export interface CreateAgentChatOptions {
+  resumeSessionId?: string
+}
+
+export async function createAgentChat(ctx: Context, options: CreateAgentChatOptions = {}): Promise<AgentChat | null> {
   await (ctx.get('loader' as never) as { await(): Promise<void> } | undefined)?.await()
   const agentDefaultModel = ctx.get('agentDefaultModel') as
     | { currentSelection(): { provider: string; model: string } }
@@ -47,18 +53,50 @@ export async function createAgentChat(ctx: Context): Promise<AgentChat> {
   const sessions = ctx.get('sessions') as SessionsRegistry | undefined
   if (!agentDefaultModel || !agents || !sessions) throw new Error('tutor: 核心服务未就绪')
   const selection = agentDefaultModel.currentSelection()
-  const { agent } = await agents.create({
-    sessionId: brandString(`session-${randomUUID()}`) as never,
+  const createOptions = {
     meta: { cwd: process.cwd() },
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
     },
-  })
+  }
+  let agent: AgentLike
+  try {
+    if (options.resumeSessionId) {
+      const resumed = await agents.resume({
+        resumeSessionId: brandString(options.resumeSessionId) as never,
+        ...createOptions,
+      })
+      agent = resumed.agent
+    } else {
+      const created = await agents.create({
+        sessionId: brandString(`session-${randomUUID()}`) as never,
+        ...createOptions,
+      })
+      agent = created.agent
+    }
+  } catch (error) {
+    if (options.resumeSessionId) return null
+    throw error
+  }
   await agent.whenIdle()
 
   return {
     sessionId: String(agent.session.id ?? ''),
+    lastReply(): string {
+      let text = ''
+      for (let seq = 0; seq < agent.session.seq; seq++) {
+        const event = agent.session.eventAt(SessionSeq(seq))
+        if (event?.type === 'assistant/message' && event.data?.message) {
+          const joined = event.data.message.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text ?? '')
+            .join('')
+          if (joined !== '') text = joined
+        }
+      }
+      return text
+    },
     async ask(prompt: string): Promise<string> {
       let lastError: unknown
       for (let attempt = 0; attempt < 2; attempt++) {

@@ -21,6 +21,7 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
   const store = courseState.store
   const exit = ctx.get('appExit') as unknown as (code: number) => void
   const chat = await createAgentChat(ctx)
+  if (!chat) throw new Error('tutor: 模型会话创建失败')
   const readAnswer = createLineReader(process.stdin)
 
   let reply = await chat.ask(START_MESSAGE)

@@ -13,6 +13,7 @@ const FILES: Record<DocKind, string> = {
   mastery: 'mastery.yaml',
   'question-bank': 'question-bank.yaml',
   assessment: 'assessment.yaml',
+  lesson: 'lesson.yaml',
 }
 
 export class CourseStore {
