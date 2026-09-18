@@ -1,4 +1,4 @@
-import type { AssessmentState, LearnerProfile, Mastery, Question, QuestionBank } from './schema.ts'
+import type { AssessmentState, LearnerProfile, LessonPractice, Mastery, Question, QuestionBank } from './schema.ts'
 
 export const MAX_QUESTIONS_PER_NODE = 3
 
@@ -187,4 +187,39 @@ export function buildSummary(nodes: LearnerProfile['nodes']): string {
   if (medium.length > 0) parts.push(`一般：${medium.join('、')}`)
   if (weak.length > 0) parts.push(`薄弱：${weak.join('、')}`)
   return parts.join('；') + '。'
+}
+
+export function statusForScore(score: number): 'mastered' | 'learning' | 'weak' {
+  if (score >= 0.8) return 'mastered'
+  if (score >= 0.5) return 'learning'
+  return 'weak'
+}
+
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+export function judgeQuizAnswer(item: LessonPractice, raw: string): boolean {
+  const question: Question =
+    (item.choices?.length ?? 0) > 0
+      ? { id: 'quiz', difficulty: 2, type: 'choice', question: item.question, choices: item.choices, answer: item.answer }
+      : { id: 'quiz', difficulty: 2, type: 'short', question: item.question, answer: item.answer, accept: item.accept }
+  return judgeAnswer(question, raw)
+}
+
+export function updateMasteryForNode(mastery: Mastery | undefined, node: string, quizScore: number, today: string): Mastery {
+  const previous = mastery?.[node]
+  const status = statusForScore(quizScore)
+  const reviewDue =
+    status === 'weak' ? undefined : addDays(today, previous?.review_due !== undefined ? 3 : 1)
+  return {
+    ...mastery,
+    [node]: {
+      status,
+      score: quizScore,
+      ...(reviewDue !== undefined ? { review_due: reviewDue } : {}),
+    },
+  }
 }

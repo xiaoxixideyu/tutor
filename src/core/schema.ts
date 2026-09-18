@@ -138,6 +138,8 @@ export type DocKind =
 export interface LessonPractice {
   question: string
   answer: string
+  accept?: string[]
+  choices?: string[]
 }
 
 export interface LessonDraft {
@@ -147,8 +149,16 @@ export interface LessonDraft {
   structure: string[]
   example: string
   practice: LessonPractice[]
+  quiz: LessonPractice[]
   misconceptions?: string[]
 }
+
+export const LessonPracticeSchema = z.object({
+  question: z.string().required(),
+  answer: z.string().required(),
+  accept: z.array(z.string()),
+  choices: z.array(z.string()),
+})
 
 export const LessonDraftSchema = z.object({
   node: z.string().required(),
@@ -156,7 +166,8 @@ export const LessonDraftSchema = z.object({
   hook: z.string().required(),
   structure: z.array(z.string()).required(),
   example: z.string().required(),
-  practice: z.array(z.object({ question: z.string().required(), answer: z.string().required() })).required(),
+  practice: z.array(LessonPracticeSchema).required(),
+  quiz: z.array(LessonPracticeSchema).required(),
   misconceptions: z.array(z.string()),
 }) as unknown as Schema<any, LessonDraft>
 

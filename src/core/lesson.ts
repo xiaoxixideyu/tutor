@@ -16,6 +16,17 @@ export function validateLessonDraft(draft: unknown, expectedNode?: string): { ok
   if (value.practice.length < 1 || value.practice.length > 3) {
     return { ok: false, error: `practice 需 1-3 道课中练习，当前 ${value.practice.length}` }
   }
+  if (value.quiz.length < 2 || value.quiz.length > 3) {
+    return { ok: false, error: `quiz 需 2-3 道单元小测题，当前 ${value.quiz.length}` }
+  }
+  for (const item of value.quiz) {
+    if ((item.choices?.length ?? 0) > 0) {
+      if (item.choices!.length !== 4) return { ok: false, error: `小测题"${item.question}"的选项数不是 4` }
+      if (!/^[a-d]$/i.test(item.answer.trim())) return { ok: false, error: `小测题"${item.question}"的答案不是 A-D 字母` }
+    } else if (item.answer.trim() === '') {
+      return { ok: false, error: `小测题"${item.question}"缺少答案` }
+    }
+  }
   return { ok: true, value }
 }
 
@@ -72,10 +83,11 @@ export function buildPrepPrompt(input: PrepInput): string {
     '- 讲法贴合学员讲解偏好与现有基础',
     '- example 给一个核心例子（如涉及代码给出完整可读的代码块）',
     '- practice 为 1-3 道课中练习（随讲授穿插），每题给出参考答案',
+    '- quiz 为 2-3 道课后单元小测题，全部为客观题：要么选择题（choices 恰好 4 项、answer 为 A-D 字母），要么唯一简短答案（answer 必填、accept 列出等价表述）；不得与课中练习重复',
     '- misconceptions 列出该知识点常见误区（1-3 条）',
     '',
     '请输出备课 JSON（```json 代码块）：',
-    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句）", "structure": ["要点1", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "misconceptions": ["…"]}',
+    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句）", "structure": ["要点1", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "quiz": [{"question": "…", "choices": ["A. …","B. …","C. …","D. …"], "answer": "B"}, {"question": "…", "answer": "…", "accept": ["…"]}], "misconceptions": ["…"]}',
     '除该 JSON 外不要输出其他内容。',
   ]
   return lines.join('\n')
