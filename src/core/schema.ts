@@ -163,6 +163,8 @@ export type DocKind =
   | 'question-bank'
   | 'assessment'
   | 'lesson'
+  | 'practice'
+  | 'practice-state'
 
 export interface LessonPractice {
   question: string
@@ -214,6 +216,71 @@ export const LessonStateSchema = z.object({
   draft: LessonDraftSchema.required(),
 }) as unknown as Schema<any, LessonState>
 
+export interface PracticeTest {
+  name: string
+  command: string
+  expect_exit?: number
+  expect_output_contains?: string[]
+}
+
+export interface PracticeTask {
+  id: string
+  node: string
+  title: string
+  prompt: string
+  starter_files?: { path: string; content: string }[]
+  tests: PracticeTest[]
+  hints?: string[]
+}
+
+export interface PracticeTaskFile {
+  generated_at: string
+  tasks: PracticeTask[]
+}
+
+export interface PracticeTaskState {
+  node: string
+  task_id: string
+  updated_at: string
+  done_tests: string[]
+  done: boolean
+  attempts: number
+}
+
+const starterFileSchema = z.object({ path: z.string().required(), content: z.string().required() })
+
+const practiceTestSchema = z.object({
+  name: z.string().required(),
+  command: z.string().required(),
+  expect_exit: z.number(),
+  expect_output_contains: z.array(z.string()),
+})
+
+const practiceTaskSchema = z.object({
+  id: nodeId.required(),
+  node: nodeId.required(),
+  title: z.string().required(),
+  prompt: z.string().required(),
+  starter_files: z.array(starterFileSchema),
+  tests: z.array(practiceTestSchema).required(),
+  hints: z.array(z.string()),
+})
+
+export const PracticeTaskFileSchema = z.object({
+  generated_at: dateStr.required(),
+  // 注：schemastery 的 array.min 对 object 元素不生效（实测），非空约束由 validatePracticeTasks 负责
+  tasks: z.array(practiceTaskSchema).required(),
+}) as unknown as Schema<any, PracticeTaskFile>
+
+export const PracticeTaskStateSchema = z.object({
+  node: nodeId.required(),
+  task_id: nodeId.required(),
+  updated_at: dateStr.required(),
+  done_tests: z.array(z.string()).default([]),
+  done: z.boolean().required(),
+  attempts: z.number().min(0).default(0),
+}) as unknown as Schema<any, PracticeTaskState>
+
 export const DocumentSchemas = {
   profile: ProfileSchema,
   'knowledge-map': KnowledgeMapSchema,
@@ -223,4 +290,6 @@ export const DocumentSchemas = {
   'question-bank': QuestionBankSchema,
   assessment: AssessmentStateSchema,
   lesson: LessonStateSchema,
+  practice: PracticeTaskFileSchema,
+  'practice-state': PracticeTaskStateSchema,
 } satisfies Record<DocKind, Schema<any, unknown>>

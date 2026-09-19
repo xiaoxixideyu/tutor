@@ -14,6 +14,8 @@ const FILES: Record<DocKind, string> = {
   'question-bank': 'question-bank.yaml',
   assessment: 'assessment.yaml',
   lesson: 'lesson.yaml',
+  practice: 'practice.yaml',
+  'practice-state': 'practice-state.yaml',
 }
 
 export class CourseStore {
