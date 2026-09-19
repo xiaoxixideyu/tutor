@@ -2,13 +2,13 @@
 // tutor 实践壳：学员在 workdir 写代码、跑规则化测试（零模型，判分在核心；三期实践任务沙箱）
 // 用法：npm run agent -- practice <课程名> [--node <知识点>]
 import readline from 'node:readline'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { CourseStore } from '../src/core/store.ts'
 import { currentNode } from '../src/core/lesson.ts'
-import { judgePracticeTask, buildPracticeIntro } from '../src/core/practice.ts'
-import { applyPracticeResult } from '../src/core/assessment.ts'
+import { judgePracticeTask, buildPracticeIntro, applyPracticeResult } from '../src/core/practice.ts'
 import { runTests, ensureStarterFiles } from '../src/plugin/practice-executor.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -24,18 +24,14 @@ const KNOWN_TOOLS = { go: 'brew install go', node: 'brew install node', python3:
 
 function detectMissingTools(task) {
   const missing = []
+  const seen = new Set()
   for (const test of task.tests) {
     for (const [tool, hint] of Object.entries(KNOWN_TOOLS)) {
-      if (new RegExp(`\\b${tool}\\b`).test(test.command) && !missing.includes(tool)) {
-        const probe = (() => {
-          try {
-            return require('node:child_process').spawnSync(tool, ['--version'], { stdio: 'ignore' })
-          } catch {
-            return { status: 127 }
-          }
-        })()
-        if ((probe.error ?? probe.status === 127) || probe.error) missing.push(`${tool}（${hint}）`)
-      }
+      if (seen.has(tool)) continue
+      if (!new RegExp(`\\b${tool}\\b`).test(test.command)) continue
+      seen.add(tool)
+      const probe = spawnSync(tool, ['--version'], { stdio: 'ignore' })
+      if (probe.error || probe.status === 127) missing.push(`${tool}（${hint}）`)
     }
   }
   return missing
@@ -93,9 +89,10 @@ if (tasks.length > 1) {
   if (pickIndex >= 2 && pickIndex <= tasks.length) task = tasks[pickIndex - 1]
 }
 
-if (detectMissingTools(task).length > 0) {
-  out.write(`\n缺少运行本任务所需的工具，请先安装：\n`)
-  for (const m of detectMissingTools(task)) out.write(`  - ${m}\n`)
+const missingTools = detectMissingTools(task)
+if (missingTools.length > 0) {
+  out.write('\n缺少运行本任务所需的工具，请先安装：\n')
+  for (const m of missingTools) out.write(`  - ${m}\n`)
   process.exit(1)
 }
 
