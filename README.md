@@ -10,9 +10,11 @@
 
 ## 状态
 
-设计定稿。第一期（单课程教学闭环）10 项任务全部完成，验收标准逐项通过。第二期（教研系统）完成：联网教研（MCP 搜索 + 交叉验证 → 带来源知识地图）、备课资料注入、讲授引用红线、/check 事实核对、URL 存活门（含瞬时失败重试）均已通过 golang 真实课程端到端回归（2026-09-19：访谈→摸底断点续测→教研 10/10 验证与死链剔除→规划→讲授断点续学→/check 核对→/quiz 判分→看板）。
+设计定稿。第一期（单课程教学闭环）与第二期（教研系统）已完成并通过 golang 真实课程端到端回归。第三期进行中：多课程并行体验（review --all、到期徽章、题库缺失顺延）、强化复习（SM-2 简化版：答错回退一级不清队列）、前端壳一期（本地 JSON-RPC 服务 + 静态看板）已落地；实践任务沙箱与 Harness 档案挂载（待其提供可插领域方法面）未开始。
 
-核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
+核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试；JSON-RPC 方法表也在核心，壳只做传输）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
+
+说明：复习答错会把已 mastered 的知识点降级，下次 `learn` 时计划指针会指回该节点（补救课）——这是设计行为，不是进度丢失。
 
 ## 环境要求
 
@@ -25,14 +27,16 @@
 npm install
 cp .env.example .env            # 填入 base_url / api_key / model 三要素
 npm test                        # 核心单元测试（无需模型）
-npm run agent -- list           # 课程列表（零模型）
+npm run agent -- list           # 课程列表（零模型，含到期复习徽章）
 npm run agent -- status golang  # 进度看板（知识点掌握状态/里程碑/复习到期）
 npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
 npm run agent -- learn golang   # 开始/继续本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；中断后重跑自动续学）
-npm run agent -- review golang  # 复习到期知识点（1/3/7/14 天阶梯；掌握度差节点指针留原地=补救课）
+npm run agent -- review golang  # 复习到期知识点（SM-2 简化阶梯 1/3/7/14 天；答错回退一级不清队列；掌握度差节点指针留原地=补救课）
+npm run agent -- review --all   # 跨课程到期汇总复习（多课程）
 npm run agent -- research golang # 联网教研（二期）：MCP 搜索+交叉验证 → 带来源知识地图（分批、可中断续研）
+npm run serve                   # 本地进度看板（三期）：http://127.0.0.1:8787，仅本机无鉴权，勿暴露公网
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 
