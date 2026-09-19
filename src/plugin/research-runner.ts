@@ -66,15 +66,22 @@ function batchPrompt(profile: Profile, batch: { id: string; title?: string; summ
 type ParseResult = { ok: true; value: unknown } | { ok: false; error: string }
 
 async function checkUrl(url: string): Promise<boolean> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
-    const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal })
-    clearTimeout(timer)
-    return response.status >= 200 && response.status < 400
-  } catch {
-    return false
+  // 网关/网络抖动会把有效来源误判为死链（实测 pkg.go.dev 被误杀），失败后间隔 1s 重试一次再判死
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_000))
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10_000)
+      const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal })
+      clearTimeout(timer)
+      if (response.status >= 200 && response.status < 400) return true
+      if (response.status >= 500) continue // 服务端错误可能是暂时性的，重试
+      return false // 404 等客户端错误是确定性的，直接判死
+    } catch {
+      continue
+    }
   }
+  return false
 }
 
 async function pruneDeadResources(
