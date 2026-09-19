@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { dueReviews, pickReviewQuestions } from '../src/core/review.ts'
+import { dueReviews, pickReviewQuestions, postponeReview } from '../src/core/review.ts'
 import { applyReviewResult, nextReviewStage, REVIEW_INTERVALS } from '../src/core/assessment.ts'
 import type { Mastery, QuestionBank } from '../src/core/schema.ts'
 
@@ -93,5 +93,21 @@ describe('applyReviewResult / nextReviewStage', () => {
     const boundary = applyReviewResult({ a: { status: 'learning', score: 0.6, review_stage: 1 } }, 'a', 0.5, '2026-09-18')
     assert.equal(boundary.a.review_stage, 2)
     assert.equal(boundary.a.review_due, '2026-09-21')
+  })
+})
+
+describe('postponeReview', () => {
+  it('题库缺失时顺延 1 天，状态与阶梯不动', () => {
+    const mastery: Mastery = { a: { status: 'learning', score: 0.6, review_due: '2026-09-18', review_stage: 2 } }
+    const postponed = postponeReview(mastery, 'a', '2026-09-18')
+    assert.equal(postponed.a.review_due, '2026-09-19')
+    assert.equal(postponed.a.review_stage, 2)
+    assert.equal(postponed.a.status, 'learning')
+    assert.equal(postponed.a.score, 0.6)
+  })
+
+  it('无 review_due 的节点原样返回', () => {
+    const mastery: Mastery = { a: { status: 'weak', score: 0.3 } }
+    assert.equal(postponeReview(mastery, 'a', '2026-09-18'), mastery)
   })
 })

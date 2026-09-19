@@ -3,7 +3,7 @@ import path from 'node:path'
 import { isMap, parseDocument, stringify, type Document as YamlDocument } from 'yaml'
 import { DocumentSchemas, type DocKind } from './schema.ts'
 
-const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
+export const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 const FILES: Record<DocKind, string> = {
   profile: 'profile.yaml',

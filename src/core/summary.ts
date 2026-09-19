@@ -1,4 +1,5 @@
 import type { CourseStore } from './store.ts'
+import { dueReviews, type DueReview } from './review.ts'
 import type { KnowledgeMap, Mastery, Plan, Profile } from './schema.ts'
 import type { MasteryStatusId } from './schema.ts'
 
@@ -34,6 +35,13 @@ export interface CourseListItem {
   current?: string
   mastered: number
   total: number
+  dueCount?: number
+}
+
+export interface CourseReviewDue {
+  id: string
+  due: DueReview[]
+  earliestDue?: string
 }
 
 const EMPTY_COUNTS: Record<MasteryStatusId, number> = { mastered: 0, learning: 0, weak: 0, unknown: 0 }
@@ -91,14 +99,33 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
 }
 
 export function listCourseSummaries(store: CourseStore): CourseListItem[] {
+  const today = new Date().toISOString().slice(0, 10)
   return store.list().map((id) => {
     const progress = courseProgress(store, id)
+    const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
+    const dueCount = mastery ? dueReviews(mastery, today).length : 0
     return {
       id,
       goal: progress.goal ?? '',
       ...(progress.current !== undefined ? { current: progress.current } : {}),
       mastered: progress.counts.mastered,
       total: progress.totalNodes,
+      ...(dueCount > 0 ? { dueCount } : {}),
     }
   })
+}
+
+// 跨课程到期汇总：仅返回有到期项的课程，按 (earliestDue, id) 排序
+export function listDueReviews(store: CourseStore, today: string): CourseReviewDue[] {
+  const items: CourseReviewDue[] = []
+  for (const id of store.list()) {
+    const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
+    if (!mastery) continue
+    const due = dueReviews(mastery, today)
+    if (due.length === 0) continue
+    items.push({ id, due, earliestDue: due[0].review_due })
+  }
+  return items.sort(
+    (a, b) => (a.earliestDue ?? '').localeCompare(b.earliestDue ?? '') || a.id.localeCompare(b.id)
+  )
 }

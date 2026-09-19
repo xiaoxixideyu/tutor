@@ -30,7 +30,8 @@ function renderList() {
   out.write(`共 ${items.length} 门课程：\n`)
   for (const item of items) {
     const pointer = item.current ? `  ${paint('→', 90)} ${item.current}` : ''
-    out.write(`${paint('●', 36)} ${item.id}  ${item.goal}${pointer}\n`)
+    const due = item.dueCount ? `  ${paint(`到期 ${item.dueCount}`, 33)}` : ''
+    out.write(`${paint('●', 36)} ${item.id}  ${item.goal}${pointer}${due}\n`)
     out.write(`  进度 ${item.mastered}/${item.total} 已掌握\n`)
   }
 }

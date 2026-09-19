@@ -17,6 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'yaml'
+import { COURSE_ID_PATTERN } from '../src/core/store.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dshHome = path.join(root, 'data', 'dsh-home')
@@ -116,7 +117,7 @@ let runnerMode = null
 if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research') {
   runnerMode = argv[0]
   const courseId = argv[1] ?? ''
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(courseId)) {
+  if (!COURSE_ID_PATTERN.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
   const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md' }
