@@ -13,6 +13,7 @@
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'yaml'
@@ -58,14 +59,41 @@ const require = createRequire(import.meta.url)
 const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
 
 // Harness 依赖 import.meta.main（Node 22.19+/24+ 才有），且官方仅在 22.19/24/26 上测试。
-// 当前机器默认 node 可能不满足，这里解析一个受支持运行时：TUTOR_NODE_BIN > homebrew node@24 > 当前进程。
+// 当前机器默认 node 可能不满足，这里解析一个受支持运行时：
+// TUTOR_NODE_BIN > 当前进程 > homebrew node@24 > nvm 已装版本（取最高）> 当前进程兜底。
+function isSupportedNode(version) {
+  const [major, minor] = version.replace(/^v/, '').split('.').map(Number)
+  return major === 24 || major === 26 || (major === 22 && minor >= 19)
+}
+
+function versionParts(version) {
+  return version.replace(/^v/, '').split('.').map(Number)
+}
+
 function resolveRuntimeNode() {
   if (process.env.TUTOR_NODE_BIN) return process.env.TUTOR_NODE_BIN
-  const [major, minor] = process.versions.node.split('.').map(Number)
-  const supported = major === 24 || major === 26 || (major === 22 && minor >= 19)
-  if (supported) return process.execPath
+  if (isSupportedNode(process.versions.node)) return process.execPath
+  const candidates = []
   const brewNode24 = '/opt/homebrew/opt/node@24/bin/node'
-  if (fs.existsSync(brewNode24)) return brewNode24
+  if (fs.existsSync(brewNode24)) candidates.push({ bin: brewNode24, version: '24' })
+  const nvmVersionsDir = path.join(os.homedir(), '.nvm', 'versions', 'node')
+  try {
+    for (const entry of fs.readdirSync(nvmVersionsDir)) {
+      const bin = path.join(nvmVersionsDir, entry, 'bin', 'node')
+      if (fs.existsSync(bin) && isSupportedNode(entry)) candidates.push({ bin, version: entry })
+    }
+  } catch {
+    // 无 nvm 目录：跳过
+  }
+  candidates.sort((a, b) => {
+    const av = versionParts(a.version)
+    const bv = versionParts(b.version)
+    for (let i = 0; i < 3; i++) {
+      if ((av[i] ?? 0) !== (bv[i] ?? 0)) return (bv[i] ?? 0) - (av[i] ?? 0)
+    }
+    return 0
+  })
+  if (candidates.length > 0) return candidates[0].bin
   return process.execPath
 }
 
