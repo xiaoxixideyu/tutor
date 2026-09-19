@@ -58,12 +58,40 @@ describe('applyReviewResult / nextReviewStage', () => {
     assert.equal(masteredKept.a.review_stage, 4)
   })
 
-  it('不通过则重置（清 review_due/stage，按新分数定级）', () => {
+  it('不通过则回退一级并重新排期（不清空复习队列）', () => {
     const mastery: Mastery = { a: { status: 'mastered', score: 1, review_due: '2026-09-18', review_stage: 2 } }
     const updated = applyReviewResult(mastery, 'a', 0.33, '2026-09-18')
     assert.equal(updated.a.status, 'weak')
     assert.equal(updated.a.score, 0.33)
-    assert.equal('review_due' in updated.a, false)
-    assert.equal('review_stage' in updated.a, false)
+    assert.equal(updated.a.review_stage, 1)
+    assert.equal(updated.a.review_due, '2026-09-19')
+  })
+
+  it('阶梯边界：stage4 通过封顶、stage1 失败停在第 1 阶', () => {
+    const capped = applyReviewResult({ a: { status: 'mastered', score: 1, review_stage: 4 } }, 'a', 1, '2026-09-18')
+    assert.equal(capped.a.review_stage, 4)
+    assert.equal(capped.a.review_due, '2026-10-02')
+    const floor = applyReviewResult({ a: { status: 'learning', score: 0.6, review_stage: 1 } }, 'a', 0.2, '2026-09-18')
+    assert.equal(floor.a.review_stage, 1)
+    assert.equal(floor.a.review_due, '2026-09-19')
+    assert.equal(floor.a.status, 'weak')
+  })
+
+  it('旧数据无 review_stage：通过按首次复习，失败停在第 1 阶', () => {
+    const first = applyReviewResult({ a: { status: 'learning', score: 0.6 } }, 'a', 0.7, '2026-09-18')
+    assert.equal(first.a.review_stage, 1)
+    assert.equal(first.a.review_due, '2026-09-19')
+    const failed = applyReviewResult({ a: { status: 'learning', score: 0.6 } }, 'a', 0.3, '2026-09-18')
+    assert.equal(failed.a.review_stage, 1)
+    assert.equal(failed.a.review_due, '2026-09-19')
+  })
+
+  it('stage3 失败回退到 stage2（间隔 3 天）；0.5 边界算通过', () => {
+    const stepped = applyReviewResult({ a: { status: 'learning', score: 0.7, review_stage: 3 } }, 'a', 0.4, '2026-09-18')
+    assert.equal(stepped.a.review_stage, 2)
+    assert.equal(stepped.a.review_due, '2026-09-21')
+    const boundary = applyReviewResult({ a: { status: 'learning', score: 0.6, review_stage: 1 } }, 'a', 0.5, '2026-09-18')
+    assert.equal(boundary.a.review_stage, 2)
+    assert.equal(boundary.a.review_due, '2026-09-21')
   })
 })

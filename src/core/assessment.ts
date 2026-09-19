@@ -195,7 +195,7 @@ export function statusForScore(score: number): 'mastered' | 'learning' | 'weak' 
   return 'weak'
 }
 
-function addDays(isoDate: string, days: number): string {
+export function addDays(isoDate: string, days: number): string {
   const date = new Date(`${isoDate}T00:00:00Z`)
   date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString().slice(0, 10)
@@ -211,9 +211,16 @@ export function judgeQuizAnswer(item: LessonPractice, raw: string): boolean {
 
 export const REVIEW_INTERVALS = [1, 3, 7, 14]
 
+// 复习阶梯推进：通过 stage+1 封顶 4；失败 stage-1 不低于 1。
+// 旧数据无 review_stage 时：通过按首次复习（新 stage=1），失败停在第 1 阶。
+export function stepReviewStage(previous: Mastery[string] | undefined, passed: boolean): number {
+  const stage = previous?.review_stage
+  return passed ? Math.min((stage ?? 0) + 1, REVIEW_INTERVALS.length) : Math.max((stage ?? 2) - 1, 1)
+}
+
+// 兼容旧名：新建复习条目时的下一阶段（等价于"通过"路径）
 export function nextReviewStage(previous: Mastery[string] | undefined): number {
-  const stage = previous?.review_stage ?? 0
-  return Math.min(stage + 1, REVIEW_INTERVALS.length)
+  return stepReviewStage(previous, true)
 }
 
 export function updateMasteryForNode(mastery: Mastery | undefined, node: string, quizScore: number, today: string): Mastery {
@@ -237,27 +244,17 @@ export function updateMasteryForNode(mastery: Mastery | undefined, node: string,
   }
 }
 
-export function applyReviewResult(
-  mastery: Mastery,
-  node: string,
-  quizScore: number,
-  today: string
-): Mastery {
+// 复习小测结果（SM-2 简化版）：答对升阶，答错回退一级但保留在复习队列里（按新 stage 重新排期）
+export function applyReviewResult(mastery: Mastery, node: string, quizScore: number, today: string): Mastery {
   const previous = mastery[node]
   const passed = quizScore >= 0.5
   const score = passed ? Math.max(previous.score ?? 0, quizScore) : quizScore
   const status = statusForScore(score)
-  if (!passed || status === 'weak') {
-    return {
-      ...mastery,
-      [node]: { status, score },
-    }
-  }
-  const stage = nextReviewStage(previous)
+  const stage = stepReviewStage(previous, passed)
   return {
     ...mastery,
     [node]: {
-      status: previous.status === 'mastered' || status === 'mastered' ? 'mastered' : status,
+      status,
       score,
       review_due: addDays(today, REVIEW_INTERVALS[stage - 1]),
       review_stage: stage,

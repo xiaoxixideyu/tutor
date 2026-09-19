@@ -96,7 +96,7 @@ for (const review of due) {
   mastery[review.node] = updated[review.node]
   const entry = mastery[review.node]
   out.write(
-    `→ ${review.node}：${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，下次复习 ${entry.review_due}` : '，已重置学习'}\n`
+    `→ ${review.node}：${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，下次复习 ${entry.review_due}` : ''}\n`
   )
   store.write(courseId, 'mastery', mastery)
   done += 1
