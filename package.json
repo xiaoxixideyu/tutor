@@ -10,7 +10,8 @@
   "scripts": {
     "agent": "node scripts/agent.mjs",
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "serve": "node scripts/serve.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.5-rc.1",

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 进度看板</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --mastered: #16a34a; --learning: #0891b2; --weak: #d97706; --unknown: #9ca3af; --due: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+  header { padding: 20px 24px 12px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 860px; margin: 0 auto; padding: 0 16px 48px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-top: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .course { padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .course:last-child { border-bottom: none; }
+  .course:hover { background: #fafbfc; margin: 0 -8px; padding: 12px 8px; border-radius: 6px; }
+  .course .row1 { display: flex; align-items: baseline; gap: 10px; }
+  .course .id { font-weight: 600; color: var(--accent); }
+  .course .goal { color: var(--fg); font-size: 14px; flex: 1; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; }
+  .bar { height: 6px; border-radius: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--mastered); border-radius: 3px; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .sym { font-weight: 700; }
+  .s-mastered { color: var(--mastered); } .s-learning { color: var(--learning); } .s-weak { color: var(--weak); } .s-unknown { color: var(--unknown); }
+  .review-line { color: var(--due); }
+  .back { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 13px; color: var(--fg); }
+  .back:hover { background: var(--bg); }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  .err { color: #b91c1c; font-size: 13px; }
+  .counts { display: flex; gap: 14px; font-size: 13px; margin: 10px 0 2px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>tutor 导师</h1>
+  <p>课程进度看板（只读 + 复习提交；数据来自 courses/ 目录）</p>
+</header>
+<main>
+  <section id="panel"></section>
+</main>
+<script>
+const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
+const $panel = document.getElementById('panel')
+
+async function rpc(method, params) {
+  const response = await fetch('/rpc', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+  })
+  const body = await response.json()
+  if (body.error) throw new Error(body.error.message)
+  return body.result
+}
+
+function esc(text) {
+  const div = document.createElement('div')
+  div.textContent = String(text ?? '')
+  return div.innerHTML
+}
+
+async function renderList() {
+  const courses = await rpc('listCourses')
+  const due = await rpc('dueReviews')
+  const dueById = new Map((due ?? []).map((c) => [c.id, c]))
+  const rows = courses.length === 0
+    ? '<div class="empty">暂无课程。运行 npm run agent -- new &lt;课程名&gt; 开始。</div>'
+    : courses.map((c) => {
+        const pct = c.total > 0 ? Math.round((c.mastered / c.total) * 100) : 0
+        const dueBadge = c.dueCount ? `<span class="badge">到期 ${c.dueCount}</span>` : ''
+        const reviewLine = dueById.has(c.id)
+          ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
+          : ''
+        return `<div class="course" data-id="${esc(c.id)}">
+          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}</div>
+          <div class="bar"><span style="width:${pct}%"></span></div>
+          <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
+          ${reviewLine}
+        </div>`
+      }).join('')
+  $panel.innerHTML = `<h2>课程列表</h2>${rows}`
+  for (const el of $panel.querySelectorAll('.course')) {
+    el.addEventListener('click', () => renderStatus(el.dataset.id))
+  }
+}
+
+async function renderStatus(id) {
+  const p = await rpc('courseStatus', { id })
+  const nodeRows = p.nodes.map((n) => {
+    const [sym, cls] = SYM[n.status] ?? SYM.unknown
+    return `<tr>
+      <td><span class="sym ${cls}">${sym}</span></td>
+      <td>${esc(n.status)}</td><td>${esc(n.id)}</td><td>${esc(n.title ?? '')}</td>
+      <td>${n.score !== undefined ? esc(n.score) : ''}</td>
+      <td>${n.review_due !== undefined ? `复习→${esc(n.review_due)}` : ''}</td>
+    </tr>`
+  }).join('')
+  const milestoneRows = p.milestones.map((m) =>
+    `<div class="meta">${esc(m.id)} ${esc(m.title)}　[${m.masteredCount}/${m.nodes.length}]</div>`
+  ).join('')
+  const c = p.counts
+  $panel.innerHTML = `
+    <button class="back" id="back">← 返回课程列表</button>
+    <h2 style="margin-top:12px">${esc(p.id)}${p.goal ? ` · ${esc(p.goal)}` : ''}</h2>
+    <div class="meta">指针：${p.current ? esc(p.current) : p.path.length > 0 ? '（未开始）' : '（无计划）'}</div>
+    <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
+    ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
+    <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
+    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th></tr></thead>
+    <tbody>${nodeRows}</tbody></table>`
+  document.getElementById('back').addEventListener('click', renderList)
+}
+
+renderList().catch((error) => {
+  $panel.innerHTML = `<div class="err">加载失败：${esc(error.message)}</div>`
+})
+</script>
+</body>
+</html>
