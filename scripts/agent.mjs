@@ -4,6 +4,8 @@
 //   npm run agent -- list                课程列表（设计 §6.4 tutor list，零模型）
 //   npm run agent -- status <课程名>     进度看板（设计 §6.4 tutor status，零模型）
 //   npm run agent -- review <课程名>     复习到期知识点（设计 §6.4 tutor review，零模型）
+//   npm run agent -- practice <课程名>   实践任务：写代码跑规则化测试（三期，零模型）
+//   npm run agent -- practice-gen <课程名>  生成实践任务（三期，需模型）
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 //   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
@@ -101,9 +103,9 @@ function resolveRuntimeNode() {
 const patchArgs = patchPath ? ['--patch', patchPath] : []
 const argv = process.argv.slice(2)
 
-// list/status/review：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
-if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review') {
-  const script = path.join(root, 'scripts', argv[0] === 'review' ? 'review.mjs' : 'view.mjs')
+// list/status/review/practice：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
+if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0] === 'practice') {
+  const script = path.join(root, 'scripts', argv[0] === 'review' ? 'review.mjs' : argv[0] === 'practice' ? 'practice.mjs' : 'view.mjs')
   const viewResult = spawnSync(resolveRuntimeNode(), [script, ...argv], {
     env: { ...env, TUTOR_COURSES_ROOT: env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses') },
     stdio: 'inherit',
@@ -114,19 +116,20 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review') {
 
 let runnerArgs = []
 let runnerMode = null
-if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research') {
+if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research' || argv[0] === 'practice-gen') {
   runnerMode = argv[0]
   const courseId = argv[1] ?? ''
   if (!COURSE_ID_PATTERN.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
-  const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md' }
+  const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md', 'practice-gen': 'practice-gen.md' }
   const runnerByMode = {
     new: 'tutor-interview-runner',
     assess: 'tutor-assess-runner',
     plan: 'tutor-plan-runner',
     learn: 'tutor-learn-runner',
     research: 'tutor-research-runner',
+    'practice-gen': 'tutor-practice-gen-runner',
   }
   const moduleByMode = {
     new: 'interview-runner.ts',
@@ -134,6 +137,7 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
     plan: 'plan-runner.ts',
     learn: 'learn-runner.ts',
     research: 'research-runner.ts',
+    'practice-gen': 'practice-gen-runner.ts',
   }
   const personaFile = personaByMode[runnerMode]
   const runnerId = runnerByMode[runnerMode]
