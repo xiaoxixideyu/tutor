@@ -118,7 +118,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   if (!chat) throw new Error('tutor: 模型会话创建失败')
 
   if (!store.has(config.courseId, 'knowledge-map')) {
-    out.write('正在生成知识地图（模型自带知识，未联网验证）…\n')
+    out.write('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
     const mapValue = await generateTurn(chat, mapPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data

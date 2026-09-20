@@ -67,10 +67,12 @@
 </header>
 <div class="steps" id="steps" style="display:none">
   <span class="step" data-step="new">1 访谈建档</span> →
-  <span class="step" data-step="assess">2 摸底测评</span> →
-  <span class="step" data-step="plan">3 教学计划</span> →
-  <span class="step" data-step="learn">4 上课</span>
+  <span class="step" data-step="research">联网教研（可选）</span> →
+  <span class="step" data-step="assess">摸底测评</span> →
+  <span class="step" data-step="plan">教学计划</span> →
+  <span class="step" data-step="learn">上课</span>
   <button class="goto" id="gotoBtn" style="display:none">进入课堂 →</button>
+  <button class="goto" id="researchBtn" style="display:none">先联网教研（约 ¥1，官方来源）</button>
 </div>
 <main id="log"></main>
 <div class="setup" id="setup">
@@ -317,12 +319,24 @@ async function startSse() {
       setBusy(false)
       if (msg.kind === 'new' && msg.code === 0) {
         markStep('new', 'done')
-        $log.appendChild(el('<div class="sysline">—— 访谈完成，开始摸底测评 ——</div>'))
-        startFlow('assess')
+        $log.appendChild(el('<div class="sysline">—— 访谈完成。可先联网教研（官方来源、讲授可溯源），或直接进入摸底 ——</div>'))
+        document.getElementById('researchBtn').style.display = 'inline-block'
+        const planNow = el('<button class="chip" style="margin:10px 0">跳过教研，直接摸底 →</button>')
+        planNow.addEventListener('click', () => { planNow.remove(); startFlow('assess') })
+        $log.appendChild(planNow)
       } else if (msg.kind === 'assess' && msg.code === 0) {
         markStep('assess', 'done')
-        $log.appendChild(el('<div class="sysline">—— 摸底完成，生成教学计划 ——</div>'))
-        startFlow('plan')
+        $log.appendChild(el('<div class="sysline">—— 摸底完成。可先联网教研（生成带来源的知识地图，讲授可溯源），或直接生成计划 ——</div>'))
+        document.getElementById('researchBtn').style.display = 'inline-block'
+        document.getElementById('gotoBtn').style.display = 'none'
+        const planNow = el('<button class="chip" style="margin:10px 0">跳过教研，直接生成计划 →</button>')
+        planNow.addEventListener('click', () => { planNow.remove(); startFlow('plan') })
+        $log.appendChild(planNow)
+      } else if (msg.kind === 'research' && msg.code === 0) {
+        markStep('research', 'done')
+        document.getElementById('researchBtn').style.display = 'none'
+        $log.appendChild(el('<div class="sysline">—— 教研完成，开始摸底 ——</div>'))
+        startFlow('assess')
       } else if (msg.kind === 'plan' && msg.code === 0) {
         markStep('plan', 'done')
         $log.appendChild(el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
@@ -394,6 +408,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
 document.getElementById('gotoBtn').addEventListener('click', () => {
   location.href = `/lesson.html?course=${encodeURIComponent(courseName)}`
 })
+document.getElementById('researchBtn').addEventListener('click', () => startFlow('research'))
 
 // 页面加载：附加进行中的流程（刷新不丢）
 fetch('/flow/state').then((r) => r.json()).then((state) => {
