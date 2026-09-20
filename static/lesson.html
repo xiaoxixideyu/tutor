@@ -239,7 +239,7 @@ function submitChips(letters) {
   $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
   closeBubble()
   setBusy(true)
-  api('/lesson/input', { line })
+  api('/flow/input', { line })
 }
 
 function closeBubble() {
@@ -293,7 +293,7 @@ function setUserEcho(line) {
 }
 
 async function startSse() {
-  const es = new EventSource('/lesson/stream')
+  const es = new EventSource('/flow/stream')
   es.onmessage = (event) => {
     const msg = JSON.parse(event.data)
     if (msg.type === 'hello' && msg.replay === undefined) {
@@ -336,7 +336,7 @@ async function api(path, body) {
 }
 
 async function ensureLesson() {
-  const state = await (await fetch('/lesson/state')).json()
+  const state = await (await fetch('/flow/state')).json()
   if (state.active) return state.active
   // 无进行中的课堂：让用户从课程列表选课（本页简化为提示去首页）
   return null
@@ -349,7 +349,7 @@ function send() {
   setUserEcho(line)
   closeBubble()
   setBusy(true)
-  api('/lesson/input', { line })
+  api('/flow/input', { line })
 }
 
 document.getElementById('send').addEventListener('click', send)
@@ -359,11 +359,11 @@ $input.addEventListener('keydown', (event) => {
 for (const button of document.querySelectorAll('.quick button')) {
   button.addEventListener('click', () => {
     setUserEcho(button.dataset.cmd)
-    api('/lesson/input', { line: button.dataset.cmd })
+    api('/flow/input', { line: button.dataset.cmd })
   })
 }
 document.getElementById('stopBtn').addEventListener('click', async () => {
-  await api('/lesson/stop')
+  await api('/flow/stop')
 })
 
 // 页面加载：若空闲则显示选课入口
@@ -374,7 +374,7 @@ ensureLesson().then(async (course) => {
   }
   const wanted = new URLSearchParams(location.search).get('course')
   if (wanted) {
-    const result = await api('/lesson/start', { courseId: wanted })
+    const result = await api('/flow/start', { kind: 'learn', courseId: wanted })
     if (result.ok) {
       $state.textContent = `课堂进行中：${wanted}`
       $banner.style.display = 'none'

@@ -14,7 +14,7 @@
     "serve": "node scripts/agent.mjs serve"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.5-rc.1",
+    "@deepseek-ai/dsh": "0.1.5-rc.2",
     "@deepseek-ai/schemastery": "3.18.2",
     "yaml": "2.9.1"
   },
