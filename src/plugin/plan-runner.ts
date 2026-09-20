@@ -36,12 +36,14 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const out = process.stdout
   if (!store.exists(config.courseId)) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
     return
   }
   if (!store.has(config.courseId, 'knowledge-map')) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 缺少知识地图，请先运行 npm run agent -- assess ${config.courseId}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
     return
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
@@ -55,7 +57,8 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     const plan = assemblePlan([], [])
     store.write(config.courseId, 'plan', plan)
     out.write('所有知识点均已掌握，无需生成教学路径。\n')
-    exit(0)
+    process.stdin.destroy()
+  exit(0)
     return
   }
 
@@ -97,6 +100,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   out.write(`当前指针：${plan.current ?? '（无）'}\n`)
   await chat.flush()
   printSessionTotal(chat, out)
+  process.stdin.destroy()
   exit(0)
 }
 
@@ -105,7 +109,8 @@ export function apply(ctx: Context, config: { courseId: string }): void {
   if (!exit) throw new Error('tutor-plan-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
   })
 }
 

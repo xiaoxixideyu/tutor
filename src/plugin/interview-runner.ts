@@ -36,7 +36,8 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
       process.stdout.write(`\n课程 "${config.courseId}" 已创建，档案位于 ${store.root}/${config.courseId}/profile.yaml\n`)
       await chat.flush()
       printSessionTotal(chat, process.stdout)
-      exit(0)
+      process.stdin.destroy()
+  exit(0)
       return
     }
 
@@ -49,7 +50,8 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
     if (turns > config.maxTurns) {
       process.stderr.write('tutor: 超过最大访谈轮数\n')
       await chat.flush()
-      exit(1)
+      process.stdin.destroy()
+  exit(1)
       return
     }
 
@@ -57,7 +59,8 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
     if (!answer || !answer.trim()) {
       process.stderr.write('tutor: 未收到学员回答，访谈结束\n')
       await chat.flush()
-      exit(1)
+      process.stdin.destroy()
+  exit(1)
       return
     }
     reply = await chat.ask(answer.trim())
@@ -69,7 +72,8 @@ export function apply(ctx: Context, config: { courseId: string; maxTurns: number
   if (!exit) throw new Error('tutor-interview-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
   })
 }
 

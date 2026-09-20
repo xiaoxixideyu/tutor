@@ -157,12 +157,14 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   const out = process.stdout
   if (!store.exists(config.courseId)) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
     return
   }
   if (!store.has(config.courseId, 'profile')) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 缺少课程档案\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
@@ -189,7 +191,8 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   if (pending.length === 0) {
     out.write('全部知识点均已联网验证。\n')
     await chat.flush()
-    exit(0)
+    process.stdin.destroy()
+  exit(0)
     return
   }
 
@@ -225,6 +228,7 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   out.write(`\n教研完成：${verifiedTotal}/${map.nodes.length} 个知识点已联网验证，来源 ${map.resources?.length ?? 0} 条。\n`)
   await chat.flush()
   printSessionTotal(chat, out)
+  process.stdin.destroy()
   exit(0)
 }
 
@@ -233,7 +237,8 @@ export function apply(ctx: Context, config: { courseId: string; batchSize: numbe
   if (!exit) throw new Error('tutor-research-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
   })
 }
 

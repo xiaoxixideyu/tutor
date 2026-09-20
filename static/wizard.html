@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 新课程向导</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --red: #dc2626; --green: #16a34a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  .state { font-size: 12px; color: var(--muted); }
+  button { font-family: inherit; }
+  .danger { color: var(--red); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
+  .danger:hover { background: var(--bg); }
+  .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; }
+  .busy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+  #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .tutor { white-space: pre-wrap; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; }
+  .userline { text-align: right; color: var(--muted); font-size: 13px; margin: 8px 0; }
+  .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
+  .cost { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .cost .c-g { color: var(--green); } .cost .c-y { color: #d97706; } .cost .c-r { color: var(--red); }
+  footer { border-top: 1px solid var(--border); background: var(--card); padding: 12px 20px; }
+  .inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; }
+  .inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+  .setup { max-width: 460px; margin: 10vh auto 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; }
+  .setup h2 { margin: 0 0 6px; font-size: 17px; }
+  .setup p { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .setup label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  .setup input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 14px; font-family: inherit; }
+  .setup .err { color: var(--red); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .setup button.primary { width: 100%; margin-top: 16px; background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 12px; cursor: pointer; font-size: 15px; }
+  .steps { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); padding: 10px 20px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .steps .step { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
+  .steps .step.active { background: #dbeafe; color: var(--accent); border-color: var(--accent); }
+  .steps .step.done { background: #dcfce7; color: var(--green); border-color: transparent; }
+  .steps .goto { margin-left: auto; background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">新课程向导</h1>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中… 0s</span></span>
+  <span class="state" id="state"></span>
+  <button class="danger" id="stopBtn">中止流程</button>
+</header>
+<div class="steps" id="steps" style="display:none">
+  <span class="step" data-step="new">1 访谈建档</span> →
+  <span class="step" data-step="assess">2 摸底测评</span> →
+  <span class="step" data-step="plan">3 教学计划</span> →
+  <span class="step" data-step="learn">4 上课</span>
+  <button class="goto" id="gotoBtn" style="display:none">进入课堂 →</button>
+</div>
+<main id="log"></main>
+<div class="setup" id="setup">
+  <h2>开设新课程</h2>
+  <p>导师会先做需求访谈（几个问题），随后引导摸底与计划，全部在这里完成。</p>
+  <label>课程标识（小写英文/数字/连字符，如 python、english-writing）</label>
+  <input id="courseId" placeholder="python" autocomplete="off">
+  <div class="err" id="err"></div>
+  <button class="primary" id="startBtn">开始访谈</button>
+</div>
+<footer id="footer" style="display:none">
+  <div class="inputrow">
+    <input id="input" placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
+    <button id="send">发送</button>
+  </div>
+</footer>
+<script>
+const $log = document.getElementById('log')
+const $input = document.getElementById('input')
+const $state = document.getElementById('state')
+const $setup = document.getElementById('setup')
+const $footer = document.getElementById('footer')
+const $steps = document.getElementById('steps')
+const $title = document.getElementById('title')
+let currentKind = null
+let courseName = null
+let busyTimer = null
+let busySeconds = 0
+
+function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
+function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
+
+function setBusy(on, label) {
+  const $busy = document.getElementById('busy')
+  if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  if (on) {
+    busySeconds = 0
+    document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… 0s`
+    $busy.style.display = 'inline-flex'
+    busyTimer = setInterval(() => {
+      busySeconds++
+      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+    }, 1000)
+  } else {
+    $busy.style.display = 'none'
+  }
+}
+
+const COST_RE = /^(本回合|会话累计)/
+let pending = ''
+let bubble = null
+
+function closeBubble() { bubble = null }
+
+function handleLine(line) {
+  const trimmed = line.trim()
+  if (trimmed === '>') { closeBubble(); setBusy(false); return }
+  if (COST_RE.test(line)) {
+    closeBubble()
+    let html = esc(line).replace(/¥([0-9.]+)/g, (m, n) => {
+      const v = Number(n)
+      const cls = v >= 0.2 ? 'c-r' : v >= 0.05 ? 'c-y' : 'c-g'
+      return `<span class="${cls}">¥${n}</span>`
+    })
+    const div = el(`<div class="cost">${html}</div>`)
+    $log.appendChild(div)
+    return
+  }
+  if (trimmed === '') return
+  if (!bubble) { bubble = el('<div class="tutor"></div>'); $log.appendChild(bubble) }
+  bubble.textContent += (bubble.textContent ? '\n' : '') + line
+  $log.scrollTop = $log.scrollHeight
+}
+
+function feed(text) {
+  pending += text
+  let idx
+  while ((idx = pending.indexOf('\n')) >= 0) {
+    const line = pending.slice(0, idx)
+    pending = pending.slice(idx + 1)
+    handleLine(line)
+  }
+  if (pending.trim() === '>') { handleLine('>'); pending = '' }
+}
+
+function markStep(kind, state) {
+  for (const el of $steps.querySelectorAll('.step')) {
+    if (el.dataset.step === kind) {
+      el.classList.toggle('active', state === 'active')
+      el.classList.toggle('done', state === 'done')
+    }
+  }
+}
+
+function resetSteps() {
+  for (const el of $steps.querySelectorAll('.step')) el.classList.remove('active', 'done')
+}
+
+const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂' }
+
+async function startSse() {
+  const es = new EventSource('/flow/stream')
+  es.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'hello') {
+      if (msg.kind && msg.kind !== currentKind) {
+        // 已有别的流程在跑
+        currentKind = msg.kind
+        courseName = msg.courseId
+        showConsole()
+      }
+      return
+    }
+    if (msg.type === 'out') feed(msg.text)
+    else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
+    else if (msg.type === 'exit') {
+      feed('')
+      closeBubble()
+      setBusy(false)
+      if (msg.kind === 'new' && msg.code === 0) {
+        markStep('new', 'done')
+        $log.appendChild(el('<div class="sysline">—— 访谈完成，开始摸底测评 ——</div>'))
+        startFlow('assess')
+      } else if (msg.kind === 'assess' && msg.code === 0) {
+        markStep('assess', 'done')
+        $log.appendChild(el('<div class="sysline">—— 摸底完成，生成教学计划 ——</div>'))
+        startFlow('plan')
+      } else if (msg.kind === 'plan' && msg.code === 0) {
+        markStep('plan', 'done')
+        $log.appendChild(el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
+        document.getElementById('gotoBtn').style.display = 'inline-block'
+      } else if (msg.kind === 'research' && msg.code === 0) {
+        markStep('plan', 'done')
+        $log.appendChild(el('<div class="sysline">—— 教研完成 ——</div>'))
+      } else {
+        $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
+      }
+      $log.scrollTop = $log.scrollHeight
+    }
+  }
+  es.onerror = () => { es.close(); setTimeout(startSse, 1500) }
+}
+
+async function api(path, body) {
+  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+  return response.json()
+}
+
+async function startFlow(kind) {
+  currentKind = kind
+  markStep(kind, 'active')
+  $title.textContent = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
+  $footer.style.display = 'block'
+  $setup.style.display = 'none'
+  setBusy(true, kind === 'assess' ? '生成知识地图与题库（2-4 分钟）' : kind === 'plan' ? '设计里程碑' : '模型思考中')
+  await api('/flow/start', { kind, courseId: courseName })
+}
+
+function showConsole() {
+  $setup.style.display = 'none'
+  $steps.style.display = 'flex'
+  $footer.style.display = 'block'
+  $title.textContent = `${STEP_TITLES[currentKind] ?? currentKind} · ${courseName}`
+}
+
+function send() {
+  const line = $input.value.trim()
+  if (!line) return
+  $input.value = ''
+  $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
+  closeBubble()
+  setBusy(true)
+  api('/flow/input', { line })
+}
+
+document.getElementById('send').addEventListener('click', send)
+$input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send() })
+document.getElementById('stopBtn').addEventListener('click', () => api('/flow/stop'))
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const id = document.getElementById('courseId').value.trim()
+  document.getElementById('err').textContent = ''
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id)) {
+    document.getElementById('err').textContent = '课程标识需为小写英文/数字/连字符'
+    return
+  }
+  const state = await (await fetch('/flow/state')).json()
+  if (state.active) {
+    document.getElementById('err').textContent = `已有进行中的流程（${state.active.kind} ${state.active.courseId}）`
+    return
+  }
+  courseName = id
+  $steps.style.display = 'flex'
+  resetSteps()
+  startFlow('new')
+})
+document.getElementById('gotoBtn').addEventListener('click', () => {
+  location.href = `/lesson.html?course=${encodeURIComponent(courseName)}`
+})
+
+// 页面加载：附加进行中的流程（刷新不丢）
+fetch('/flow/state').then((r) => r.json()).then((state) => {
+  if (state.active) {
+    currentKind = state.active.kind
+    courseName = state.active.courseId
+    showConsole()
+    markStep(currentKind, 'active')
+    setBusy(true)
+  }
+})
+startSse()
+</script>
+</body>
+</html>

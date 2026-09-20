@@ -109,7 +109,8 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const out = process.stdout
   if (!store.exists(config.courseId)) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
@@ -156,6 +157,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   out.write(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
   await chat.flush()
   printSessionTotal(chat, out)
+  process.stdin.destroy()
   exit(0)
 }
 
@@ -164,7 +166,8 @@ export function apply(ctx: Context, config: { courseId: string }): void {
   if (!exit) throw new Error('tutor-assess-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    exit(1)
+    process.stdin.destroy()
+  exit(1)
   })
 }
 

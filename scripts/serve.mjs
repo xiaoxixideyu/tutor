@@ -68,45 +68,46 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, handleRpcRequest(store, request, () => new Date().toISOString().slice(0, 10)))
       return
     }
-    if (req.method === 'GET' && req.url.split('?')[0] === '/lesson/stream') {
+    if (req.method === 'GET' && req.url.split('?')[0] === '/flow/stream') {
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
       })
-      res.write(`data: ${JSON.stringify({ type: 'hello', courseId: lesson?.courseId ?? null })}\n\n`)
-      lessonClients.add(res)
-      req.on('close', () => lessonClients.delete(res))
+      res.write(`data: ${JSON.stringify({ type: 'hello', kind: flow?.kind ?? null, courseId: flow?.courseId ?? null })}\n\n`)
+      flowClients.add(res)
+      req.on('close', () => flowClients.delete(res))
       return
     }
-    if (req.method === 'GET' && req.url.split('?')[0] === '/lesson/state') {
-      const active = lesson && lesson.child.exitCode === null ? lesson.courseId : null
+    if (req.method === 'GET' && req.url.split('?')[0] === '/flow/state') {
+      const active = flow && flow.child.exitCode === null ? { kind: flow.kind, courseId: flow.courseId } : null
       sendJson(res, 200, { active })
       return
     }
-    if (req.method === 'POST' && req.url.split('?')[0] === '/lesson/start') {
+    if (req.method === 'POST' && req.url.split('?')[0] === '/flow/start') {
       const body = JSON.parse(await readBody(req))
-      const result = lessonStart(String(body.courseId ?? ''))
+      const result = flowStart(String(body.kind ?? ''), String(body.courseId ?? ''))
       sendJson(res, result.ok ? 200 : 409, result)
       return
     }
-    if (req.method === 'POST' && req.url.split('?')[0] === '/lesson/input') {
+    if (req.method === 'POST' && req.url.split('?')[0] === '/flow/input') {
       const body = JSON.parse(await readBody(req))
-      if (!lesson || lesson.child.exitCode !== null) {
-        sendJson(res, 409, { ok: false, error: '没有进行中的课堂，先开始一节课' })
+      if (!flow || flow.child.exitCode !== null) {
+        sendJson(res, 409, { ok: false, error: '没有进行中的流程' })
         return
       }
-      lesson.child.stdin.write(`${String(body.line ?? '')}\n`)
+      flow.child.stdin.write(`${String(body.line ?? '')}\n`)
       sendJson(res, 200, { ok: true })
       return
     }
-    if (req.method === 'POST' && req.url.split('?')[0] === '/lesson/stop') {
-      if (!lesson || lesson.child.exitCode !== null) {
-        sendJson(res, 409, { ok: false, error: '没有进行中的课堂' })
+    if (req.method === 'POST' && req.url.split('?')[0] === '/flow/stop') {
+      if (!flow || flow.child.exitCode !== null) {
+        sendJson(res, 409, { ok: false, error: '没有进行中的流程' })
         return
       }
-      const child = lesson.child
-      child.stdin.write('/exit\n')
+      const child = flow.child
+      const graceful = flow.kind === 'learn' ? '/exit' : ''
+      if (graceful) child.stdin.write(`${graceful}\n`)
       const guard = setTimeout(() => {
         if (child.exitCode === null) child.kill('SIGKILL')
       }, 8000)
@@ -130,32 +131,38 @@ const server = http.createServer(async (req, res) => {
 
 // ---- 课堂桥：SSE 推子进程 stdout，POST 传 stdin（壳只做传输，业务在 learn-runner）----
 const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
-let lesson = null
-const lessonClients = new Set()
+// 交互式流程桥：new/assess/plan/research/learn 皆是 runner+stdin/stdout 形态，桥按流程名拉起对应子进程
+const FLOW_RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn'])
+let flow = null
+const flowClients = new Set()
 
-function lessonBroadcast(event) {
+function flowBroadcast(event) {
   const payload = `data: ${JSON.stringify(event)}\n\n`
-  for (const client of lessonClients) client.write(payload)
+  for (const client of flowClients) client.write(payload)
 }
 
-function lessonStart(courseId) {
-  if (lesson && lesson.child.exitCode === null && lesson.child.pid) {
-    if (lesson.courseId === courseId) return { ok: true, resumed: true, courseId }
-    return { ok: false, error: `已有进行中的课堂（${lesson.courseId}），先结束它再开始新课` }
+function flowStart(kind, courseId) {
+  if (flow && flow.child.exitCode === null && flow.child.pid) {
+    if (flow.kind === kind && flow.courseId === courseId) return { ok: true, resumed: true, kind, courseId }
+    return { ok: false, error: `已有进行中的流程（${flow.kind} ${flow.courseId}），先结束它再开始新的` }
   }
+  if (!FLOW_RUNNERS.has(kind)) return { ok: false, error: `未知流程 "${kind}"` }
   if (!COURSE_ID_PATTERN.test(courseId)) return { ok: false, error: `课程名 "${courseId}" 非法` }
-  const child = spawn(process.execPath, [path.join(root, 'scripts', 'agent.mjs'), 'learn', courseId], {
+  if (kind !== 'new' && !fs.existsSync(path.join(root, 'courses', courseId, 'profile.yaml'))) {
+    return { ok: false, error: `课程 "${courseId}" 不存在——先用 new 访谈建档` }
+  }
+  const child = spawn(process.execPath, [path.join(root, 'scripts', 'agent.mjs'), kind, courseId], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  lesson = { courseId, child }
-  child.stdout.on('data', (chunk) => lessonBroadcast({ type: 'out', text: chunk.toString('utf8') }))
-  child.stderr.on('data', (chunk) => lessonBroadcast({ type: 'err', text: chunk.toString('utf8') }))
+  flow = { kind, courseId, child }
+  child.stdout.on('data', (chunk) => flowBroadcast({ type: 'out', kind, text: chunk.toString('utf8') }))
+  child.stderr.on('data', (chunk) => flowBroadcast({ type: 'err', kind, text: chunk.toString('utf8') }))
   child.on('exit', (code) => {
-    lessonBroadcast({ type: 'exit', code: code ?? -1 })
-    lesson = null
+    flowBroadcast({ type: 'exit', kind, code: code ?? -1 })
+    flow = null
   })
-  return { ok: true, started: true, courseId }
+  return { ok: true, started: true, kind, courseId }
 }
 
 server.listen(port, '127.0.0.1', () => {
@@ -163,5 +170,5 @@ server.listen(port, '127.0.0.1', () => {
 })
 
 process.on('exit', () => {
-  lesson?.child.kill()
+  flow?.child.kill()
 })
