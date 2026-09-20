@@ -37,6 +37,7 @@ npm run agent -- review golang  # 复习到期知识点（SM-2 简化阶梯 1/3/
 npm run agent -- review --all   # 跨课程到期汇总复习（多课程）
 npm run agent -- practice-gen golang # 生成实践任务（每知识点 1 个动手任务 + 规则化测试，需模型）
 npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 写代码 → 回车跑测试（零模型规则判分；通过则掌握度保底 0.8）
+npm run agent -- exam golang [m1]    # 里程碑大考（自动选下一个可考里程碑）：客观题规则判分+主观题模型判分，通过=里程碑达成，不过=指针回退补救
 npm run agent -- research golang # 联网教研（二期）：MCP 搜索+交叉验证 → 带来源知识地图（分批、可中断续研）
 npm run agent -- audit [会话id]  # 课堂忠实度抽查（零模型）：计划覆盖率/引用纪律/超纲/成本 → audits/<会话>.json
 npm run serve                   # 前端壳：http://127.0.0.1:8788——看板 + 「开设新课程」向导（访谈→摸底→计划全自动）+ 浏览器课堂，全流程网页交互（仅本机无鉴权，勿暴露公网；端口被占可设 TUTOR_SERVER_PORT）

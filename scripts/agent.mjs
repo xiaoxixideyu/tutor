@@ -14,6 +14,7 @@
 //   npm run agent -- plan <课程名>       生成/更新教学计划（设计 §6.4 tutor plan）
 //   npm run agent -- learn <课程名>      开始/继续本节课：备课→讲授（设计 §6.4 tutor learn）
 //   npm run agent -- research <课程名>   联网教研：构建带来源的知识地图（二期）
+//   npm run agent -- exam <课程名> [里程碑id] 里程碑大考（自动选下一个可考里程碑）
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -119,13 +120,13 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0
 
 let runnerArgs = []
 let runnerMode = null
-if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research' || argv[0] === 'practice-gen') {
+if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research' || argv[0] === 'practice-gen' || argv[0] === 'exam') {
   runnerMode = argv[0]
   const courseId = argv[1] ?? ''
   if (!COURSE_ID_PATTERN.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
-  const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md', 'practice-gen': 'practice-gen.md' }
+  const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md', 'practice-gen': 'practice-gen.md', exam: 'exam-grade.md' }
   const runnerByMode = {
     new: 'tutor-interview-runner',
     assess: 'tutor-assess-runner',
@@ -133,6 +134,7 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
     learn: 'tutor-learn-runner',
     research: 'tutor-research-runner',
     'practice-gen': 'tutor-practice-gen-runner',
+    exam: 'tutor-exam-runner',
   }
   const moduleByMode = {
     new: 'interview-runner.ts',
@@ -141,6 +143,7 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
     learn: 'learn-runner.ts',
     research: 'research-runner.ts',
     'practice-gen': 'practice-gen-runner.ts',
+    exam: 'exam-runner.ts',
   }
   const personaFile = personaByMode[runnerMode]
   const runnerId = runnerByMode[runnerMode]
@@ -164,7 +167,7 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
           id: runnerId,
           name: path.join(root, 'src', 'plugin', runnerModule),
           inject: ['agentDefaultModel', 'agents', 'sessions', 'courseState'],
-          config: { courseId },
+          config: runnerMode === 'exam' ? { courseId, milestoneId: argv[2] ?? '' } : { courseId },
         },
       ],
     },

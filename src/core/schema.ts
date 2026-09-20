@@ -39,7 +39,7 @@ export interface LearnerProfile {
 
 export interface Plan {
   path: string[]
-  milestones: { id: string; title: string; nodes: string[] }[]
+  milestones: { id: string; title: string; nodes: string[]; exam_date?: string; exam_score?: number; exam_passed?: boolean }[]
   current?: string
 }
 
@@ -89,7 +89,16 @@ export const LearnerProfileSchema = z.object({
 export const PlanSchema = z.object({
   path: z.array(z.string()).required(),
   milestones: z
-    .array(z.object({ id: nodeId.required(), title: z.string().required(), nodes: z.array(z.string()).default([]) }))
+    .array(
+      z.object({
+        id: nodeId.required(),
+        title: z.string().required(),
+        nodes: z.array(z.string()).default([]),
+        exam_date: dateStr,
+        exam_score: z.number().min(0).max(1),
+        exam_passed: z.boolean(),
+      })
+    )
     .default([]),
   current: z.string(),
 }) as unknown as Schema<any, Plan>
