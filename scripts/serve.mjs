@@ -75,6 +75,7 @@ const server = http.createServer(async (req, res) => {
         connection: 'keep-alive',
       })
       res.write(`data: ${JSON.stringify({ type: 'hello', kind: flow?.kind ?? null, courseId: flow?.courseId ?? null })}\n\n`)
+      for (const event of flow?.buffer ?? []) res.write(`data: ${JSON.stringify(event)}\n\n`)
       flowClients.add(res)
       req.on('close', () => flowClients.delete(res))
       return
@@ -135,8 +136,13 @@ const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 const FLOW_RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn'])
 let flow = null
 const flowClients = new Set()
+const FLOW_BUFFER_CAP = 400
 
 function flowBroadcast(event) {
+  if (flow) {
+    flow.buffer.push(event)
+    if (flow.buffer.length > FLOW_BUFFER_CAP) flow.buffer.splice(0, flow.buffer.length - FLOW_BUFFER_CAP)
+  }
   const payload = `data: ${JSON.stringify(event)}\n\n`
   for (const client of flowClients) client.write(payload)
 }
@@ -155,7 +161,7 @@ function flowStart(kind, courseId) {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  flow = { kind, courseId, child }
+  flow = { kind, courseId, child, buffer: [] }
   child.stdout.on('data', (chunk) => flowBroadcast({ type: 'out', kind, text: chunk.toString('utf8') }))
   child.stderr.on('data', (chunk) => flowBroadcast({ type: 'err', kind, text: chunk.toString('utf8') }))
   child.on('exit', (code) => {

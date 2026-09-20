@@ -301,6 +301,13 @@ async function startSse() {
   const es = new EventSource('/flow/stream')
   es.onmessage = (event) => {
     const msg = JSON.parse(event.data)
+    if (msg.type === 'hello' && msg.replay === undefined) {
+      // hello 后紧接重放历史：清空当前视图避免重复
+      $log.innerHTML = ''
+      pending = ''
+      bubble = null
+      bubbleText = ''
+    }
     if (msg.type === 'hello') {
       if (msg.kind && msg.kind !== currentKind) {
         // 已有别的流程在跑
