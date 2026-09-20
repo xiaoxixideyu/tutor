@@ -39,7 +39,7 @@ npm run agent -- practice-gen golang # 生成实践任务（每知识点 1 个�
 npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 写代码 → 回车跑测试（零模型规则判分；通过则掌握度保底 0.8）
 npm run agent -- research golang # 联网教研（二期）：MCP 搜索+交叉验证 → 带来源知识地图（分批、可中断续研）
 npm run agent -- audit [会话id]  # 课堂忠实度抽查（零模型）：计划覆盖率/引用纪律/超纲/成本 → audits/<会话>.json
-npm run serve                   # 本地进度看板（三期）：http://127.0.0.1:8787，仅本机无鉴权，勿暴露公网
+npm run serve                   # 前端壳：http://127.0.0.1:8787——课程看板 + 浏览器课堂（点「上课」在网页里学，仅本机无鉴权，勿暴露公网）
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 
