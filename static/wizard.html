@@ -30,6 +30,12 @@
   .tutor p { margin: 6px 0; }
   .tutor strong { font-weight: 600; }
   .userline { text-align: right; color: var(--muted); font-size: 13px; margin: 8px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+  .chip { background: var(--card); border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; user-select: none; }
+  .chip:hover { background: #eef2ff; }
+  .chip.selected { background: var(--accent); color: #fff; }
+  .chip.disabled { opacity: .55; cursor: default; }
+  .chips .hint { font-size: 12px; color: var(--muted); align-self: center; }
   .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
   .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
   .cost { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
@@ -89,6 +95,10 @@ const $setup = document.getElementById('setup')
 const $footer = document.getElementById('footer')
 const $steps = document.getElementById('steps')
 const $title = document.getElementById('title')
+let chips = null
+let chipMulti = false
+let chipSelection = []
+let chipsAnswered = false
 let currentKind = null
 let courseName = null
 let busyTimer = null
@@ -162,17 +172,15 @@ function renderBubble() {
   bubble.innerHTML = mdToHtml(bubbleText)
 }
 
-function closeBubble() {
-  if (bubble) renderBubble()
-  bubble = null
-  bubbleText = ''
-}
-
-
 
 function handleLine(line) {
   const trimmed = line.trim()
-  if (trimmed === '>') { closeBubble(); setBusy(false); return }
+  if (trimmed === '>') {
+    const closed = closeBubble()
+    if (closed) maybeChips(closed)
+    setBusy(false)
+    return
+  }
   if (COST_RE.test(line)) {
     closeBubble()
     let html = esc(line).replace(/¥([0-9.]+)/g, (m, n) => {
@@ -200,6 +208,76 @@ function feed(text) {
     handleLine(line)
   }
   if (pending.trim() === '>') { handleLine('>'); pending = '' }
+}
+
+function optionLinesOf(text) {
+  const out = []
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*([A-Fa-f])[.、．]\s*(\S.*)$/)
+    if (m) out.push({ letter: m[1].toUpperCase(), label: m[2].trim() })
+  }
+  return out
+}
+
+function maybeChips(text) {
+  const options = optionLinesOf(text)
+  if (options.length < 2 || options.length > 6) return
+  // 单个问题（一组连续字母）
+  const letters = options.map((o) => o.letter)
+  const expects = ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, letters.length)
+  if (letters.join('') !== expects.join('')) return
+  // 旧 chips 未答复则作废
+  const multi = /可多选|可多選|多选题|（多选）|\(多选\)/.test(text)
+  const container = el('<div class="chips"></div>')
+  chipMulti = multi
+  chipSelection = []
+  chipsAnswered = false
+  if (multi) container.appendChild(el('<span class="hint">可多选，选完点「提交选择」</span>'))
+  for (const opt of options) {
+    const chip = el(`<button class="chip">${esc(opt.letter)}. ${esc(opt.label)}</button>`)
+    chip.addEventListener('click', () => {
+      if (chipsAnswered) return
+      if (multi) {
+        const idx = chipSelection.indexOf(opt.letter)
+        if (idx >= 0) chipSelection.splice(idx, 1)
+        else chipSelection.push(opt.letter)
+        chip.classList.toggle('selected')
+      } else {
+        chipsAnswered = true
+        for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
+        chip.classList.add('selected')
+        submitChips([opt.letter])
+      }
+    })
+    container.appendChild(chip)
+  }
+  if (multi) {
+    const submit = el('<button class="chip">提交选择</button>')
+    submit.addEventListener('click', () => {
+      if (chipsAnswered || chipSelection.length === 0) return
+      chipsAnswered = true
+      for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
+      submitChips(chipSelection)
+    })
+    container.appendChild(submit)
+  }
+  $log.appendChild(container)
+  $log.scrollTop = $log.scrollHeight
+}
+
+function submitChips(letters) {
+  const line = letters.join('')
+  $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
+  closeBubble()
+  setBusy(true)
+  api('/flow/input', { line })
+}
+
+function closeBubble() {
+  if (bubble) renderBubble()
+  bubble = null
+  bubbleText = ''
+  return bubbleText
 }
 
 function markStep(kind, state) {
