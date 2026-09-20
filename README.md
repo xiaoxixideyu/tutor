@@ -10,7 +10,7 @@
 
 ## 状态
 
-设计定稿。第一期（单课程教学闭环）与第二期（教研系统）已完成并通过 golang 真实课程端到端回归。第三期进行中：多课程并行体验（review --all、到期徽章、题库缺失顺延）、强化复习（SM-2 简化版：答错回退一级不清队列）、前端壳一期（本地 JSON-RPC 服务 + 静态看板）已落地；实践任务沙箱与 Harness 档案挂载（待其提供可插领域方法面）未开始。
+设计定稿。第一期（单课程教学闭环）与第二期（教研系统）已完成并通过 golang 真实课程端到端回归。第三期进行中：多课程并行体验、强化复习（SM-2 简化版）、前端壳一期（本地 JSON-RPC 服务 + 静态看板）、实践任务沙箱已落地；Harness 档案挂载待基座演进。四期评测起步：课堂忠实度抽查（audit：计划覆盖率/引用纪律/超纲/成本）已落地，随真实使用积累基线。
 
 核心能力位于 `src/core/`（不依赖 Harness 与命令行，`npm test` 独立测试；JSON-RPC 方法表也在核心，壳只做传输）；`src/plugin/` 以 dsh 插件形态挂载（`config/` 模板 + `scripts/agent.mjs` 渲染）。
 
@@ -38,6 +38,7 @@ npm run agent -- review --all   # 跨课程到期汇总复习（多课程）
 npm run agent -- practice-gen golang # 生成实践任务（每知识点 1 个动手任务 + 规则化测试，需模型）
 npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 写代码 → 回车跑测试（零模型规则判分；通过则掌握度保底 0.8）
 npm run agent -- research golang # 联网教研（二期）：MCP 搜索+交叉验证 → 带来源知识地图（分批、可中断续研）
+npm run agent -- audit [会话id]  # 课堂忠实度抽查（零模型）：计划覆盖率/引用纪律/超纲/成本 → audits/<会话>.json
 npm run serve                   # 本地进度看板（三期）：http://127.0.0.1:8787，仅本机无鉴权，勿暴露公网
 npm run agent -- "..."          # 一次性 agent 任务
 ```

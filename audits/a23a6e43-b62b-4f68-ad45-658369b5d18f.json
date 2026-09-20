@@ -1,0 +1,41 @@
+{
+  "sessionId": "a23a6e43-b62b-4f68-ad45-658369b5d18f",
+  "node": "go-fundamentals",
+  "title": "环境搭建与语言基础：从 Hello, World 到第一个模块（对照 Java）",
+  "structure": [
+    {
+      "point": "官方入门路线四步：安装 Go → 写 hello, world → 用 go 命令运行 → 引入外部模块 [资料:1]",
+      "coverage": 0.9
+    },
+    {
+      "point": "go mod init <模块路径> 生成 go.mod：记录模块路径、Go 语言版本与依赖，随代码保存在仓库中；模块是 Go 的版本化与依赖管理单元，可对照 Maven 的 pom.xml（groupId:artifactId 对应模块路径）[资料:1][资料:2]",
+      "coverage": 0.6
+    },
+    {
+      "point": "双模块协作实战：greetings 模块返回问候消息，hello 模块通过模块路径 import 调用，本地用 replace + tidy 打通依赖；若要发布，模块路径必须是 Go 工具可下载的仓库路径 [资料:2]",
+      "coverage": 0.24
+    },
+    {
+      "point": "控制结构对照 Java：if/for/switch 不带括号；左花括号不能另起一行（Go 词法器按行自动插入分号）；没有 do/while，统一用 for 的三种形态；range 遍历切片/字符串/map/channel，用 _ 丢弃不需要的返回值",
+      "coverage": 0.25
+    },
+    {
+      "point": "函数与规范：函数可返回多个值，惯例把 error 作为最后一个返回值（如 os.File.Write 返回 (n int, err error)）；命名用 MixedCaps 不用下划线，gofmt/go fmt 统一格式；Effective Go 提醒：把 Java 直译成 Go 不会令人满意，要用 Go 的方式思考",
+      "coverage": 0.17
+    }
+  ],
+  "coverageRate": 0.4,
+  "citations": {
+    "totalCitations": 4,
+    "invalidCitations": [],
+    "uncitedAssertions": 1,
+    "assertionSentences": 2
+  },
+  "drift": [],
+  "cost": {
+    "inputTokens": 78634,
+    "outputTokens": 3531,
+    "turns": 5
+  },
+  "generatedAt": "2026-09-20 02:17:33"
+}
