@@ -20,6 +20,9 @@
   #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
   .bubble { margin-bottom: 14px; }
   .tutor { white-space: pre-wrap; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+  .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; }
+  .busy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
   .cost { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .cost .g { color: var(--green); } .cost .y { color: var(--yellow); } .cost .r { color: var(--red); }
   .cost .g-g { color: var(--green); } .cost .r-y { color: var(--yellow); } .cost .r-r { color: var(--red); }
@@ -40,6 +43,7 @@
 <header>
   <h1>课堂</h1>
   <span class="state" id="state">未连接</span>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
   <button id="stopBtn" class="danger">暂停本课</button>
 </header>
 <div class="banner" id="banner"></div>
@@ -91,19 +95,64 @@ function colorizeCost(text) {
 const COST_RE = /^(本回合|会话累计)/
 const PROMPT_RE = /^>$/
 
-function handleChunk(text) {
-  // 按行处理：成本行着色；"> " 提示符合并
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine
-    if (COST_RE.test(line)) {
-      $log.appendChild(colorizeCost(line))
-      continue
-    }
-    if (line.trim() === '') continue
-    const div = el(`<div class="tutor">${esc(line)}</div>`)
-    $log.appendChild(div)
+let pending = ''
+let bubble = null
+let busyTimer = null
+let busySeconds = 0
+
+function setBusy(on, label) {
+  const $busy = document.getElementById('busy')
+  if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  if (on) {
+    busySeconds = 0
+    document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
+    $busy.style.display = 'inline-flex'
+    busyTimer = setInterval(() => {
+      busySeconds++
+      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+    }, 1000)
+  } else {
+    $busy.style.display = 'none'
   }
+}
+
+function closeBubble() {
+  bubble = null
+}
+
+function handleLine(line) {
+  const trimmed = line.trim()
+  if (trimmed === '>') {
+    closeBubble()
+    setBusy(false)
+    return
+  }
+  if (COST_RE.test(line)) {
+    closeBubble()
+    $log.appendChild(colorizeCost(line))
+    return
+  }
+  if (trimmed === '') return
+  if (!bubble) {
+    bubble = el('<div class="tutor"></div>')
+    $log.appendChild(bubble)
+  }
+  bubble.textContent += (bubble.textContent ? '\n' : '') + line
   $log.scrollTop = $log.scrollHeight
+}
+
+function feed(text) {
+  pending += text
+  let idx
+  while ((idx = pending.indexOf('\n')) >= 0) {
+    const line = pending.slice(0, idx)
+    pending = pending.slice(idx + 1)
+    handleLine(line)
+  }
+  if (pending.trim() === '>') {
+    handleLine('>')
+    pending = ''
+  }
 }
 
 function setUserEcho(line) {
@@ -122,9 +171,12 @@ async function startSse() {
       if (!msg.courseId) $banner.style.display = 'block'
       return
     }
-    if (msg.type === 'out') handleChunk(msg.text)
+    if (msg.type === 'out') feed(msg.text)
     else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
     else if (msg.type === 'exit') {
+      feed('')
+      closeBubble()
+      setBusy(false)
       $state.textContent = '已结束'
       $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
     }
@@ -158,6 +210,8 @@ function send() {
   if (!line) return
   $input.value = ''
   setUserEcho(line)
+  closeBubble()
+  setBusy(true)
   api('/lesson/input', { line })
 }
 
@@ -187,6 +241,7 @@ ensureLesson().then(async (course) => {
     if (result.ok) {
       $state.textContent = `课堂进行中：${wanted}`
       $banner.style.display = 'none'
+      setBusy(true, '备课中（搜索与生成，可能需要 1-3 分钟）')
       return
     }
     $banner.textContent = result.error
