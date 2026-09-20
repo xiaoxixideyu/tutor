@@ -11,7 +11,7 @@
     "agent": "node scripts/agent.mjs",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "serve": "node scripts/serve.mjs"
+    "serve": "node scripts/agent.mjs serve"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.5-rc.1",

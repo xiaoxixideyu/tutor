@@ -5,6 +5,7 @@
 //   npm run agent -- status <课程名>     进度看板（设计 §6.4 tutor status，零模型）
 //   npm run agent -- review <课程名>     复习到期知识点（设计 §6.4 tutor review，零模型）
 //   npm run agent -- audit [会话id]      课堂忠实度抽查（零模型，四期评测）
+//   npm run agent -- serve               前端壳（默认 8788，TUTOR_SERVER_PORT 可改）
 //   npm run agent -- practice <课程名>   实践任务：写代码跑规则化测试（三期，零模型）
 //   npm run agent -- practice-gen <课程名>  生成实践任务（三期，需模型）
 //   npm run agent -- "任务文本"          一次性任务
@@ -105,8 +106,8 @@ const patchArgs = patchPath ? ['--patch', patchPath] : []
 const argv = process.argv.slice(2)
 
 // list/status/review/practice/audit：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
-if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0] === 'practice' || argv[0] === 'audit') {
-  const scriptByMode = { review: 'review.mjs', practice: 'practice.mjs', audit: 'audit.mjs' }
+if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0] === 'practice' || argv[0] === 'audit' || argv[0] === 'serve') {
+  const scriptByMode = { review: 'review.mjs', practice: 'practice.mjs', audit: 'audit.mjs', serve: 'serve.mjs' }
   const script = path.join(root, 'scripts', scriptByMode[argv[0]] ?? 'view.mjs')
   const viewResult = spawnSync(resolveRuntimeNode(), [script, ...argv], {
     env: { ...env, TUTOR_COURSES_ROOT: env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses') },

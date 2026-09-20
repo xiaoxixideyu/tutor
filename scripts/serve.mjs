@@ -12,7 +12,7 @@ import { handleRpcRequest, RPC_ERRORS } from '../src/core/rpc.ts'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const staticDir = path.join(root, 'static')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
-const port = Number(process.env.TUTOR_SERVER_PORT ?? 8787)
+const port = Number(process.env.TUTOR_SERVER_PORT ?? 8788)
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
