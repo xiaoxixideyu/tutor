@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 课堂</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --green: #16a34a; --yellow: #d97706; --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  header .state { font-size: 12px; color: var(--muted); }
+  header button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
+  header button.danger { color: var(--red); }
+  header button:hover { background: var(--bg); }
+  #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .bubble { margin-bottom: 14px; }
+  .tutor { white-space: pre-wrap; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+  .cost { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .cost .g { color: var(--green); } .cost .y { color: var(--yellow); } .cost .r { color: var(--red); }
+  .cost .g-g { color: var(--green); } .cost .r-y { color: var(--yellow); } .cost .r-r { color: var(--red); }
+  .userline { text-align: right; color: var(--muted); font-size: 13px; margin: 8px 0; }
+  .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
+  .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  footer { border-top: 1px solid var(--border); background: var(--card); padding: 12px 20px; }
+  .inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  .inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+  .quick { max-width: 860px; margin: 8px auto 0; display: flex; gap: 8px; }
+  .quick button { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 5px 14px; font-size: 12px; cursor: pointer; color: var(--fg); }
+  .quick button:hover { background: #eef2ff; }
+  .banner { background: #fef3c7; color: #92400e; padding: 8px 20px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>课堂</h1>
+  <span class="state" id="state">未连接</span>
+  <button id="stopBtn" class="danger">暂停本课</button>
+</header>
+<div class="banner" id="banner"></div>
+<main id="log"></main>
+<footer>
+  <div class="quick">
+    <button data-cmd="看不懂，换个讲法">换个讲法</button>
+    <button data-cmd="给个提示">提示</button>
+    <button data-cmd="/quiz">单元小测 /quiz</button>
+    <button data-cmd="/check">事实核对 /check</button>
+  </div>
+  <div class="inputrow" style="margin-top:8px">
+    <input id="input" placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
+    <button id="send">发送</button>
+  </div>
+</footer>
+<script>
+const $log = document.getElementById('log')
+const $input = document.getElementById('input')
+const $state = document.getElementById('state')
+const $banner = document.getElementById('banner')
+let activeCourse = null
+
+function el(html) {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return div.firstChild
+}
+
+function esc(text) {
+  const div = document.createElement('div')
+  div.textContent = String(text ?? '')
+  return div.innerHTML
+}
+
+function colorizeCost(text) {
+  const div = document.createElement('div')
+  div.className = 'cost'
+  let html = esc(text)
+  html = html.replace(/¥([0-9.]+)/g, (m, n) => {
+    const v = Number(n)
+    const cls = v >= 0.2 ? 'r-r' : v >= 0.05 ? 'r-y' : 'g-g'
+    return `<span class="${cls}">¥${n}</span>`
+  })
+  div.innerHTML = html
+  return div
+}
+
+const COST_RE = /^(本回合|会话累计)/
+const PROMPT_RE = /^>$/
+
+function handleChunk(text) {
+  // 按行处理：成本行着色；"> " 提示符合并
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine
+    if (COST_RE.test(line)) {
+      $log.appendChild(colorizeCost(line))
+      continue
+    }
+    if (line.trim() === '') continue
+    const div = el(`<div class="tutor">${esc(line)}</div>`)
+    $log.appendChild(div)
+  }
+  $log.scrollTop = $log.scrollHeight
+}
+
+function setUserEcho(line) {
+  const div = el(`<div class="userline">你：${esc(line)}</div>`)
+  $log.appendChild(div)
+  $log.scrollTop = $log.scrollHeight
+}
+
+async function startSse() {
+  const es = new EventSource('/lesson/stream')
+  es.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'hello') {
+      activeCourse = msg.courseId
+      $state.textContent = msg.courseId ? `课堂进行中：${msg.courseId}` : '空闲'
+      if (!msg.courseId) $banner.style.display = 'block'
+      return
+    }
+    if (msg.type === 'out') handleChunk(msg.text)
+    else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
+    else if (msg.type === 'exit') {
+      $state.textContent = '已结束'
+      $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
+    }
+    $log.scrollTop = $log.scrollHeight
+  }
+  es.onerror = () => {
+    $state.textContent = '连接中断，重连中…'
+    es.close()
+    setTimeout(startSse, 1500)
+  }
+}
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  return response.json()
+}
+
+async function ensureLesson() {
+  const state = await (await fetch('/lesson/state')).json()
+  if (state.active) return state.active
+  // 无进行中的课堂：让用户从课程列表选课（本页简化为提示去首页）
+  return null
+}
+
+function send() {
+  const line = $input.value.trim()
+  if (!line) return
+  $input.value = ''
+  setUserEcho(line)
+  api('/lesson/input', { line })
+}
+
+document.getElementById('send').addEventListener('click', send)
+$input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') send()
+})
+for (const button of document.querySelectorAll('.quick button')) {
+  button.addEventListener('click', () => {
+    setUserEcho(button.dataset.cmd)
+    api('/lesson/input', { line: button.dataset.cmd })
+  })
+}
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  await api('/lesson/stop')
+})
+
+// 页面加载：若空闲则显示选课入口
+ensureLesson().then(async (course) => {
+  if (course) {
+    $state.textContent = `课堂进行中：${course}`
+    return
+  }
+  const wanted = new URLSearchParams(location.search).get('course')
+  if (wanted) {
+    const result = await api('/lesson/start', { courseId: wanted })
+    if (result.ok) {
+      $state.textContent = `课堂进行中：${wanted}`
+      $banner.style.display = 'none'
+      return
+    }
+    $banner.textContent = result.error
+    $banner.style.display = 'block'
+    return
+  }
+  $banner.textContent = '当前没有进行中的课堂——去课程列表点「上课」开始。'
+  $banner.style.display = 'block'
+})
+startSse()
+</script>
+</body>
+</html>

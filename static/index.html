@@ -21,6 +21,8 @@
   .course:last-child { border-bottom: none; }
   .course:hover { background: #fafbfc; margin: 0 -8px; padding: 12px 8px; border-radius: 6px; }
   .course .row1 { display: flex; align-items: baseline; gap: 10px; }
+  .enter { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+  .enter:hover { opacity: .9; }
   .course .id { font-weight: 600; color: var(--accent); }
   .course .goal { color: var(--fg); font-size: 14px; flex: 1; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; }
@@ -83,7 +85,7 @@ async function renderList() {
           ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
           : ''
         return `<div class="course" data-id="${esc(c.id)}">
-          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}</div>
+          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}<button class="enter" data-course="${esc(c.id)}">上课 →</button></div>
           <div class="bar"><span style="width:${pct}%"></span></div>
           <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
           ${reviewLine}
@@ -92,6 +94,12 @@ async function renderList() {
   $panel.innerHTML = `<h2>课程列表</h2>${rows}`
   for (const el of $panel.querySelectorAll('.course')) {
     el.addEventListener('click', () => renderStatus(el.dataset.id))
+  }
+  for (const btn of $panel.querySelectorAll('.enter')) {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation()
+      location.href = `/lesson.html?course=${encodeURIComponent(btn.dataset.course)}`
+    })
   }
 }
 

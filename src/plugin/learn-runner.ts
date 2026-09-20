@@ -37,7 +37,8 @@ async function startFreshLesson(
   profile: Profile,
   mastery: Mastery | undefined,
   node: string,
-  resources: LessonResourceView[]
+  resources: LessonResourceView[],
+  readAnswer: () => Promise<string | null>
 ): Promise<{ chat: AgentChat; draft: LessonDraft }> {
   const out = process.stdout
   const prepChat = await createAgentChat(ctx)
@@ -53,6 +54,7 @@ async function startFreshLesson(
 
   const teachChat = await createAgentChat(ctx)
   if (!teachChat) throw new Error('tutor: 课堂会话创建失败')
+  void readAnswer
   store.write(config.courseId, 'lesson', {
     session_id: teachChat.sessionId,
     node,
@@ -83,6 +85,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
+  const readAnswer = createLineReader(process.stdin)
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const due = mastery ? dueReviews(mastery, today()) : []
   if (due.length > 0) {
@@ -117,20 +120,23 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   }
   const resources = resourcesForNode(map.resources, node)
   if (!resumed || chat === null || draft === null) {
-    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node, resources)
+    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node, resources, readAnswer)
     chat = fresh.chat
     draft = fresh.draft
   }
   if (chat === null || draft === null) throw new Error('tutor: 课堂会话初始化失败')
   const replies: string[] = [chat.lastReply()].filter((r) => r !== '')
 
-  const readAnswer = createLineReader(process.stdin)
   const costConfig = loadCostConfigFromRepo()
   const colorEnabled = out.isTTY === true
+  const disconnectStdin = () => {
+    process.stdin.destroy()
+  }
   const pause = async () => {
     await chat.flush()
     printSessionTotal(chat, out)
     out.write('\n本课暂停（进度已保存）。重新运行 learn 将从断点继续。\n')
+    disconnectStdin()
     exit(0)
   }
   while (true) {
@@ -200,6 +206,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       out.write(pointer ? `计划指针：${node} → ${pointer}\n` : '计划内知识点均已掌握，课程完成。\n')
       await chat.flush()
       printSessionTotal(chat, out)
+      disconnectStdin()
       exit(0)
       return
     }
@@ -214,6 +221,7 @@ export function apply(ctx: Context, config: { courseId: string }): void {
   if (!exit) throw new Error('tutor-learn-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.stdin.destroy()
     exit(1)
   })
 }
