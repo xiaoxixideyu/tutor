@@ -70,11 +70,27 @@ if (sessions.length === 0) {
   process.stderr.write(`tutor: 未找到会话（${target === 'latest' ? '无任何课堂会话' : `无匹配 "${target}"`}）\n`)
   process.exit(1)
 }
-const session = sessions[0]
-const events = loadEvents(session.file)
-const log = parseSessionLog(events)
-if (!log.intro) {
-  process.stderr.write('tutor: 该会话不含课堂首消息（【本课计划】），无法审计。请对 learn 会话运行。\n')
+// 挑最近的一节真正的课堂会话：教研/摸底/备课/事实核对等会话没有【本课计划】首消息，
+// audit latest 需跳过它们（否则可能选中一个非课堂会话而报"无法审计"）。sessions 已按 mtime 倒序。
+let session = null
+let log = null
+for (const candidate of sessions) {
+  let parsed
+  try {
+    parsed = parseSessionLog(loadEvents(candidate.file))
+  } catch {
+    continue
+  }
+  if (parsed.intro) {
+    session = candidate
+    log = parsed
+    break
+  }
+}
+if (!session || !log) {
+  process.stderr.write(
+    `tutor: 未找到含课堂首消息（【本课计划】）的会话（${target === 'latest' ? '尚无课堂会话' : `"${target}" 不是课堂会话`}）。请对 learn 会话运行。\n`
+  )
   process.exit(1)
 }
 const introView = parseLessonIntro(log.intro)
@@ -105,10 +121,17 @@ if (asJson) {
 } else {
   out.write(`课堂忠实度报告  会话 ${report.sessionId.slice(0, 8)}  ${report.generatedAt}\n`)
   out.write(`知识点：${report.node}（${report.title}）  回合 ${report.cost.turns}  成本 输入 ${report.cost.inputTokens} / 输出 ${report.cost.outputTokens} tokens\n`)
-  out.write(`\n计划覆盖率 ${report.coverageRate >= 0.99 ? '✓' : report.coverageRate >= 0.5 ? '△' : '✗'} ${Math.round(report.coverageRate * 100)}%\n`)
-  for (const item of report.structure) {
+  if (report.reachedPoints === 0) {
+    out.write(`\n忠实度 — 本课几乎未展开（讲到 0/${report.plannedPoints} 个计划要点）\n`)
+  } else {
+    const mark = report.coverageRate >= 0.99 ? '✓' : report.coverageRate >= 0.5 ? '△' : '✗'
+    const reachNote = report.partial ? '，本课暂停，未讲到的点不计入' : '，已讲完'
+    out.write(`\n忠实度 ${mark} ${Math.round(report.coverageRate * 100)}%（讲到 ${report.reachedPoints}/${report.plannedPoints} 个计划要点${reachNote}）\n`)
+  }
+  for (const [index, item] of report.structure.entries()) {
     const bar = '█'.repeat(Math.round(item.coverage * 10)) + '░'.repeat(10 - Math.round(item.coverage * 10))
-    out.write(`  ${bar} ${Math.round(item.coverage * 100)}%  ${item.point.slice(0, 40)}\n`)
+    const unreached = index >= report.reachedPoints ? ' ·未讲到' : ''
+    out.write(`  ${bar} ${Math.round(item.coverage * 100)}%  ${item.point.slice(0, 40)}${unreached}\n`)
   }
   const c = report.citations
   out.write(`\n引用纪律：标记 ${c.totalCitations} 次${c.invalidCitations.length > 0 ? `（无效 ${c.invalidCitations.join('、')}）` : ''}；断言句 ${c.assertionSentences}，无引用 ${c.uncitedAssertions}\n`)

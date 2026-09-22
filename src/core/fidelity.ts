@@ -109,6 +109,23 @@ export interface CoverageItem {
   coverage: number
 }
 
+export const COVERAGE_THRESHOLD = 0.5
+
+// 覆盖前沿（暂停感知）：讲授大体按 structure 顺序推进，故"讲到的最远要点"之后的未覆盖点
+// 视为"本课未讲到"（正常暂停/断点续学），不算忠实度失分；前沿之内的未覆盖点才是真正的漏讲/跑偏。
+// 返回本课讲到的要点数（前沿）与其中已覆盖的要点数。
+export function coverageFrontier(structure: CoverageItem[]): { reachedCount: number; coveredWithinReached: number } {
+  let reachedCount = 0
+  for (let i = 0; i < structure.length; i++) {
+    if (structure[i].coverage >= COVERAGE_THRESHOLD) reachedCount = i + 1
+  }
+  let coveredWithinReached = 0
+  for (let i = 0; i < reachedCount; i++) {
+    if (structure[i].coverage >= COVERAGE_THRESHOLD) coveredWithinReached++
+  }
+  return { reachedCount, coveredWithinReached }
+}
+
 export function planCoverage(structure: string[], corpus: string): CoverageItem[] {
   const corpusShingles = shingles(corpus)
   return structure.map((point) => {
@@ -178,7 +195,10 @@ export interface FidelityReport {
   node: string
   title: string
   structure: CoverageItem[]
-  coverageRate: number
+  coverageRate: number // 忠实度：本课讲到的要点里被覆盖的比例（暂停无关，见 coverageFrontier）
+  plannedPoints: number // 计划要点总数
+  reachedPoints: number // 本课实际讲到的要点数（覆盖前沿）
+  partial: boolean // 本课是否在讲完全部计划要点前暂停
   citations: CitationAuditResult
   drift: DriftItem[]
   cost: { inputTokens: number; outputTokens: number; turns: number }
@@ -195,13 +215,22 @@ export function assembleReport(input: {
 }): FidelityReport {
   const corpus = input.assistantTexts.join('\n')
   const structure = planCoverage(input.introView.structure, corpus)
-  const covered = structure.filter((item) => item.coverage >= 0.5).length
+  const { reachedCount, coveredWithinReached } = coverageFrontier(structure)
+  const coverageRate =
+    reachedCount > 0
+      ? Math.round((coveredWithinReached / reachedCount) * 100) / 100
+      : structure.length === 0
+        ? 1
+        : 0
   return {
     sessionId: input.sessionId,
     node: input.introView.node,
     title: input.introView.title,
     structure,
-    coverageRate: structure.length > 0 ? Math.round((covered / structure.length) * 100) / 100 : 1,
+    coverageRate,
+    plannedPoints: structure.length,
+    reachedPoints: reachedCount,
+    partial: reachedCount < structure.length,
     citations: citationAudit(input.assistantTexts, input.introView.resourceCount),
     drift: scopeDrift(corpus, input.introView.node, input.otherNodes),
     cost: { ...sumUsage(input.usage), turns: input.assistantTexts.length },

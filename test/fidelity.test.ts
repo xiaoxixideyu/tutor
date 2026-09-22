@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   assembleReport,
   citationAudit,
+  coverageFrontier,
   parseLessonIntro,
   parseSessionLog,
   planCoverage,
@@ -94,6 +95,31 @@ describe('scopeDrift', () => {
   })
 })
 
+describe('coverageFrontier', () => {
+  it('尾部未覆盖点算"未讲到"，不进前沿', () => {
+    const { reachedCount, coveredWithinReached } = coverageFrontier([
+      { point: 'a', coverage: 0.9 },
+      { point: 'b', coverage: 0.6 },
+      { point: 'c', coverage: 0.2 },
+      { point: 'd', coverage: 0.1 },
+    ])
+    assert.equal(reachedCount, 2)
+    assert.equal(coveredWithinReached, 2)
+  })
+  it('前沿之内的未覆盖点算真漏讲', () => {
+    const { reachedCount, coveredWithinReached } = coverageFrontier([
+      { point: 'a', coverage: 0.9 },
+      { point: 'b', coverage: 0.1 },
+      { point: 'c', coverage: 0.8 },
+    ])
+    assert.equal(reachedCount, 3) // 讲到了第 3 点，故 b 在前沿内
+    assert.equal(coveredWithinReached, 2) // a、c 覆盖，b 漏讲
+  })
+  it('全未覆盖：前沿为 0', () => {
+    assert.deepEqual(coverageFrontier([{ point: 'a', coverage: 0.1 }]), { reachedCount: 0, coveredWithinReached: 0 })
+  })
+})
+
 describe('assembleReport', () => {
   it('报告组装：覆盖率/引用/成本齐备', () => {
     const introView = parseLessonIntro(INTRO)!
@@ -111,5 +137,38 @@ describe('assembleReport', () => {
     assert.equal(report.citations.uncitedAssertions, 1)
     assert.ok(report.coverageRate > 0)
     assert.ok(report.structure.length === 3)
+  })
+
+  it('暂停感知：讲到前 2 点即暂停 → 忠实度 100%、partial、未讲到点不失分', () => {
+    const introView = parseLessonIntro(INTRO)! // 3 个计划要点
+    const report = assembleReport({
+      sessionId: 'session-partial',
+      introView,
+      // 只讲了前两点，第三点（与线程的差异）未讲到
+      assistantTexts: ['什么是 goroutine 我们先说清楚。', 'go 关键字的用法是加在调用前。'],
+      usage: [{ inputTokens: 100, outputTokens: 10 }],
+      otherNodes: [],
+      generatedAt: '2026-09-20 10:00:00',
+    })
+    assert.equal(report.plannedPoints, 3)
+    assert.equal(report.reachedPoints, 2)
+    assert.equal(report.partial, true)
+    assert.equal(report.coverageRate, 1) // 讲到的都覆盖了，暂停不失分
+  })
+
+  it('前沿内漏讲 → 忠实度 < 1', () => {
+    const introView = parseLessonIntro(INTRO)!
+    const report = assembleReport({
+      sessionId: 'session-gap',
+      introView,
+      // 讲了第 1、3 点，跳过第 2 点（go 关键字）
+      assistantTexts: ['什么是 goroutine 先讲。', '再说与线程的差异在于调度。'],
+      usage: [{ inputTokens: 100, outputTokens: 10 }],
+      otherNodes: [],
+      generatedAt: '2026-09-20 10:00:00',
+    })
+    assert.equal(report.reachedPoints, 3) // 讲到了第 3 点
+    assert.equal(report.partial, false)
+    assert.ok(report.coverageRate < 1) // 第 2 点漏讲，忠实度失分
   })
 })

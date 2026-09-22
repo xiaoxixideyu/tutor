@@ -9,11 +9,11 @@
     },
     {
       "point": "go mod init <模块路径> 生成 go.mod：记录模块路径、Go 语言版本与依赖，随代码保存在仓库中；模块是 Go 的版本化与依赖管理单元，可对照 Maven 的 pom.xml（groupId:artifactId 对应模块路径）[资料:1][资料:2]",
-      "coverage": 0.6
+      "coverage": 0.72
     },
     {
       "point": "双模块协作实战：greetings 模块返回问候消息，hello 模块通过模块路径 import 调用，本地用 replace + tidy 打通依赖；若要发布，模块路径必须是 Go 工具可下载的仓库路径 [资料:2]",
-      "coverage": 0.24
+      "coverage": 0.29
     },
     {
       "point": "控制结构对照 Java：if/for/switch 不带括号；左花括号不能另起一行（Go 词法器按行自动插入分号）；没有 do/while，统一用 for 的三种形态；range 遍历切片/字符串/map/channel，用 _ 丢弃不需要的返回值",
@@ -24,18 +24,21 @@
       "coverage": 0.17
     }
   ],
-  "coverageRate": 0.4,
+  "coverageRate": 1,
+  "plannedPoints": 5,
+  "reachedPoints": 2,
+  "partial": true,
   "citations": {
-    "totalCitations": 4,
+    "totalCitations": 6,
     "invalidCitations": [],
     "uncitedAssertions": 1,
     "assertionSentences": 2
   },
   "drift": [],
   "cost": {
-    "inputTokens": 78634,
-    "outputTokens": 3531,
-    "turns": 5
+    "inputTokens": 82370,
+    "outputTokens": 3786,
+    "turns": 6
   },
-  "generatedAt": "2026-09-20 02:17:33"
+  "generatedAt": "2026-09-22 08:49:22"
 }

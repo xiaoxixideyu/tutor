@@ -159,7 +159,14 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
         out.write('本课知识点无联网资料（先运行 research），仅做规则检查。\n')
         continue
       }
-      const checkReply = await chat.ask(buildCheckPrompt(replies, resources))
+      // 事实核对走独立丢弃会话：不写入教学会话日志，否则会污染忠实度审计语料与本课成本累计
+      const checkChat = await createAgentChat(ctx)
+      if (!checkChat) {
+        out.write('核对会话创建失败，已完成规则检查，跳过模型核对。\n')
+        continue
+      }
+      const checkReply = await checkChat.ask(buildCheckPrompt(replies, resources))
+      await checkChat.flush()
       const checkData = extractProfileJson(checkReply)
       const claims = (checkData && typeof checkData === 'object' ? (checkData as { claims?: unknown }).claims : null) as
         | { claim: string; verdict: string; evidence?: string }[]
@@ -174,6 +181,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       } else {
         out.write('核对结果解析失败，请重试。\n')
       }
+      out.write(`核对开销（独立计，不计入本课）：${formatTurnCost(checkChat.lastTurnUsage(), checkChat.model, costConfig, colorEnabled)}\n`)
       continue
     }
     if (command === '/quiz') {
