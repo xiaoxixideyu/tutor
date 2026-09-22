@@ -88,6 +88,7 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
         for (const choice of q.choices ?? []) out.write(`  ${choice}\n`)
         out.write('（回答选项字母）\n')
       }
+      out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
       const answer = await readAnswer()
       if (!answer || !answer.trim()) {
         store.write(courseId, 'assessment', engine.state)

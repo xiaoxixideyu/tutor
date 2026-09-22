@@ -93,6 +93,11 @@ function esc(text) {
   return div.innerHTML
 }
 
+// 只在已贴近底部时才自动滚动——用户上翻回看讲解时不被拽到底
+function scrollToEnd() {
+  if ($log.scrollHeight - $log.scrollTop - $log.clientHeight < 120) $log.scrollTop = $log.scrollHeight
+}
+
 function colorizeCost(text) {
   const div = document.createElement('div')
   div.className = 'cost'
@@ -112,6 +117,7 @@ const PROMPT_RE = /^>$/
 let pending = ''
 let bubble = null
 let bubbleText = ''
+let busy = false
 let busyTimer = null
 let busySeconds = 0
 let chips = null
@@ -120,8 +126,12 @@ let chipSelection = []
 let chipsAnswered = false
 
 function setBusy(on, label) {
+  busy = on
   const $busy = document.getElementById('busy')
+  const $send = document.getElementById('send')
   if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  $input.disabled = on
+  if ($send) $send.disabled = on
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
@@ -132,6 +142,9 @@ function setBusy(on, label) {
     }, 1000)
   } else {
     $busy.style.display = 'none'
+    // 轮到你了：正向提示（讲完与卡死不再长得一样）
+    $input.placeholder = '轮到你了，输入回答…（Enter 发送）'
+    $input.focus()
   }
 }
 
@@ -269,7 +282,7 @@ function handleLine(line) {
   }
   bubbleText += (bubbleText ? '\n' : '') + line
   bubble.textContent = bubbleText
-  $log.scrollTop = $log.scrollHeight
+  scrollToEnd()
 }
 
 function feed(text) {
@@ -301,7 +314,7 @@ async function startSse() {
       $log.innerHTML = ''
       pending = ''
       bubble = null
-      bubbleText = 
+      bubbleText = ''
       activeCourse = msg.courseId
       $state.textContent = msg.courseId ? `课堂进行中：${msg.courseId}` : '空闲'
       if (!msg.courseId) $banner.style.display = 'block'
@@ -317,7 +330,7 @@ async function startSse() {
       $state.textContent = '已结束'
       $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
     }
-    $log.scrollTop = $log.scrollHeight
+    scrollToEnd()
   }
   es.onerror = () => {
     $state.textContent = '连接中断，重连中…'
@@ -343,6 +356,7 @@ async function ensureLesson() {
 }
 
 function send() {
+  if (busy) return
   const line = $input.value.trim()
   if (!line) return
   $input.value = ''
@@ -354,11 +368,14 @@ function send() {
 
 document.getElementById('send').addEventListener('click', send)
 $input.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') send()
+  // isComposing 守卫：中文输入法回车选字时不误发半成品
+  if (event.key === 'Enter' && !event.isComposing) send()
 })
 for (const button of document.querySelectorAll('.quick button')) {
   button.addEventListener('click', () => {
+    if (busy) return
     setUserEcho(button.dataset.cmd)
+    setBusy(true)
     api('/flow/input', { line: button.dataset.cmd })
   })
 }
@@ -369,7 +386,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 // 页面加载：若空闲则显示选课入口
 ensureLesson().then(async (course) => {
   if (course) {
-    $state.textContent = `课堂进行中：${course}`
+    $state.textContent = `课堂进行中：${course.courseId}`
     return
   }
   const wanted = new URLSearchParams(location.search).get('course')

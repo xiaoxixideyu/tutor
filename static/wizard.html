@@ -103,15 +103,24 @@ let chipSelection = []
 let chipsAnswered = false
 let currentKind = null
 let courseName = null
+let busy = false
 let busyTimer = null
 let busySeconds = 0
 
 function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
 function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
+// 只在已贴近底部时才自动滚动——用户上翻回看时不被拽到底
+function scrollToEnd() {
+  if ($log.scrollHeight - $log.scrollTop - $log.clientHeight < 120) $log.scrollTop = $log.scrollHeight
+}
 
 function setBusy(on, label) {
+  busy = on
   const $busy = document.getElementById('busy')
+  const $send = document.getElementById('send')
   if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  $input.disabled = on
+  if ($send) $send.disabled = on
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… 0s`
@@ -122,6 +131,8 @@ function setBusy(on, label) {
     }, 1000)
   } else {
     $busy.style.display = 'none'
+    $input.placeholder = '轮到你了，输入回答…（Enter 发送）'
+    if ($footer.style.display !== 'none') $input.focus()
   }
 }
 
@@ -198,7 +209,7 @@ function handleLine(line) {
   if (!bubble) { bubble = el('<div class="tutor"></div>'); $log.appendChild(bubble) }
   bubbleText += (bubbleText ? '\n' : '') + line
   bubble.textContent = bubbleText
-  $log.scrollTop = $log.scrollHeight
+  scrollToEnd()
 }
 
 function feed(text) {
@@ -354,7 +365,7 @@ async function startSse() {
       } else {
         $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
       }
-      $log.scrollTop = $log.scrollHeight
+      scrollToEnd()
     }
   }
   es.onerror = () => { es.close(); setTimeout(startSse, 1500) }
@@ -383,6 +394,7 @@ function showConsole() {
 }
 
 function send() {
+  if (busy) return
   const line = $input.value.trim()
   if (!line) return
   $input.value = ''
@@ -393,7 +405,8 @@ function send() {
 }
 
 document.getElementById('send').addEventListener('click', send)
-$input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send() })
+// isComposing 守卫：中文输入法回车选字时不误发半成品
+$input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) send() })
 document.getElementById('stopBtn').addEventListener('click', () => api('/flow/stop'))
 document.getElementById('startBtn').addEventListener('click', async () => {
   const id = document.getElementById('courseId').value.trim()

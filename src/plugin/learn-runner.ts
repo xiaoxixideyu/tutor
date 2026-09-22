@@ -191,6 +191,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       for (const [index, item] of draft.quiz.entries()) {
         out.write(`\n小测 ${index + 1}/${draft.quiz.length}：${item.question}\n`)
         for (const choice of item.choices ?? []) out.write(`  ${choice}\n`)
+        out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
         const answer = await readAnswer()
         if (!answer || !answer.trim()) {
           out.write('小测中止，本次不做掌握度更新，本课保留断点。\n')
