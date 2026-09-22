@@ -29,14 +29,20 @@ interface BatchResult {
 }
 
 function skeletonPrompt(profile: Profile): string {
+  const minutes = profile.daily_minutes ?? 30
   return [
     '任务：为课程构思知识地图骨架（暂不联网）。',
     '',
     '学员档案：',
     `- 学习目的：${profile.goal}`,
     `- 现有基础：${profile.background || '未填写'}`,
+    `- 每日投入：约 ${minutes} 分钟`,
     '',
-    '输出 6-10 个知识点与依赖关系。输出 JSON（```json 代码块）：',
+    `知识点粒度（关键约束）：每个知识点必须是「一节课能讲完」的量——约 ${minutes} 分钟、3–5 个讲解要点。`,
+    '覆盖面宽的主题要拆成多个有依赖关系的细知识点，粒度尽量均匀；不要把彼此独立、需分别讲授的多个主题揉成一个笼统的大节点。',
+    '反例：用一个"基础"节点囊括 环境/语法/控制流/函数/模块——应拆成各自独立、各一节课的知识点。',
+    '',
+    '按此粒度输出知识点（通常 10-18 个，依主题多少浮动）与依赖关系。输出 JSON（```json 代码块）：',
     '{"nodes": [{"id": "英文slug", "title": "中文标题", "summary": "一句话（按你自身知识，之后会联网验证）", "verified": false}], "edges": [["知识点", "前置知识点"]]}',
     '除该 JSON 外不要输出其他内容。',
   ].join('\n')
