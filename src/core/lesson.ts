@@ -24,7 +24,19 @@ function resourceLines(resources: LessonResourceView[], materialLimit: number): 
   return lines
 }
 
-export function validateLessonDraft(draft: unknown, expectedNode?: string): { ok: true; value: LessonDraft } | { ok: false; error: string } {
+export const MAX_STRUCTURE_POINTS = 5
+
+// 单节课要点上限：按每日投入时长收紧（约每 15 分钟讲一个要点），夹在 3–5 之间。
+// 备课容量必须匹配一次课能讲完的量——否则课会讲不完、断点续学也补不上（见忠实度审计）。
+export function lessonStructureCap(dailyMinutes: number | undefined): number {
+  return Math.max(3, Math.min(MAX_STRUCTURE_POINTS, Math.round((dailyMinutes ?? 30) / 15)))
+}
+
+export function validateLessonDraft(
+  draft: unknown,
+  expectedNode?: string,
+  maxStructure: number = MAX_STRUCTURE_POINTS
+): { ok: true; value: LessonDraft } | { ok: false; error: string } {
   let value: LessonDraft
   try {
     value = LessonDraftSchema(draft) as LessonDraft
@@ -34,8 +46,8 @@ export function validateLessonDraft(draft: unknown, expectedNode?: string): { ok
   if (expectedNode && value.node !== expectedNode) {
     return { ok: false, error: `备课产物 node 为 "${value.node}"，应为 "${expectedNode}"` }
   }
-  if (value.structure.length < 1 || value.structure.length > 8) {
-    return { ok: false, error: `structure 需 1-8 个要点，当前 ${value.structure.length}` }
+  if (value.structure.length < 1 || value.structure.length > maxStructure) {
+    return { ok: false, error: `structure 需 1-${maxStructure} 个要点，当前 ${value.structure.length}（一次课容量上限）` }
   }
   if (value.practice.length < 1 || value.practice.length > 3) {
     return { ok: false, error: `practice 需 1-3 道课中练习，当前 ${value.practice.length}` }
@@ -114,6 +126,8 @@ export function buildPrepPrompt(input: PrepInput): string {
   const node = input.map.nodes.find((n) => n.id === input.node)
   const prerequisites = prerequisiteIds(input.map, input.node)
   const resources = resourcesForNode(input.map.resources, input.node)
+  const minutes = input.profile.daily_minutes ?? 30
+  const cap = lessonStructureCap(input.profile.daily_minutes)
   const lines = [
     `任务：为课程《${input.courseId}》的下一节课备课。`,
     '',
@@ -135,7 +149,8 @@ export function buildPrepPrompt(input: PrepInput): string {
       : []),
     '',
     '【要求】',
-    '- 单节课容量：适合 1 次课讲完（学员每日约 ' + (input.profile.daily_minutes ?? 30) + ' 分钟）',
+    `- 单节课容量（硬约束）：structure 最多 ${cap} 个要点，且必须能在学员每日约 ${minutes} 分钟内讲完`,
+    `- 若该知识点内容超过一节课容量：只挑最核心的 ${cap} 个要点组织本课，其余留到后续，不要硬塞进这一节`,
     '- 讲法贴合学员讲解偏好与现有基础',
     '- example 给一个核心例子（如涉及代码给出完整可读的代码块）',
     '- practice 为 1-3 道课中练习（随讲授穿插），每题给出参考答案',

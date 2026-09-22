@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
+import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
 import { judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
 import { dueReviews } from '../core/review.ts'
 import { extractProfileJson } from '../core/interview.ts'
@@ -44,10 +44,11 @@ async function startFreshLesson(
   const prepChat = await createAgentChat(ctx)
   if (!prepChat) throw new Error('tutor: 备课会话创建失败')
   out.write(`正在备课：${node}…\n`)
+  const cap = lessonStructureCap(profile.daily_minutes)
   const draft = (await generateTurn(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery }), (text) => {
     const data = parseJsonBlock(text)
     if (!data.ok) return data
-    return validateLessonDraft(data.value, node)
+    return validateLessonDraft(data.value, node, cap)
   })) as LessonDraft
   await prepChat.flush()
   out.write('备课完成，开始上课。\n')
@@ -103,7 +104,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   let resumed = false
   if (store.has(config.courseId, 'lesson')) {
     const lesson = store.read(config.courseId, 'lesson') as LessonState
-    const draftValid = validateLessonDraft(lesson.draft, lesson.node).ok
+    const draftValid = validateLessonDraft(lesson.draft, lesson.node, lessonStructureCap(profile.daily_minutes)).ok
     if (draftValid && lesson.node === node && lesson.session_id) {
       const adopted = await createAgentChat(ctx, { resumeSessionId: lesson.session_id })
       if (adopted) {

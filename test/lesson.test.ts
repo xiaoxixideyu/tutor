@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, prerequisiteIds, resourcesForNode, validateLessonDraft } from '../src/core/lesson.ts'
+import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, prerequisiteIds, resourcesForNode, validateLessonDraft } from '../src/core/lesson.ts'
 import { judgeQuizAnswer, statusForScore, updateMasteryForNode } from '../src/core/assessment.ts'
 import { CourseStore } from '../src/core/store.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../src/core/schema.ts'
@@ -49,9 +49,13 @@ describe('validateLessonDraft', () => {
     assert.equal(validateLessonDraft(draft, 'channels').ok, false)
   })
 
-  it('structure 超量报错', () => {
-    const bad = { ...draft, structure: Array.from({ length: 9 }, (_, i) => `s${i}`) }
-    assert.equal(validateLessonDraft(bad).ok, false)
+  it('structure 超量报错（默认上限 5，可按时长传入更严上限）', () => {
+    const five = { ...draft, structure: Array.from({ length: 5 }, (_, i) => `s${i}`) }
+    assert.equal(validateLessonDraft(five).ok, true) // 5 个：默认上限内
+    const six = { ...draft, structure: Array.from({ length: 6 }, (_, i) => `s${i}`) }
+    assert.equal(validateLessonDraft(six).ok, false) // 6 个：超默认上限
+    const four = { ...draft, structure: Array.from({ length: 4 }, (_, i) => `s${i}`) }
+    assert.equal(validateLessonDraft(four, undefined, 3).ok, false) // 传入上限 3：4 个超量
   })
 
   it('practice 超量报错', () => {
@@ -87,6 +91,15 @@ describe('validateLessonDraft', () => {
   })
 })
 
+describe('lessonStructureCap', () => {
+  it('按每日投入时长收紧，夹在 3–5', () => {
+    assert.equal(lessonStructureCap(60), 4) // 60/15=4
+    assert.equal(lessonStructureCap(90), 5) // 90/15=6 → 封顶 5
+    assert.equal(lessonStructureCap(20), 3) // 约 1 → 保底 3
+    assert.equal(lessonStructureCap(undefined), 3) // 默认 30/15=2 → 保底 3
+  })
+})
+
 describe('currentNode', () => {
   const plan: Plan = { path: ['goroutines', 'channels'], milestones: [], current: 'goroutines' }
 
@@ -116,6 +129,7 @@ describe('buildPrepPrompt / buildTeachingIntro', () => {
     assert.match(prompt, /goroutines（Goroutine）/)
     assert.match(prompt, /5 年 Java 经验/)
     assert.match(prompt, /例子驱动/)
+    assert.match(prompt, /最多 4 个要点/) // daily_minutes=60 → cap 4，硬约束进 prompt
   })
 
   it('教学首消息包含计划与练习，且为确定内容', () => {
