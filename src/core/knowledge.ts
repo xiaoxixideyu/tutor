@@ -1,4 +1,46 @@
-import type { KnowledgeMap, QuestionBank } from './schema.ts'
+import type { KnowledgeMap, KnowledgeMapResource, QuestionBank } from './schema.ts'
+import { getDomain } from 'tldts'
+
+// 注册域名只是来源独立性的保守代理：同站子域、不同页面和重定向别名不能充当两份证据。
+// 数量门槛不能证明事实正确，仍须由教研给出交叉核对结论。
+export function sourceDomains(resources: KnowledgeMapResource[], node: string): string[] {
+  const domains = new Set<string>()
+  for (const resource of resources) {
+    if (resource.node !== node || !resource.url) continue
+    try {
+      const url = new URL(resource.url)
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue
+      const domain = getDomain(url.hostname, { allowPrivateDomains: false })
+      if (domain) domains.add(domain)
+    } catch { /* 非法地址不能作为验证证据 */ }
+  }
+  return [...domains].sort()
+}
+
+export function enforceSourceVerification(map: KnowledgeMap): KnowledgeMap {
+  const nodes = map.nodes.map((node) => ({ ...node,
+    verified: node.verified === true && sourceDomains(map.resources ?? [], node.id).length >= 2,
+  }))
+  return { ...map, nodes, verified: nodes.length > 0 && nodes.every((node) => node.verified) }
+}
+
+export interface ResearchBatch {
+  nodes: { id: string; title?: string; summary?: string; verified?: boolean }[]
+  resources?: KnowledgeMapResource[]
+}
+
+// 一批重新教研后替换本批旧资料。旧的失效链接不能混入新证据并抬高验证状态。
+export function mergeResearchBatch(map: KnowledgeMap, batch: ResearchBatch): KnowledgeMap {
+  const updates = new Map(batch.nodes.map((node) => [node.id, node]))
+  return enforceSourceVerification({ ...map,
+    nodes: map.nodes.map((node) => {
+      const update = updates.get(node.id)
+      return update ? { ...node, ...update, title: update.title ?? node.title,
+        summary: update.summary ?? node.summary, verified: update.verified ?? false } : node
+    }),
+    resources: [...(map.resources ?? []).filter((r) => !updates.has(r.node)), ...(batch.resources ?? [])],
+  })
+}
 
 export function topoOrder(map: KnowledgeMap): string[] {
   const ids = map.nodes.map((n) => n.id)

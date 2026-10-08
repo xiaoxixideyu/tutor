@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 大考</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --green: #16a34a; --yellow: #d97706; --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  header .state { font-size: 12px; color: var(--muted); }
+  header button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
+  header button.danger { color: var(--red); }
+  header button:hover { background: var(--bg); }
+  header a.backlink { text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  header a.backlink:hover { background: var(--bg); }
+  #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .tutor { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; line-height: 1.65; font-size: 14px; margin-bottom: 14px; }
+  .tutor h1, .tutor h2, .tutor h3 { font-size: 14px; margin: 12px 0 6px; }
+  .tutor pre { background: #0d1117; color: #e6edf3; border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 8px 0; white-space: pre; }
+  .tutor code { background: #eef1f5; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+  .tutor pre code { background: none; padding: 0; }
+  .tutor ul, .tutor ol { margin: 6px 0; padding-left: 22px; }
+  .tutor li { margin: 3px 0; }
+  .tutor p { margin: 6px 0; }
+  .tutor strong { font-weight: 600; }
+  .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; }
+  .busy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+  .cost { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .cost .g-g { color: var(--green); } .cost .r-y { color: var(--yellow); } .cost .r-r { color: var(--red); }
+  .userline { text-align: right; color: var(--muted); font-size: 13px; margin: 8px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+  .chips .hint { font-size: 12px; color: var(--muted); align-self: center; }
+  .chip { background: var(--card); border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; user-select: none; }
+  .chip:hover { background: #eef2ff; }
+  .chip.selected { background: var(--accent); color: #fff; }
+  .chip.disabled { opacity: .55; cursor: default; }
+  .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
+  .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  footer { border-top: 1px solid var(--border); background: var(--card); padding: 12px 20px; }
+  .inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; }
+  .inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+  .banner { background: #fef3c7; color: #92400e; padding: 8px 20px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/" class="backlink">← 课程列表</a>
+  <h1 id="title">里程碑大考</h1>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
+  <span class="state" id="state">未连接</span>
+  <button id="stopBtn" class="danger">中止大考</button>
+</header>
+<div class="banner" id="banner"></div>
+<main id="log"></main>
+<footer>
+  <div class="inputrow">
+    <input id="input" placeholder="输入你的答案…（Enter 发送）" autocomplete="off">
+    <button id="send">发送</button>
+  </div>
+</footer>
+<script src="/flow-client.js"></script>
+<script>
+const flowClient = new TutorFlowClient((message) => {
+  setBusy(false)
+  $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
+})
+// 大考页：复用 lesson.html 的流式渲染 + chips + `>` 哨兵机制（exam-runner 已对齐每题读取前吐 `\n> `）。
+// 与课堂的差别只在：启动走 {kind:'exam', courseId, milestoneId}、退出显示成绩收尾而非「继续下一节」。
+const $log = document.getElementById('log')
+const $input = document.getElementById('input')
+const $state = document.getElementById('state')
+const $banner = document.getElementById('banner')
+const params = new URLSearchParams(location.search)
+const wantedCourse = params.get('course')
+const wantedMilestone = params.get('milestone') || ''
+let activeCourse = null
+
+function el(html) {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return div.firstChild
+}
+
+function esc(text) {
+  const div = document.createElement('div')
+  div.textContent = String(text ?? '')
+  return div.innerHTML
+}
+
+// 只在已贴近底部时才自动滚动——用户上翻回看题目时不被拽到底
+function scrollToEnd() {
+  if ($log.scrollHeight - $log.scrollTop - $log.clientHeight < 120) $log.scrollTop = $log.scrollHeight
+}
+
+function colorizeCost(text) {
+  const div = document.createElement('div')
+  div.className = 'cost'
+  let html = esc(text)
+  html = html.replace(/¥([0-9.]+)/g, (m, n) => {
+    const v = Number(n)
+    const cls = v >= 0.2 ? 'r-r' : v >= 0.05 ? 'r-y' : 'g-g'
+    return `<span class="${cls}">¥${n}</span>`
+  })
+  div.innerHTML = html
+  return div
+}
+
+const COST_RE = /^(本回合|会话累计)/
+
+let pending = ''
+let bubble = null
+let bubbleText = ''
+let busy = false
+let busyTimer = null
+let busySeconds = 0
+let chipMulti = false
+let chipSelection = []
+let chipsAnswered = false
+
+function setBusy(on, label) {
+  busy = on
+  const $busy = document.getElementById('busy')
+  const $send = document.getElementById('send')
+  if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  $input.disabled = on
+  if ($send) $send.disabled = on
+  if (on) {
+    busySeconds = 0
+    document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
+    $busy.style.display = 'inline-flex'
+    busyTimer = setInterval(() => {
+      busySeconds++
+      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+    }, 1000)
+  } else {
+    $busy.style.display = 'none'
+    $input.placeholder = '轮到你了，输入答案…（Enter 发送）'
+    $input.focus()
+  }
+}
+// __APPEND_2__
+
+function mdToHtml(src) {
+  const escHtml = (t) => esc(t)
+  const blocks = []
+  const text = src.replace(/```(\w*)\n([\s\S]*?)(?:```|$)/g, (_, lang, code) => {
+    blocks.push(`<pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre>`)
+    return `\u0000CODE${blocks.length - 1}\u0000`
+  })
+  const lines = text.split('\n')
+  const out = []
+  let listType = null
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null } }
+  function inline(t) {
+    return t
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[资料[:：](\d+)\]/g, '<span style="color:var(--accent)">[资料:$1]</span>')
+  }
+  for (const raw of lines) {
+    const line = escHtml(raw)
+    if (/^\u0000CODE\d+\u0000$/.test(line.trim())) { closeList(); out.push(line.trim()); continue }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/)
+    if (heading) { closeList(); out.push(`<h3>${inline(heading[2])}</h3>`); continue }
+    const ul = line.match(/^\s*[-*]\s+(.*)$/)
+    if (ul) { if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul' } out.push(`<li>${inline(ul[1])}</li>`); continue }
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/)
+    if (ol) { if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol' } out.push(`<li>${inline(ol[1])}</li>`); continue }
+    closeList()
+    if (line.trim() === '') { out.push('<p></p>'); continue }
+    out.push(`<p>${inline(line)}</p>`)
+  }
+  closeList()
+  let html = out.join('\n')
+  html = html.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => blocks[Number(i)])
+  return html
+}
+
+function renderBubble() {
+  if (!bubble || !bubbleText) return
+  bubble.innerHTML = mdToHtml(bubbleText)
+}
+// __APPEND_3__
+
+function optionLinesOf(text) {
+  const out = []
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*([A-Fa-f])[.、．]\s*(\S.*)$/)
+    if (m) out.push({ letter: m[1].toUpperCase(), label: m[2].trim() })
+  }
+  return out
+}
+
+function maybeChips(text) {
+  const options = optionLinesOf(text)
+  if (options.length < 2 || options.length > 6) return
+  const letters = options.map((o) => o.letter)
+  const expects = ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, letters.length)
+  if (letters.join('') !== expects.join('')) return
+  const multi = /可多选|可多選|多选题|（多选）|\(多选\)/.test(text)
+  const container = el('<div class="chips"></div>')
+  chipMulti = multi
+  chipSelection = []
+  chipsAnswered = false
+  if (multi) container.appendChild(el('<span class="hint">可多选，选完点「提交选择」</span>'))
+  for (const opt of options) {
+    const chip = el(`<button class="chip">${esc(opt.letter)}. ${esc(opt.label)}</button>`)
+    chip.addEventListener('click', () => {
+      if (chipsAnswered) return
+      if (multi) {
+        const idx = chipSelection.indexOf(opt.letter)
+        if (idx >= 0) chipSelection.splice(idx, 1)
+        else chipSelection.push(opt.letter)
+        chip.classList.toggle('selected')
+      } else {
+        chipsAnswered = true
+        for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
+        chip.classList.add('selected')
+        submitChips([opt.letter])
+      }
+    })
+    container.appendChild(chip)
+  }
+  if (multi) {
+    const submit = el('<button class="chip">提交选择</button>')
+    submit.addEventListener('click', () => {
+      if (chipsAnswered || chipSelection.length === 0) return
+      chipsAnswered = true
+      for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
+      submitChips(chipSelection)
+    })
+    container.appendChild(submit)
+  }
+  $log.appendChild(container)
+  $log.scrollTop = $log.scrollHeight
+}
+// __APPEND_4__
+
+function submitChips(letters) {
+  const line = letters.join('')
+  $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
+  closeBubble()
+  setBusy(true)
+  api('/flow/input', { line })
+}
+
+function closeBubble() {
+  if (bubble) renderBubble()
+  const text = bubbleText
+  bubble = null
+  bubbleText = ''
+  return text
+}
+
+function handleLine(line) {
+  const trimmed = line.trim()
+  if (trimmed === '>') {
+    const closed = closeBubble()
+    if (closed) maybeChips(closed)
+    setBusy(false)
+    return
+  }
+  if (COST_RE.test(line)) {
+    closeBubble()
+    $log.appendChild(colorizeCost(line))
+    return
+  }
+  if (trimmed === '') return
+  if (!bubble) {
+    bubble = el('<div class="tutor"></div>')
+    $log.appendChild(bubble)
+  }
+  bubbleText += (bubbleText ? '\n' : '') + line
+  bubble.textContent = bubbleText
+  scrollToEnd()
+}
+
+function feed(text) {
+  pending += text
+  let idx
+  while ((idx = pending.indexOf('\n')) >= 0) {
+    const line = pending.slice(0, idx)
+    pending = pending.slice(idx + 1)
+    handleLine(line)
+  }
+  if (pending.trim() === '>') {
+    handleLine('>')
+    pending = ''
+  }
+}
+
+function setUserEcho(line) {
+  $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
+  $log.scrollTop = $log.scrollHeight
+}
+// __APPEND_5__
+
+// 大考以 code 0（通过）/ 1（未过或中止）退出。成绩明细已由 runner 流式打完，这里只做收尾入口：
+// 回课程列表（未过时也回列表——计划指针已被 runner 回退到薄弱节点，去补救课即可）。
+function renderExamDone(code) {
+  const row = el('<div class="chips"></div>')
+  const back = el('<button class="chip">← 课程列表</button>')
+  back.addEventListener('click', () => { location.href = '/' })
+  row.appendChild(back)
+  $log.appendChild(row)
+  scrollToEnd()
+}
+
+async function api(path, body) {
+  const result = await flowClient.request(path, body)
+  if (path === '/flow/start' && result.ok) startSse()
+  return result
+}
+
+function startSse() {
+  const es = flowClient.connect()
+  if (!es) return
+  es.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'hello') {
+      $log.innerHTML = ''
+      pending = ''
+      bubble = null
+      bubbleText = ''
+      activeCourse = msg.courseId
+      $state.textContent = msg.courseId ? `大考进行中：${msg.courseId}` : '空闲'
+      return
+    }
+    if (msg.type === 'out') feed(msg.text)
+    else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
+    else if (msg.type === 'exit') {
+      feed('')
+      const closed = closeBubble()
+      if (closed) maybeChips(closed)
+      setBusy(false)
+      $state.textContent = msg.code === 0 ? '大考通过' : '大考结束'
+      $log.appendChild(el(`<div class="sysline">—— 大考进程退出（code ${msg.code}）——</div>`))
+      renderExamDone(msg.code)
+    }
+    scrollToEnd()
+  }
+  es.onerror = () => {
+    $state.textContent = '连接中断，重连中…'
+    setBusy(false)
+  }
+}
+// __APPEND_6__
+
+function send() {
+  if (busy) return
+  const line = $input.value.trim()
+  if (!line) return
+  $input.value = ''
+  setUserEcho(line)
+  closeBubble()
+  setBusy(true)
+  api('/flow/input', { line })
+}
+
+document.getElementById('send').addEventListener('click', send)
+$input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.isComposing) send()
+})
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  await api('/flow/stop')
+})
+
+// 起一场大考：milestone 可空——为空时 exam-runner 自选下一个可考里程碑。
+async function startExam(courseId, milestoneId) {
+  const result = await api('/flow/start', { kind: 'exam', courseId, milestoneId })
+  if (!result.ok) {
+    $banner.textContent = result.error || '开始大考失败'
+    $banner.style.display = 'block'
+    return false
+  }
+  $state.textContent = `大考进行中：${courseId}`
+  $banner.style.display = 'none'
+  setBusy(true, '正在生成试卷（可能需要 1-2 分钟）')
+  return true
+}
+// __APPEND_7__
+
+const KIND_LABEL = { new: '建档访谈', assess: '摸底', plan: '生成计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '生成实践', practice: '实践' }
+
+// 全局流程桥同一时间只跑一个子进程。想开大考却撞上别的进行中流程（另一门课、或同门课的课堂/实践等）时，
+// 如实说明并给「结束并开始大考」入口，而不是把别的流程的输出灌进本页。
+function renderFlowMismatch(running) {
+  flowClient.attach(running)
+  const runLabel = KIND_LABEL[running.kind] || running.kind
+  $state.textContent = `${runLabel}进行中：${running.courseId}`
+  $banner.innerHTML = ''
+  $banner.appendChild(document.createTextNode(
+    `当前正在进行「${running.courseId} · ${runLabel}」——tutor 同一时间只能跑一个流程。要开始「${wantedCourse}」的大考，得先结束它（进度已存，随时能回来续上）。`))
+  const btn = el(`<button style="margin-top:8px;cursor:pointer">结束当前流程并开始大考</button>`)
+  btn.addEventListener('click', async () => {
+    btn.disabled = true
+    btn.textContent = '正在结束当前流程…'
+    await api('/flow/stop')
+    for (let i = 0; i < 40; i++) {
+      const s = await (await fetch('/flow/state')).json()
+      if (!s.active) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    if (await startExam(wantedCourse, wantedMilestone)) startSse()
+    else btn.disabled = false
+  })
+  $banner.appendChild(document.createElement('br'))
+  $banner.appendChild(btn)
+  $banner.style.display = 'block'
+}
+
+// 页面加载：按 URL 想考的课 vs 全局正在跑的流程，决定附着 / 提示切换 / 起新考
+;(async () => {
+  if (!wantedCourse) {
+    $banner.textContent = '缺少 course 参数——请从课程列表点「参加大考」进入。'
+    $banner.style.display = 'block'
+    startSse()
+    return
+  }
+  const state = await (await fetch('/flow/state')).json()
+  const running = state.active
+  if (running && !(running.kind === 'exam' && running.courseId === wantedCourse && (!wantedMilestone || running.milestoneId === wantedMilestone))) {
+    renderFlowMismatch(running)
+    return
+  }
+  if (running) {
+    flowClient.attach(running)
+    $state.textContent = `大考进行中：${running.courseId}`
+    startSse()
+    return
+  }
+  await startExam(wantedCourse, wantedMilestone)
+  startSse()
+})()
+</script>
+</body>
+</html>

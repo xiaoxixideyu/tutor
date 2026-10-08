@@ -4,14 +4,15 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
-import { addUsage, type UsageSample } from '../core/cost.ts'
+import { addUsage, normalizeUsage, type ReportedUsage, type UsageSample } from '../core/cost.ts'
+import { TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from './turn-timeout.ts'
 
 interface SessionEventView {
   type: string
   data?: {
     reason?: { kind: string; error?: { code: string; message: string } }
-    usage?: { inputTokens?: number; outputTokens?: number }
-    message?: { content: { type: string; text?: string }[]; usage?: { inputTokens?: number; outputTokens?: number } }
+    usage?: ReportedUsage
+    message?: { content: { type: string; text?: string }[]; usage?: ReportedUsage }
   }
 }
 
@@ -58,11 +59,20 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
   const sessions = ctx.get('sessions') as SessionsRegistry | undefined
   if (!agentDefaultModel || !agents || !sessions) throw new Error('tutor: 核心服务未就绪')
   const selection = agentDefaultModel.currentSelection()
+  // 流式活性计数：dsh 的 session.seq 只在事件边界前进（工具调用/结果、单条消息生成完毕），单条消息
+  // 「流式吐字」期间并不 +1。若只拿 seq 当停滞看门狗的进展信号，assess/plan 这类「一次大生成、不调
+  // 工具」的回合会在正常吐字途中被误判卡死。这里订阅逐块流帧：中转站每吐一块（chunk）就 +1，于是
+  // 「正在吐字」= 有进展，真正的「完全没有字节返回」才会累积停滞。事件缺失时降级为 seq-only（不劣于原状）。
+  let streamTicks = 0
   const createOptions = {
     meta: { cwd: process.cwd() },
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
+      ;(agentCtx as { on?: (name: string, listener: (payload: { frame?: { type?: string } }) => void) => unknown })
+        .on?.('agent/assistant-stream', (payload) => {
+          if (payload?.frame?.type === 'chunk') streamTicks++
+        })
     },
   }
   let agent: AgentLike
@@ -84,25 +94,23 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
     if (options.resumeSessionId) return null
     throw error
   }
-  await agent.whenIdle()
+  await whenIdleWithin(() => agent.whenIdle(), turnTimeoutMs())
 
-  function usageAt(event: SessionEventView): UsageSample | null {
-    const usage = event.data?.usage ?? event.data?.message?.usage
-    if (!usage || typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') return null
-    return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
-  }
-
-  const initialTotal: UsageSample = { inputTokens: 0, outputTokens: 0 }
-  for (let seq = 0; seq < agent.session.seq; seq++) {
-    const event = agent.session.eventAt(SessionSeq(seq))
-    if (event?.type === 'assistant/message') {
-      const usage = usageAt(event)
-      if (usage) initialTotal.inputTokens += usage.inputTokens
-      if (usage) initialTotal.outputTokens += usage.outputTokens
+  let turnUsage: UsageSample = { inputTokens: 0, outputTokens: 0 }
+  let total: UsageSample = { inputTokens: 0, outputTokens: 0 }
+  let usageCursor = 0
+  function accountUsage(): void {
+    for (; usageCursor < agent.session.seq; usageCursor++) {
+      const event = agent.session.eventAt(SessionSeq(usageCursor))
+      if (event?.type !== 'assistant/message' && event?.type !== 'assistant/attempt') continue
+      const sample = normalizeUsage(event.data?.usage ?? event.data?.message?.usage)
+      if (!sample) continue
+      total = addUsage(total, sample)
+      turnUsage = addUsage(turnUsage, sample)
     }
   }
-  let turnUsage: UsageSample = { inputTokens: 0, outputTokens: 0 }
-  let total: UsageSample = { ...initialTotal }
+  accountUsage()
+  turnUsage = { inputTokens: 0, outputTokens: 0 }
 
   return {
     sessionId: String(agent.session.id ?? ''),
@@ -122,6 +130,8 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
       return text
     },
     async ask(prompt: string): Promise<string> {
+      accountUsage()
+      turnUsage = { inputTokens: 0, outputTokens: 0 }
       let lastError: unknown
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -132,10 +142,9 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
               source: { kind: 'user' },
             })
           )
-          await agent.whenIdle()
+          await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs())
           let text = ''
           let turnError: string | null = null
-          let usage: UsageSample = { inputTokens: 0, outputTokens: 0 }
           for (let seq = cursor; seq < agent.session.seq; seq++) {
             const event = agent.session.eventAt(SessionSeq(seq))
             if (!event) continue
@@ -145,10 +154,6 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
                 .map((block) => block.text ?? '')
                 .join('')
               if (joined !== '') text = joined
-              const sample = usageAt(event)
-              if (sample) {
-                usage = addUsage(usage, sample)
-              }
             }
             if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
               turnError = event.data.reason.error
@@ -157,27 +162,34 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
             }
           }
           if (turnError !== null) throw new Error(turnError)
-          turnUsage = usage
-          total = addUsage(total, usage)
           return text
         } catch (error) {
           lastError = error
+          // 停滞超时（连续无新事件）无法 abort：底层回合可能仍在后台跑，重试会在同一 session 叠加 followup。
+          // 直接抛出，交给 runner 的 catch 保存进度并退出（重跑可从 session 断点续上）。
+          if (error instanceof TurnTimeoutError) throw error
           if (attempt === 0) {
             process.stderr.write(`tutor: 模型回合异常（${error instanceof Error ? error.message : String(error)}），重试一次…\n`)
             await new Promise((resolve) => setTimeout(resolve, 1500))
           }
+        } finally {
+          // 截断、失败与重试也可能计费；按日志游标累计一次，不以成功返回为前提。
+          accountUsage()
         }
       }
       throw new Error(`模型回合失败——${lastError instanceof Error ? lastError.message : String(lastError)}`)
     },
     lastTurnUsage(): UsageSample {
+      accountUsage()
       return { ...turnUsage }
     },
     totalUsage(): UsageSample {
+      accountUsage()
       return { ...total }
     },
     async flush(): Promise<void> {
       await sessions.flush(agent.session)
+      accountUsage()
     },
   }
 }

@@ -106,9 +106,37 @@ describe('listCourseSummaries', () => {
       a2: { status: 'mastered', review_due: '2026-09-30' },
     })
     store.write('b', 'mastery', { b1: { status: 'mastered', review_due: '2026-09-30' } })
-    const items = listCourseSummaries(store)
+    const items = listCourseSummaries(store, '2026-09-19')
     assert.equal(items[0].dueCount, 1)
     assert.equal(items[1].dueCount, undefined)
+    assert.equal(listCourseSummaries(store, '2026-10-08')[0].dueCount, 2)
+  })
+
+  it('教研地图不等于摸底完成，已有计划的重测也应续测', () => {
+    const store = makeStore()
+    store.create('a', { goal: '目标' })
+    const stage = () => listCourseSummaries(store, '2026-10-08')[0].stage
+    assert.equal(stage(), 'need-assess')
+    store.write('a', 'knowledge-map', { nodes: [{ id: 'a1', title: '基础' }], verified: true })
+    assert.equal(stage(), 'need-assess')
+    store.write('a', 'learner-profile', { assessed_at: '2026-10-08', nodes: {} })
+    assert.equal(stage(), 'need-plan')
+    store.write('a', 'plan', { path: ['a1'], milestones: [] })
+    assert.equal(stage(), 'ready')
+    store.write('a', 'assessment', { node_order: ['a1'], current_node: 'a1', asked: [], scores: {} })
+    assert.equal(stage(), 'need-assess')
+    store.remove('a', 'assessment')
+    assert.equal(stage(), 'ready')
+  })
+
+  it('看板指针与实际下一课一致，复习降级可回退', () => {
+    const store = makeStore()
+    store.create('a', { goal: '目标' })
+    store.write('a', 'plan', { path: ['a1', 'a2'], current: 'a2', milestones: [] })
+    store.write('a', 'mastery', { a1: { status: 'weak' }, a2: { status: 'mastered' } })
+    assert.equal(courseProgress(store, 'a').current, 'a1')
+    store.write('a', 'mastery', { a1: { status: 'mastered' }, a2: { status: 'mastered' } })
+    assert.equal(courseProgress(store, 'a').current, undefined)
   })
 })
 

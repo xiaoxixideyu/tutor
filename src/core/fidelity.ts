@@ -1,5 +1,6 @@
 // 忠实度抽查（四期评测第一块）：从课堂会话日志事实中量化——计划覆盖率/引用纪律/超纲/成本
 // 输入全部来自会话日志（唯一事实来源），规则层零模型成本
+import { normalizeUsage, type ReportedUsage } from './cost.ts'
 
 export interface LessonIntroView {
   node: string
@@ -11,8 +12,8 @@ export interface LessonIntroView {
 export interface SessionEventView {
   type: string
   data?: {
-    usage?: { inputTokens?: number; outputTokens?: number }
-    message?: { content: { type: string; text?: string }[]; role?: string }
+    usage?: ReportedUsage
+    message?: { content: { type: string; text?: string }[]; role?: string; usage?: ReportedUsage }
     inserted?: { content?: { type: string; text?: string }[] }[]
   }
 }
@@ -58,10 +59,10 @@ export function parseSessionLog(events: SessionEventView[]): SessionLogView {
     if (event.type === 'assistant/message') {
       const text = textOf(event.data?.message?.content)
       if (text !== '') assistantTexts.push(text)
-      const usageSample = event.data?.usage
-      if (usageSample && typeof usageSample.inputTokens === 'number' && typeof usageSample.outputTokens === 'number') {
-        usage.push({ inputTokens: usageSample.inputTokens, outputTokens: usageSample.outputTokens })
-      }
+    }
+    if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
+      const sample = normalizeUsage(event.data?.usage ?? event.data?.message?.usage)
+      if (sample) usage.push(sample)
     }
   }
   return { intro, assistantTexts, userTexts, usage }

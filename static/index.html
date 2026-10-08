@@ -23,6 +23,7 @@
   .course .row1 { display: flex; align-items: baseline; gap: 10px; }
   .enter { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
   .enter:hover { opacity: .9; }
+  .review-btn { background: var(--due); }
   .course .id { font-weight: 600; color: var(--accent); }
   .course .goal { color: var(--fg); font-size: 14px; flex: 1; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; }
@@ -84,8 +85,17 @@ async function renderList() {
         const reviewLine = dueById.has(c.id)
           ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
           : ''
+        // CTA 按阶段分流：有计划才进课堂；半成品课导去向导补齐（摸底/计划），不再把用户丢进「缺计划」死路。
+        const cta = c.stage === 'ready'
+          ? { label: '上课 →', href: `/lesson.html?course=${encodeURIComponent(c.id)}` }
+          : c.stage === 'need-plan'
+            ? { label: '生成计划 →', href: `/wizard.html?course=${encodeURIComponent(c.id)}&resume=plan` }
+            : { label: '去摸底 →', href: `/wizard.html?course=${encodeURIComponent(c.id)}&resume=assess` }
+        const reviewBtn = c.dueCount
+          ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
+          : ''
         return `<div class="course" data-id="${esc(c.id)}">
-          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}<button class="enter" data-course="${esc(c.id)}">上课 →</button></div>
+          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}${reviewBtn}<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button></div>
           <div class="bar"><span style="width:${pct}%"></span></div>
           <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
           ${reviewLine}
@@ -98,7 +108,7 @@ async function renderList() {
   for (const btn of $panel.querySelectorAll('.enter')) {
     btn.addEventListener('click', (event) => {
       event.stopPropagation()
-      location.href = `/lesson.html?course=${encodeURIComponent(btn.dataset.course)}`
+      location.href = btn.dataset.href
     })
   }
 }
@@ -112,22 +122,40 @@ async function renderStatus(id) {
       <td>${esc(n.status)}</td><td>${esc(n.id)}</td><td>${esc(n.title ?? '')}</td>
       <td>${n.score !== undefined ? esc(n.score) : ''}</td>
       <td>${n.review_due !== undefined ? `复习→${esc(n.review_due)}` : ''}</td>
+      <td>${p.hasPlan ? `<button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}&node=${encodeURIComponent(n.id)}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
     </tr>`
   }).join('')
-  const milestoneRows = p.milestones.map((m) =>
-    `<div class="meta">${esc(m.id)} ${esc(m.title)}　[${m.masteredCount}/${m.nodes.length}]</div>`
-  ).join('')
+  // 里程碑：已通过大考→标「✓ 大考通过」；全部节点已掌握且未通过→给「参加大考」入口；否则显示掌握进度。
+  const milestoneRows = p.milestones.map((m) => {
+    const frac = `[${m.masteredCount}/${m.nodes.length}]`
+    let tail = ''
+    if (m.examPassed) {
+      const pctText = m.examScore !== undefined ? `（${Math.round(m.examScore * 100)} 分）` : ''
+      tail = `<span style="color:var(--mastered)">✓ 大考通过${pctText}</span>`
+    } else if (m.examable) {
+      tail = `<button class="enter ms-exam" data-href="/exam.html?course=${encodeURIComponent(p.id)}&milestone=${encodeURIComponent(m.id)}">参加大考 →</button>`
+    }
+    return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${esc(m.id)} ${esc(m.title)}　${frac}</span>${tail}</div>`
+  }).join('')
   const c = p.counts
+  // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（practice.html 内部再兜底判定）。
+  const practiceRow = p.hasPlan
+    ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
+    : ''
   $panel.innerHTML = `
     <button class="back" id="back">← 返回课程列表</button>
     <h2 style="margin-top:12px">${esc(p.id)}${p.goal ? ` · ${esc(p.goal)}` : ''}</h2>
-    <div class="meta">指针：${p.current ? esc(p.current) : p.path.length > 0 ? '（未开始）' : '（无计划）'}</div>
+    <div class="meta">指针：${p.current ? esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
     <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
+    ${practiceRow}
     ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
     <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
-    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th></tr></thead>
+    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>实践</th></tr></thead>
     <tbody>${nodeRows}</tbody></table>`
   document.getElementById('back').addEventListener('click', renderList)
+  for (const btn of $panel.querySelectorAll('.ms-exam, .go-practice')) {
+    btn.addEventListener('click', () => { location.href = btn.dataset.href })
+  }
 }
 
 renderList().catch((error) => {

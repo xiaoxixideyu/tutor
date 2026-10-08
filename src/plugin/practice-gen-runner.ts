@@ -1,14 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { buildPracticeGenPrompt, validatePracticeTasks } from '../core/practice.ts'
-import type { Mastery, Plan, PracticeTaskFile, Profile } from '../core/schema.ts'
+import { buildPracticeGenPrompt, practiceGenerationNodes, validatePracticeTasks } from '../core/practice.ts'
+import type { KnowledgeMap, Plan, PracticeTaskFile, Profile } from '../core/schema.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { generateTurn, parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
 
 const name = 'tutor-practice-gen-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required(), batchSize: z.number().default(3) })
+const Config = z.object({ courseId: z.string().required(), batchSize: z.number().default(3), nodeId: z.string().default('') })
 
 interface StoreView {
   root: string
@@ -22,11 +22,12 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-async function run(ctx: Context, config: { courseId: string; batchSize: number }): Promise<void> {
+async function run(ctx: Context, config: { courseId: string; batchSize: number; nodeId?: string }): Promise<void> {
   const courseState = ctx.get('courseState') as { store: StoreView } | undefined
   if (!courseState) throw new Error('tutor: 核心服务未就绪')
   const store = courseState.store
-  const exit = ctx.get('appExit') as unknown as (code: number) => void
+  const appExit = ctx.get('appExit') as unknown as (code: number) => void
+  const exit = (code: number) => { process.stdin.destroy(); appExit(code) }
   const out = process.stdout
   if (!store.exists(config.courseId)) {
     process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
@@ -39,18 +40,16 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
-  const map = store.read(config.courseId, 'knowledge-map') as { nodes: { id: string; title?: string; summary?: string }[] }
+  const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const plan = store.read(config.courseId, 'plan') as Plan
-  const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const file: PracticeTaskFile = store.has(config.courseId, 'practice')
     ? (store.read(config.courseId, 'practice') as PracticeTaskFile)
     : { generated_at: today(), tasks: [] }
   if (store.has(config.courseId, 'practice')) out.write(`已有实践任务（${file.tasks.length} 个），继续补齐。\n`)
 
-  const covered = new Set(file.tasks.map((task) => task.node))
-  const queue = plan.path.filter((nodeId) => mastery?.[nodeId]?.status !== 'mastered' && !covered.has(nodeId))
+  const queue = practiceGenerationNodes(plan, map, file, config.nodeId)
   if (queue.length === 0) {
-    out.write('路径上的知识点均已有实践任务（或已掌握），无需生成。\n')
+    out.write('所选知识点均已有实践任务，无需生成。\n')
     exit(0)
     return
   }
@@ -91,11 +90,12 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   exit(0)
 }
 
-export function apply(ctx: Context, config: { courseId: string; batchSize: number }): void {
+export function apply(ctx: Context, config: { courseId: string; batchSize: number; nodeId?: string }): void {
   const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
   if (!exit) throw new Error('tutor-practice-gen-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {
     process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.stdin.destroy()
     exit(1)
   })
 }

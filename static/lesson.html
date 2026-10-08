@@ -17,6 +17,8 @@
   header button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
   header button.danger { color: var(--red); }
   header button:hover { background: var(--bg); }
+  header a.backlink { text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  header a.backlink:hover { background: var(--bg); }
   #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
   .bubble { margin-bottom: 14px; }
   .tutor { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; line-height: 1.65; font-size: 14px; }
@@ -55,6 +57,7 @@
 </head>
 <body>
 <header>
+  <a href="/" class="backlink">← 课程列表</a>
   <h1>课堂</h1>
   <span class="state" id="state">未连接</span>
   <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
@@ -74,7 +77,12 @@
     <button id="send">发送</button>
   </div>
 </footer>
+<script src="/flow-client.js"></script>
 <script>
+const flowClient = new TutorFlowClient((message) => {
+  setBusy(false)
+  $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
+})
 const $log = document.getElementById('log')
 const $input = document.getElementById('input')
 const $state = document.getElementById('state')
@@ -257,9 +265,10 @@ function submitChips(letters) {
 
 function closeBubble() {
   if (bubble) renderBubble()
+  const text = bubbleText
   bubble = null
   bubbleText = ''
-  return bubbleText
+  return text
 }
 
 function handleLine(line) {
@@ -299,6 +308,35 @@ function feed(text) {
   }
 }
 
+// 上课以 code 0 退出（讲完一节或主动暂停）后的续接：给「继续上课 / 返回课程列表」两个入口，
+// 而不是显示死板的「已结束」。继续＝对同一门课重新起 learn，runner 会从 plan.current 续到下一节
+// （若是暂停则续回本节草稿）。
+function renderLearnContinue() {
+  const courseId = activeCourse || new URLSearchParams(location.search).get('course')
+  const row = el('<div class="chips"></div>')
+  const back = el('<button class="chip">← 课程列表</button>')
+  back.addEventListener('click', () => { location.href = '/' })
+  if (courseId) {
+    const cont = el('<button class="chip">继续上课 →</button>')
+    cont.addEventListener('click', async () => {
+      if (busy) return
+      row.remove()
+      setBusy(true, '备课中（可能需要 1-3 分钟）')
+      const result = await api('/flow/start', { kind: 'learn', courseId })
+      if (!result.ok) {
+        setBusy(false)
+        $log.appendChild(el(`<div class="errline">${esc(result.error || '继续失败')}</div>`))
+        return
+      }
+      $state.textContent = `课堂进行中：${courseId}`
+    })
+    row.appendChild(cont)
+  }
+  row.appendChild(back)
+  $log.appendChild(row)
+  scrollToEnd()
+}
+
 function setUserEcho(line) {
   const div = el(`<div class="userline">你：${esc(line)}</div>`)
   $log.appendChild(div)
@@ -306,7 +344,8 @@ function setUserEcho(line) {
 }
 
 async function startSse() {
-  const es = new EventSource('/flow/stream')
+  const es = flowClient.connect()
+  if (!es) return
   es.onmessage = (event) => {
     const msg = JSON.parse(event.data)
     if (msg.type === 'hello' && msg.replay === undefined) {
@@ -327,25 +366,27 @@ async function startSse() {
       const closed = closeBubble()
       if (closed) maybeChips(closed)
       setBusy(false)
-      $state.textContent = '已结束'
-      $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
+      if (msg.kind === 'learn' && msg.code === 0) {
+        // learn 每讲完一节 / 暂停都以 0 退出——给「继续上课 / 返回」入口，别让用户以为课程结束了
+        $state.textContent = '本节告一段落'
+        renderLearnContinue()
+      } else {
+        $state.textContent = '已结束'
+        $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
+      }
     }
     scrollToEnd()
   }
   es.onerror = () => {
     $state.textContent = '连接中断，重连中…'
-    es.close()
-    setTimeout(startSse, 1500)
+    setBusy(false)
   }
 }
 
 async function api(path, body) {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  return response.json()
+  const result = await flowClient.request(path, body)
+  if (path === '/flow/start' && result.ok) startSse()
+  return result
 }
 
 async function ensureLesson() {
@@ -383,29 +424,71 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   await api('/flow/stop')
 })
 
-// 页面加载：若空闲则显示选课入口
-ensureLesson().then(async (course) => {
-  if (course) {
-    $state.textContent = `课堂进行中：${course.courseId}`
+// 全局同一时间只运行一个流程；课程或流程类型不匹配时，显示切换入口。
+function renderCourseMismatch(runningFlow, wanted) {
+  flowClient.attach(runningFlow)
+  const running = runningFlow.courseId
+  const kind = { new: '需求访谈', assess: '摸底测评', plan: '教学规划', research: '教研',
+    learn: '课堂', exam: '里程碑大考', 'practice-gen': '实践任务生成', practice: '实践' }[runningFlow.kind] || '教学流程'
+  $state.textContent = `${kind}进行中：${running}`
+  $banner.innerHTML = ''
+  $banner.appendChild(document.createTextNode(
+    `当前正在进行「${running}」的${kind}。tutor 同一时间只能运行一个流程；开始「${wanted}」课堂前，需要先结束当前流程。`))
+  const btn = el(`<button style="margin-top:8px;cursor:pointer">结束当前流程并开始「${esc(wanted)}」课堂</button>`)
+  btn.addEventListener('click', async () => {
+    btn.disabled = true
+    btn.textContent = `正在结束${kind}…`
+    const stopped = await api('/flow/stop')
+    if (!stopped.ok) { btn.disabled = false; btn.textContent = '重试切换'; return }
+    // 等旧流程子进程真正退出（serve 侧 flow 置空）再起新课，否则会撞「已有进行中的流程」
+    for (let i = 0; i < 40; i++) {
+      const s = await (await fetch('/flow/state')).json()
+      if (!s.active) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    const result = await api('/flow/start', { kind: 'learn', courseId: wanted })
+    if (!result.ok) { $banner.textContent = result.error || '切换失败'; btn.disabled = false; return }
+    $banner.style.display = 'none'
+    $state.textContent = `课堂进行中：${wanted}`
+    setBusy(true, '备课中（搜索与生成，可能需要 1-3 分钟）')
+    startSse()
+  })
+  $banner.appendChild(document.createElement('br'))
+  $banner.appendChild(btn)
+  $banner.style.display = 'block'
+}
+
+// 页面加载：同时核对课程与流程类型，决定附着、提示切换或起新课。
+const wanted = new URLSearchParams(location.search).get('course')
+ensureLesson().then(async (running) => {
+  // 不匹配时先提示切换，避免将其他课程或其他类型的输出灌进课堂。
+  if (running && (running.kind !== 'learn' || (wanted && running.courseId !== wanted))) {
+    renderCourseMismatch(running, wanted || running.courseId)
     return
   }
-  const wanted = new URLSearchParams(location.search).get('course')
+  if (running) {
+    flowClient.attach(running)
+    $state.textContent = `课堂进行中：${running.courseId}`
+    startSse()
+    return
+  }
   if (wanted) {
     const result = await api('/flow/start', { kind: 'learn', courseId: wanted })
     if (result.ok) {
       $state.textContent = `课堂进行中：${wanted}`
       $banner.style.display = 'none'
       setBusy(true, '备课中（搜索与生成，可能需要 1-3 分钟）')
-      return
+    } else {
+      $banner.textContent = result.error
+      $banner.style.display = 'block'
     }
-    $banner.textContent = result.error
-    $banner.style.display = 'block'
+    startSse()
     return
   }
   $banner.textContent = '当前没有进行中的课堂——去课程列表点「上课」开始。'
   $banner.style.display = 'block'
+  startSse()
 })
-startSse()
 </script>
 </body>
 </html>

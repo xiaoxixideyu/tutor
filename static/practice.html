@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 实践</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --green: #16a34a; --yellow: #d97706; --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  header .state { font-size: 12px; color: var(--muted); }
+  header button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
+  header button.danger { color: var(--red); }
+  header button:hover { background: var(--bg); }
+  header a.backlink { text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  header a.backlink:hover { background: var(--bg); }
+  #log { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .term { background: #0d1117; color: #e6edf3; border-radius: 10px; padding: 14px 16px; font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .term .ok { color: #3fb950; }
+  .term .no { color: #f85149; }
+  .term .hd { color: #d29922; font-weight: 600; }
+  .term .me { color: #58a6ff; }
+  .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; }
+  .busy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+  .intro { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; line-height: 1.6; font-size: 14px; }
+  .intro .big { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; font-size: 14px; margin-top: 10px; }
+  .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; margin: 6px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .chip { background: var(--card); border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  .chip:hover { background: #eef2ff; }
+  footer { border-top: 1px solid var(--border); background: var(--card); padding: 12px 20px; }
+  .ctl { display: flex; gap: 8px; max-width: 860px; margin: 0 auto 8px; width: 100%; }
+  .ctl button { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 6px 16px; font-size: 13px; cursor: pointer; color: var(--fg); }
+  .ctl button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ctl button:disabled { opacity: .5; cursor: default; }
+  .inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
+  .inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; }
+  .inputrow input:disabled { background: var(--bg); }
+  .inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+  .banner { background: #fef3c7; color: #92400e; padding: 8px 20px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/" class="backlink">← 课程列表</a>
+  <h1 id="title">实践任务</h1>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">运行中…</span></span>
+  <span class="state" id="state">未连接</span>
+  <button id="stopBtn" class="danger">存盘退出</button>
+</header>
+<div class="banner" id="banner"></div>
+<div style="padding:12px 20px"><label for="nodeSelect">练习知识点：</label><select id="nodeSelect" aria-label="练习知识点"></select></div>
+<main id="log"></main>
+<footer>
+  <div class="ctl">
+    <button id="runBtn" class="primary" disabled>运行测试</button>
+    <button id="rerunBtn" disabled>重跑</button>
+    <button id="quitBtn">存盘退出</button>
+  </div>
+  <div class="inputrow">
+    <input id="input" placeholder="需要选择任务序号时在此输入…（Enter 发送）" autocomplete="off" disabled>
+    <button id="send" disabled>发送</button>
+  </div>
+</footer>
+<script src="/flow-client.js"></script>
+<script>
+const flowClient = new TutorFlowClient((message) => {
+  setRunning(false)
+  $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
+})
+// 实践页：与 lesson/exam 不同——practice 是零模型交互 runner，提示符是内联 `…> `（无独占一行的 `>` 哨兵），
+// 所以这里不走哨兵机制，而是把 stdout 当终端流原样渲染，靠识别已知提示符（回车运行测试 / 选择任务序号）切回「就绪」。
+// 用户在自己的编辑器改 courses/<id>/sandbox/<task_id>/ 下的真实文件，回到本页点「运行测试」。
+const $log = document.getElementById('log')
+const $input = document.getElementById('input')
+const $send = document.getElementById('send')
+const $state = document.getElementById('state')
+const $banner = document.getElementById('banner')
+const runBtn = document.getElementById('runBtn')
+const rerunBtn = document.getElementById('rerunBtn')
+const quitBtn = document.getElementById('quitBtn')
+const params = new URLSearchParams(location.search)
+const wantedCourse = params.get('course')
+let wantedNode = params.get('node')
+const $nodeSelect = document.getElementById('nodeSelect')
+$nodeSelect.addEventListener('change', () => {
+  location.href = `/practice.html?course=${encodeURIComponent(wantedCourse)}&node=${encodeURIComponent($nodeSelect.value)}`
+})
+const KIND_LABEL = { new: '建档访谈', assess: '摸底', plan: '生成计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '生成实践', practice: '实践' }
+
+let pending = ''
+let term = null
+let running = false
+let canSend = false
+let busyTimer = null
+let busySeconds = 0
+
+function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
+function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
+function scrollToEnd() { if ($log.scrollHeight - $log.scrollTop - $log.clientHeight < 120) $log.scrollTop = $log.scrollHeight }
+function showBanner(t) { $banner.textContent = t; $banner.style.display = 'block' }
+function hideBanner() { $banner.style.display = 'none' }
+function labelFor(kind, courseId) { return `${KIND_LABEL[kind] || kind}进行中：${courseId}` }
+
+async function rpc(method, params) {
+  const response = await fetch('/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }) })
+  const body = await response.json()
+  if (body.error) throw new Error(body.error.message)
+  return body.result
+}
+async function api(path, body) {
+  const result = await flowClient.request(path, body)
+  if (path === '/flow/start' && result.ok) startSse()
+  return result
+}
+function ensureTerm() {
+  if (!term) { term = document.createElement('div'); term.className = 'term'; $log.appendChild(term) }
+  return term
+}
+
+function appendLine(text, cls) {
+  ensureTerm()
+  const span = document.createElement('span')
+  if (cls) span.className = cls
+  span.textContent = text
+  term.appendChild(span)
+  term.appendChild(document.createTextNode('\n'))
+  scrollToEnd()
+}
+
+function renderStreamLine(line) {
+  let cls = ''
+  if (/^\s*✓/.test(line)) cls = 'ok'
+  else if (/^\s*✗/.test(line)) cls = 'no'
+  else if (/^【.*】/.test(line)) cls = 'hd'
+  appendLine(line, cls)
+}
+
+// practice runner 的提示符无换行、原样留在缓冲尾：识别到就把它当一行刷出并切回就绪。
+const PROMPT_RE = /回车运行测试|选择任务序号/
+function feed(text) {
+  pending += text
+  let idx
+  while ((idx = pending.indexOf('\n')) >= 0) {
+    renderStreamLine(pending.slice(0, idx))
+    pending = pending.slice(idx + 1)
+  }
+  if (PROMPT_RE.test(pending)) {
+    renderStreamLine(pending)
+    pending = ''
+    setRunning(false)
+  }
+}
+
+function setRunning(on, label) {
+  running = on
+  const $busy = document.getElementById('busy')
+  if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  $input.disabled = on || !canSend; $send.disabled = on || !canSend
+  runBtn.disabled = on || !canSend; rerunBtn.disabled = on || !canSend
+  if (on) {
+    busySeconds = 0
+    document.getElementById('busyText').textContent = `${label ?? '运行中'}… 0s`
+    $busy.style.display = 'inline-flex'
+    busyTimer = setInterval(() => { busySeconds++; document.getElementById('busyText').textContent = `${label ?? '运行中'}… ${busySeconds}s` }, 1000)
+  } else { $busy.style.display = 'none'; $input.focus() }
+}
+function sendLine(line, echo) {
+  if (running || !canSend) return
+  appendLine(echo ?? `> ${line}`, 'me')
+  setRunning(true, '运行测试')
+  api('/flow/input', { line }).then((r) => {
+    if (!r || r.ok === false) { setRunning(false); appendLine('（没有进行中的实践，请先从课程列表进入）', 'no') }
+  })
+}
+async function stop() { await api('/flow/stop') }
+
+runBtn.addEventListener('click', () => sendLine('', '> 〔运行测试〕'))
+rerunBtn.addEventListener('click', () => sendLine('r', '> r 〔重跑〕'))
+quitBtn.addEventListener('click', stop)
+document.getElementById('stopBtn').addEventListener('click', stop)
+$send.addEventListener('click', () => { const v = $input.value.trim(); if (!v) return; $input.value = ''; sendLine(v, `> ${v}`) })
+$input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { const v = $input.value.trim(); if (!v) return; $input.value = ''; sendLine(v, `> ${v}`) } })
+
+function handleExit(kind, code) {
+  if (pending) { renderStreamLine(pending); pending = '' }
+  canSend = false
+  setRunning(false)
+  if (kind === 'practice-gen') {
+    if (code === 0) { appendLine('', ''); appendLine('✓ 实践任务已生成，正在进入练习…', 'ok'); startPractice(); return }
+    $state.textContent = '生成失败'
+    appendLine(`—— 生成实践任务失败（code ${code}）——`, 'no')
+    renderRetry(); return
+  }
+  $state.textContent = code === 0 ? '已退出' : '实践结束'
+  appendLine(`—— 实践进程退出（code ${code}）——`, '')
+  renderDone()
+}
+
+function startSse() {
+  const es = flowClient.connect()
+  if (!es) return
+  es.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'hello') {
+      $log.innerHTML = ''; pending = ''; term = null
+      canSend = msg.kind === 'practice' && msg.nodeId === wantedNode && msg.status === 'running'
+      $state.textContent = msg.courseId ? labelFor(msg.kind, msg.courseId) : '空闲'
+      return
+    }
+    if (msg.type === 'out') feed(msg.text)
+    else if (msg.type === 'err') appendLine(String(msg.text).replace(/\n$/, ''), 'no')
+    else if (msg.type === 'exit') handleExit(msg.kind, msg.code)
+    scrollToEnd()
+  }
+  es.onerror = () => { canSend = false; setRunning(false); $state.textContent = '连接中断，重连中…' }
+}
+function renderDone() {
+  const row = el('<div class="chips"></div>')
+  const again = el('<button class="chip">重新进入实践</button>')
+  again.addEventListener('click', async () => { $log.innerHTML = ''; term = null; pending = ''; await startPractice() })
+  const back = el('<button class="chip">← 课程列表</button>')
+  back.addEventListener('click', () => { location.href = '/' })
+  row.appendChild(again); row.appendChild(back); $log.appendChild(row); scrollToEnd()
+}
+function renderRetry() {
+  const row = el('<div class="chips"></div>')
+  const retry = el('<button class="chip">重试生成</button>')
+  retry.addEventListener('click', async () => { $log.innerHTML = ''; term = null; pending = ''; await startPracticeGen() })
+  const back = el('<button class="chip">← 课程列表</button>')
+  back.addEventListener('click', () => { location.href = '/' })
+  row.appendChild(retry); row.appendChild(back); $log.appendChild(row); scrollToEnd()
+}
+function renderGenPrompt() {
+  $log.innerHTML = ''; term = null
+  const card = el('<div class="intro"></div>')
+  card.appendChild(el('<div>这个知识点还没有实践任务。</div>'))
+  card.appendChild(el('<div style="color:var(--muted);margin-top:6px">生成实践任务需要调用模型，通常 1–2 分钟；生成后即可开始动手练习。</div>'))
+  const btn = el('<button class="big">生成实践任务</button>')
+  btn.addEventListener('click', async () => { btn.disabled = true; if (await startPracticeGen()) startSse(); else btn.disabled = false })
+  card.appendChild(btn); $log.appendChild(card)
+}
+
+async function startPractice() {
+  const result = await api('/flow/start', { kind: 'practice', courseId: wantedCourse, nodeId: wantedNode })
+  if (!result.ok) { showBanner(result.error || '开始实践失败'); return false }
+  $state.textContent = `实践进行中：${wantedCourse}`; hideBanner(); setRunning(true, '启动中'); return true
+}
+async function startPracticeGen() {
+  const result = await api('/flow/start', { kind: 'practice-gen', courseId: wantedCourse, nodeId: wantedNode })
+  if (!result.ok) { showBanner(result.error || '生成实践任务失败'); return false }
+  $state.textContent = `生成实践任务中：${wantedCourse}`; hideBanner(); setRunning(true, '生成任务中（可能 1–2 分钟）'); return true
+}
+// 全局流程桥同一时间只跑一个子进程。想练习却撞上别的进行中流程（另一门课、或本课的课堂/大考等）时，
+// 如实说明并给「结束并开始实践」入口，而不是把别的流程的输出灌进本页。
+function renderFlowMismatch(runningFlow) {
+  flowClient.attach(runningFlow)
+  const runLabel = KIND_LABEL[runningFlow.kind] || runningFlow.kind
+  $state.textContent = `${runLabel}进行中：${runningFlow.courseId}`
+  $banner.innerHTML = ''
+  $banner.appendChild(document.createTextNode(
+    `当前正在进行「${runningFlow.courseId} · ${runLabel}${runningFlow.nodeId ? ' · ' + runningFlow.nodeId : ''}」。要练习「${wantedCourse} · ${wantedNode}」，请先结束当前流程。`))
+  const btn = el('<button style="margin-top:8px;cursor:pointer">结束当前流程并开始实践</button>')
+  btn.addEventListener('click', async () => {
+    btn.disabled = true; btn.textContent = '正在结束当前流程…'
+    await api('/flow/stop')
+    for (let i = 0; i < 40; i++) {
+      const s = await (await fetch('/flow/state')).json()
+      if (!s.active) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    hideBanner()
+    if (await enterPractice()) startSse(); else btn.disabled = false
+  })
+  $banner.appendChild(document.createElement('br')); $banner.appendChild(btn); $banner.style.display = 'block'
+}
+
+// 有 practice.yaml → 直接练；没有 → 先给「生成实践任务」入口（不擅自烧模型额度）。返回是否已起流程（决定要不要连 SSE）。
+async function enterPractice() {
+  let hasPractice = false
+  try { hasPractice = !!(await rpc('courseStatus', { id: wantedCourse })).nodes.find((node) => node.id === wantedNode)?.practiceCount }
+  catch (e) { showBanner('读取课程状态失败：' + e.message); return false }
+  if (hasPractice) return await startPractice()
+  renderGenPrompt(); return false
+}
+
+// 页面加载：按 URL 想练的课 vs 全局正在跑的流程，决定附着 / 提示切换 / 起新练习。
+;(async () => {
+  if (!wantedCourse) { showBanner('缺少 course 参数——请从课程列表进入实践。'); return }
+  const state = await (await fetch('/flow/state')).json()
+  const act = state.active
+  const course = await rpc('courseStatus', { id: wantedCourse })
+  if (!course.hasPlan) { showBanner('请先完成课程规划，再选择知识点实践。'); return }
+  const sameCourse = act && ['practice', 'practice-gen'].includes(act.kind) && act.courseId === wantedCourse
+  wantedNode ||= (sameCourse && act.nodeId) || course.current || course.nodes[0]?.id
+  if (!course.nodes.some((node) => node.id === wantedNode)) { showBanner('所选知识点不存在，请从课程列表重新选择。'); return }
+  for (const node of course.nodes) {
+    const option = document.createElement('option')
+    option.value = node.id
+    option.textContent = `${node.title || node.id}${node.status === 'mastered' ? '（已掌握，可巩固）' : ''}`
+    $nodeSelect.appendChild(option)
+  }
+  $nodeSelect.value = wantedNode
+  const mine = sameCourse && act.nodeId === wantedNode
+  if (act && !mine) { renderFlowMismatch(act); return }
+  if (act) {
+    flowClient.attach(act)
+    setRunning(true, act.kind === 'practice-gen' ? '生成任务中' : '加载中')
+    startSse(); return
+  }
+  if (await enterPractice()) startSse()
+})().catch((error) => showBanner('加载实践失败：' + error.message))
+</script>
+</body>
+</html>

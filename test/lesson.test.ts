@@ -233,9 +233,9 @@ describe('资料注入与引用核对（二期）', () => {
 
   it('备课 prompt 与教学首消息包含资料清单', () => {
     const prompt = buildPrepPrompt({ courseId: 'golang', node: 'goroutines', map: { verified: true, nodes: [], edges: [], resources: [] }, plan: { path: ['goroutines'], milestones: [], current: 'goroutines' }, profile })
-    assert.doesNotMatch(prompt, /已验证资料/)
+    assert.doesNotMatch(prompt, /【本课资料】/)
     const promptWith = buildPrepPrompt({ courseId: 'golang', node: 'x', map: { verified: true, nodes: [], edges: [], resources: [{ node: 'x', title: 'T', url: 'https://x', material: '正文' }] }, plan: { path: ['x'], milestones: [], current: 'x' }, profile })
-    assert.match(promptWith, /已验证资料/)
+    assert.match(promptWith, /尚未完成交叉验证/)
     assert.match(promptWith, /https:\/\/x/)
     const intro = buildTeachingIntro({ courseId: 'golang', node: 'x', plan: { path: ['x'], milestones: [], current: 'x' }, profile, draft, resources })
     assert.match(intro, /本课资料/)

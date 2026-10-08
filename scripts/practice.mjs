@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 // tutor 实践壳：学员在 workdir 写代码、跑规则化测试（零模型，判分在核心；三期实践任务沙箱）
 // 用法：npm run agent -- practice <课程名> [--node <知识点>]
-import readline from 'node:readline'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { CourseStore } from '../src/core/store.ts'
-import { currentNode } from '../src/core/lesson.ts'
-import { judgePracticeTask, buildPracticeIntro, applyPracticeResult } from '../src/core/practice.ts'
+import { judgePracticeTask, buildPracticeIntro, applyPracticeResult, selectPracticeNode } from '../src/core/practice.ts'
 import { runTests, ensureStarterFiles } from '../src/plugin/practice-executor.ts'
+import { createLineReader } from '../src/plugin/line-reader.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
@@ -40,6 +39,7 @@ function detectMissingTools(task) {
 const [, , , courseId, ...rest] = process.argv
 const nodeFlagIndex = rest.indexOf('--node')
 const nodeOverride = nodeFlagIndex >= 0 ? rest[nodeFlagIndex + 1] : undefined
+if (nodeFlagIndex >= 0 && !nodeOverride) throw new Error('--node 需要知识点 id')
 if (!courseId || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(courseId)) {
   process.stderr.write('用法：npm run agent -- practice <课程名> [--node <知识点>]\n')
   process.exit(1)
@@ -58,10 +58,12 @@ if (!store.has(courseId, 'plan') || !store.has(courseId, 'practice')) {
 }
 
 const plan = store.read(courseId, 'plan')
+const map = store.read(courseId, 'knowledge-map')
 const mastery = store.has(courseId, 'mastery') ? store.read(courseId, 'mastery') : undefined
-const node = nodeOverride ?? currentNode(plan, mastery)
+const prevState = store.has(courseId, 'practice-state') ? store.read(courseId, 'practice-state') : undefined
+const node = selectPracticeNode(plan, map, mastery, nodeOverride, prevState)
 if (!node) {
-  out.write('计划内知识点均已掌握，无实践任务可做。\n')
+  out.write('课程没有可实践的知识点。\n')
   process.exit(0)
 }
 
@@ -73,7 +75,7 @@ if (tasks.length === 0) {
 }
 
 // 多任务菜单 / 断点续做检测
-const prevState = store.has(courseId, 'practice-state') ? store.read(courseId, 'practice-state') : null
+const readLine = createLineReader(process.stdin)
 let task = tasks[0]
 if (tasks.length > 1) {
   out.write('本知识点有多个任务：\n')
@@ -82,9 +84,7 @@ if (tasks.length > 1) {
     out.write(`  ${index + 1}. ${t.title}${marker}\n`)
   }
   process.stdout.write('选择任务序号（回车默认 1）：')
-  const rl0 = readline.createInterface({ input: process.stdin, terminal: false })
-  const pick = await new Promise((resolve) => rl0.once('line', resolve))
-  rl0.close()
+  const pick = await readLine()
   const pickIndex = Number.parseInt((pick ?? '').trim(), 10)
   if (pickIndex >= 2 && pickIndex <= tasks.length) task = tasks[pickIndex - 1]
 }
@@ -103,15 +103,12 @@ if (prevState && prevState.task_id === task.id && !prevState.done && prevState.d
   out.write(`（续做：上次已通过 ${prevState.done_tests.join('、')}）\n`)
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false })
-const readLine = () => new Promise((resolve) => rl.once('line', resolve))
-
 let attempts = prevState?.task_id === task.id ? prevState.attempts : 0
 while (true) {
   out.write('\n回车运行测试（r 重跑，q 中止保存进度）> ')
   const line = await readLine()
   const command = (line ?? '').trim()
-  if (command === 'q') {
+  if (line === null || command === 'q') {
     out.write('进度已保存，重新运行 practice 即可续做。\n')
     process.exit(0)
   }

@@ -39,6 +39,7 @@ export interface LearnerProfile {
 
 export interface Plan {
   path: string[]
+  scope?: string[] // 完整课程范围，包含规划时跳过的已掌握节点，供遗忘后补救。
   milestones: { id: string; title: string; nodes: string[]; exam_date?: string; exam_score?: number; exam_passed?: boolean }[]
   current?: string
 }
@@ -48,6 +49,15 @@ export interface MasteryEntry {
   score?: number
   review_due?: string
   review_stage?: number
+  last_review?: { attempt_id: string; answers: string[]; result: ReviewResult }
+}
+
+export interface ReviewResult {
+  score: number
+  correct: number
+  total: number
+  perQuestion: { id: string; question: string; your: string; correct: boolean; answer: string }[]
+  entry: Omit<MasteryEntry, 'last_review'>
 }
 
 export type Mastery = Record<string, MasteryEntry>
@@ -88,6 +98,7 @@ export const LearnerProfileSchema = z.object({
 
 export const PlanSchema = z.object({
   path: z.array(z.string()).required(),
+  scope: z.array(z.string()),
   milestones: z
     .array(
       z.object({
@@ -103,13 +114,32 @@ export const PlanSchema = z.object({
   current: z.string(),
 }) as unknown as Schema<any, Plan>
 
-const MasteryEntrySchema = z.object({
+const masteryFields = {
   status: z
     .union([z.const('mastered'), z.const('learning'), z.const('weak'), z.const('unknown')])
     .required(),
   score: z.number().min(0).max(1),
   review_due: dateStr,
   review_stage: z.number().min(1).max(4),
+}
+
+const MasteryEntrySchema = z.object({
+  ...masteryFields,
+  // 回执与掌握度在同一原子文件更新内提交，避免“已记分但回执没落盘”的重试窗口。
+  last_review: z.union([z.const(undefined), z.object({
+    attempt_id: z.string().required(),
+    answers: z.array(z.string()).required(),
+    result: z.object({
+      score: z.number().min(0).max(1).required(),
+      correct: z.number().min(0).required(),
+      total: z.number().min(1).required(),
+      perQuestion: z.array(z.object({
+        id: z.string().required(), question: z.string().required(), your: z.string().required(),
+        correct: z.boolean().required(), answer: z.string().required(),
+      })).required(),
+      entry: z.object(masteryFields).required(),
+    }).required(),
+  })]),
 }) as unknown as Schema<any, Mastery[string]>
 
 export const MasterySchema = z.dict(MasteryEntrySchema) as unknown as Schema<any, Mastery>

@@ -54,21 +54,30 @@ function bankPrompt(map: KnowledgeMap): string {
     '任务 2/2：生成摸底题库。需覆盖以下知识点：',
     nodes,
     '',
-    '对每个知识点出恰好 3 道题，难度 1（基础概念）/ 2（简单应用）/ 3（综合分析）各一道，客观题为主：约三分之二选择题、其余简答题。',
+    '对每个知识点出恰好 3 道题，难度 1（基础概念）/ 2（简单应用）/ 3（综合分析）各一道，全部为四选一单选题。',
+    '',
+    '干扰项质量（关键，直接决定摸底能否区分「真会」与「蒙对」）：',
+    '- 三个错误项都要“看起来像对的”：是本知识点里真实存在的概念、常见误区，或与正解只差一处关键点的近似说法；不能放明显无关或荒谬的选项（反例：问「幻觉」却把干扰项写成「梯度爆炸」「灾难性遗忘」这种一眼可排除的词）。',
+    '- 四个选项同一类型、同一粒度、长度相近，不靠字数长短暴露正解；不用「以上皆是/皆非」「完全不/绝不」这类可直接排除的表述。',
+    '- 正解在 A/B/C/D 间尽量均匀分布，不要集中在某个字母。',
+    '',
     '输出 JSON（```json 代码块）：以知识点 id 为键，值为题目数组，每题字段：',
     '- id: 唯一题号（如 "goroutines-d2"）',
     '- difficulty: 1 或 2 或 3',
-    '- type: "choice" 或 "short"',
+    '- type: 固定为 "choice"',
     '- question: 题干（中文，自然表述，不出现编号，不泄露答案）',
-    '- choices: 仅选择题，恰好 4 个选项字符串',
-    '- answer: 选择题为 A-D 字母；简答题为唯一简短答案',
-    '- accept: 仅简答题，可接受的等价答案列表',
+    '- choices: 恰好 4 个选项字符串（不带 A./B. 前缀，数组顺序即 A、B、C、D）',
+    '- answer: 正确选项字母（A-D）',
     '所有知识点都必须出现在 JSON 中。',
   ].join('\n')
 }
 
 function answerText(q: Question): string {
-  return q.type === 'choice' ? q.answer.trim().toUpperCase() : q.answer
+  if (q.type !== 'choice') return q.answer
+  const letter = q.answer.trim().toUpperCase()
+  const idx = 'ABCD'.indexOf(letter)
+  const text = idx >= 0 ? q.choices?.[idx] : undefined
+  return text ? `${letter}. ${text}` : letter
 }
 
 async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEngine, map: KnowledgeMap): Promise<void> {
@@ -85,12 +94,21 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
       const q = current.question
       out.write(`\n（难度 ${q.difficulty}，第 ${current.askedCount + 1} 题）${q.question}\n`)
       if (q.type === 'choice') {
-        for (const choice of q.choices ?? []) out.write(`  ${choice}\n`)
-        out.write('（回答选项字母）\n')
+        // 带定位字母（A/B/C…，与题库里 answer 的字母语义一致）：CLI 端看得清，Web 端才能把这些行解析成可点选项。
+        const letters = 'ABCDEF'
+        for (const [i, choice] of (q.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
+        out.write('（回答选项字母，如 A）\n')
       }
       out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
-      const answer = await readAnswer()
-      if (!answer || !answer.trim()) {
+      // 空行不等于「没作答」：可能是多按了一次回车，或共享的流程桥上别的页面（如 practice 的
+      // 「运行测试」发空行）把一个空 /flow/input 打到了当前 assess 子进程。这种情况重新提示即可，
+      // 绝不能把整轮摸底判死。只有 stdin 真正 EOF（answer===null，如 CLI 下 Ctrl-D）才存档退出。
+      let answer = await readAnswer()
+      while (answer !== null && !answer.trim()) {
+        out.write('（请输入选项字母，如 A；要中断请按 Ctrl-C）\n> ')
+        answer = await readAnswer()
+      }
+      if (answer === null) {
         store.write(courseId, 'assessment', engine.state)
         throw new Error('未收到作答——进度已保存，重新运行 assess 即可继续')
       }

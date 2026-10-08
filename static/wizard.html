@@ -17,6 +17,8 @@
   button { font-family: inherit; }
   .danger { color: var(--red); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
   .danger:hover { background: var(--bg); }
+  header a.backlink { text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  header a.backlink:hover { background: var(--bg); }
   .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 13px; }
   .busy .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
   @keyframes pulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
@@ -60,6 +62,7 @@
 </head>
 <body>
 <header>
+  <a href="/" class="backlink">← 课程列表</a>
   <h1 id="title">新课程向导</h1>
   <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中… 0s</span></span>
   <span class="state" id="state"></span>
@@ -89,7 +92,12 @@
     <button id="send">发送</button>
   </div>
 </footer>
+<script src="/flow-client.js"></script>
 <script>
+const flowClient = new TutorFlowClient((message) => {
+  setBusy(false)
+  $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
+})
 const $log = document.getElementById('log')
 const $input = document.getElementById('input')
 const $state = document.getElementById('state')
@@ -286,11 +294,38 @@ function submitChips(letters) {
   api('/flow/input', { line })
 }
 
+// 教研决策：把「先联网教研」和「跳过」并排放进对话流。顶栏那个 researchBtn 太靠边，
+// 用户容易只看到下方的「跳过」chip、以为没有进入教研的入口（实测反馈）。
+function researchDecision(skipKind, skipLabel) {
+  const row = el('<div class="chips"></div>')
+  const go = el('<button class="chip">先联网教研（约 ¥1，官方来源）</button>')
+  const skip = el(`<button class="chip">${esc(skipLabel)}</button>`)
+  const done = (next) => { row.remove(); document.getElementById('researchBtn').style.display = 'none'; startFlow(next) }
+  go.addEventListener('click', () => done('research'))
+  skip.addEventListener('click', () => done(skipKind))
+  row.appendChild(go)
+  row.appendChild(skip)
+  $log.appendChild(row)
+  scrollToEnd()
+}
+
+// 单步确认 chip：两个模型步骤之间放一个「下一步 →」按钮，避免自动触发一次模型调用（会花钱），
+// 也给用户一个明确的推进入口。用于摸底完成→生成计划这类只有唯一后继的环节。
+function nextStepChip(kind, label) {
+  const row = el('<div class="chips"></div>')
+  const go = el(`<button class="chip">${esc(label)}</button>`)
+  go.addEventListener('click', () => { row.remove(); startFlow(kind) })
+  row.appendChild(go)
+  $log.appendChild(row)
+  scrollToEnd()
+}
+
 function closeBubble() {
   if (bubble) renderBubble()
+  const text = bubbleText
   bubble = null
   bubbleText = ''
-  return bubbleText
+  return text
 }
 
 function markStep(kind, state) {
@@ -309,7 +344,8 @@ function resetSteps() {
 const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂' }
 
 async function startSse() {
-  const es = new EventSource('/flow/stream')
+  const es = flowClient.connect()
+  if (!es) return
   es.onmessage = (event) => {
     const msg = JSON.parse(event.data)
     if (msg.type === 'hello' && msg.replay === undefined) {
@@ -338,18 +374,12 @@ async function startSse() {
       if (msg.kind === 'new' && msg.code === 0) {
         markStep('new', 'done')
         $log.appendChild(el('<div class="sysline">—— 访谈完成。可先联网教研（官方来源、讲授可溯源），或直接进入摸底 ——</div>'))
-        document.getElementById('researchBtn').style.display = 'inline-block'
-        const planNow = el('<button class="chip" style="margin:10px 0">跳过教研，直接摸底 →</button>')
-        planNow.addEventListener('click', () => { planNow.remove(); startFlow('assess') })
-        $log.appendChild(planNow)
+        researchDecision('assess', '跳过教研，直接摸底 →')
       } else if (msg.kind === 'assess' && msg.code === 0) {
         markStep('assess', 'done')
-        $log.appendChild(el('<div class="sysline">—— 摸底完成。可先联网教研（生成带来源的知识地图，讲授可溯源），或直接生成计划 ——</div>'))
-        document.getElementById('researchBtn').style.display = 'inline-block'
+        $log.appendChild(el('<div class="sysline">—— 摸底完成 ——</div>'))
         document.getElementById('gotoBtn').style.display = 'none'
-        const planNow = el('<button class="chip" style="margin:10px 0">跳过教研，直接生成计划 →</button>')
-        planNow.addEventListener('click', () => { planNow.remove(); startFlow('plan') })
-        $log.appendChild(planNow)
+        nextStepChip('plan', '生成教学计划 →')
       } else if (msg.kind === 'research' && msg.code === 0) {
         markStep('research', 'done')
         document.getElementById('researchBtn').style.display = 'none'
@@ -359,21 +389,19 @@ async function startSse() {
         markStep('plan', 'done')
         $log.appendChild(el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
         document.getElementById('gotoBtn').style.display = 'inline-block'
-      } else if (msg.kind === 'research' && msg.code === 0) {
-        markStep('plan', 'done')
-        $log.appendChild(el('<div class="sysline">—— 教研完成 ——</div>'))
       } else {
         $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
       }
       scrollToEnd()
     }
   }
-  es.onerror = () => { es.close(); setTimeout(startSse, 1500) }
+  es.onerror = () => { setBusy(false); $state.textContent = '连接中断，正在重连…' }
 }
 
 async function api(path, body) {
-  const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
-  return response.json()
+  const result = await flowClient.request(path, body)
+  if (path === '/flow/start' && result.ok) startSse()
+  return result
 }
 
 async function startFlow(kind) {
@@ -401,7 +429,16 @@ function send() {
   $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
   closeBubble()
   setBusy(true)
+  // /flow/input 在没有活动流程时返回 409 {ok:false}；此前忽略响应会让「模型思考中」计时器空转不止。
   api('/flow/input', { line })
+    .then((r) => {
+      if (r && r.ok === false) {
+        setBusy(false)
+        $log.appendChild(el(`<div class="errline">${esc(r.error ?? '当前没有进行中的流程——请用上方按钮选择「先联网教研」或「跳过」')}</div>`))
+        scrollToEnd()
+      }
+    })
+    .catch(() => { setBusy(false); $log.appendChild(el('<div class="errline">发送失败，请重试</div>')) })
 }
 
 document.getElementById('send').addEventListener('click', send)
@@ -430,17 +467,46 @@ document.getElementById('gotoBtn').addEventListener('click', () => {
 })
 document.getElementById('researchBtn').addEventListener('click', () => startFlow('research'))
 
-// 页面加载：附加进行中的流程（刷新不丢）
+// 从课程列表「生成计划 / 去摸底」跳进来时的续起：?course=<id>&resume=<kind>，跳过 setup 面板、
+// 直接从该步起流程（复用 startFlow），并把该步之前的阶段标为已完成。仅接受向导内的步骤，learn 归课堂页。
+function resumeFrom(kind, course) {
+  courseName = course
+  $setup.style.display = 'none'
+  $steps.style.display = 'flex'
+  resetSteps()
+  const steps = [...$steps.querySelectorAll('.step')].map((s) => s.dataset.step)
+  const target = steps.indexOf(kind)
+  for (let i = 0; i < target; i++) {
+    if (steps[i] === 'research') continue // 教研可选，不预标完成
+    markStep(steps[i], 'done')
+  }
+  startFlow(kind)
+}
+
+// 页面加载：附加进行中的流程（刷新不丢）；否则若带 ?course=&resume= 则续起；再否则停在 setup
 fetch('/flow/state').then((r) => r.json()).then((state) => {
   if (state.active) {
+    if (!['new', 'assess', 'plan', 'research'].includes(state.active.kind)) {
+      document.getElementById('err').textContent = `已有进行中的流程（${state.active.kind} ${state.active.courseId}），请先返回课程列表。`
+      return
+    }
+    flowClient.attach(state.active)
     currentKind = state.active.kind
     courseName = state.active.courseId
     showConsole()
     markStep(currentKind, 'active')
     setBusy(true)
+    startSse()
+    return
   }
+  const params = new URLSearchParams(location.search)
+  const course = params.get('course')
+  const resume = params.get('resume')
+  if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && ['assess', 'plan', 'research', 'new'].includes(resume)) {
+    resumeFrom(resume, course)
+  }
+  startSse()
 })
-startSse()
 </script>
 </body>
 </html>

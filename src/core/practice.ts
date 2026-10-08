@@ -1,8 +1,28 @@
 import { updateMasteryForNode } from './assessment.ts'
-import { PracticeTaskFileSchema, type Mastery, type PracticeTask, type PracticeTaskFile, type PracticeTest } from './schema.ts'
+import { PracticeTaskFileSchema, type KnowledgeMap, type Mastery, type Plan, type PracticeTask, type PracticeTaskFile, type PracticeTaskState, type PracticeTest } from './schema.ts'
+import { courseNodeOrder } from './plan.ts'
+import { currentNode } from './lesson.ts'
 
 // 实践任务（三期）：学员在 workdir 写代码 → 跑规则化测试 → 判分联动掌握度。
 // 判分与 prompt 构建是纯核心；执行在壳/执行器（见 src/plugin/practice-executor.ts）。
+
+function requirePracticeNode(map: KnowledgeMap, node: string): string {
+  if (!map.nodes.some((item) => item.id === node)) throw new Error(`知识点 "${node}" 不在本课程知识地图中`)
+  return node
+}
+
+export function selectPracticeNode(plan: Plan, map: KnowledgeMap, mastery?: Mastery, requested?: string, previous?: PracticeTaskState): string | null {
+  if (requested) return requirePracticeNode(map, requested)
+  if (previous && map.nodes.some((node) => node.id === previous.node)) return previous.node
+  const node = currentNode(plan, mastery, map) ?? courseNodeOrder(plan, map)[0]
+  return node ? requirePracticeNode(map, node) : null
+}
+
+export function practiceGenerationNodes(plan: Plan, map: KnowledgeMap, file: PracticeTaskFile, requested?: string): string[] {
+  const nodes = requested ? [requirePracticeNode(map, requested)] : courseNodeOrder(plan, map)
+  const covered = new Set(file.tasks.map((task) => task.node))
+  return nodes.filter((node) => map.nodes.some((item) => item.id === node) && !covered.has(node))
+}
 
 export interface PracticeGenInput {
   courseId: string

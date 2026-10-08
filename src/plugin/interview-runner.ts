@@ -55,12 +55,18 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
       return
     }
 
-    const answer = await readAnswer()
-    if (!answer || !answer.trim()) {
-      process.stderr.write('tutor: 未收到学员回答，访谈结束\n')
+    // 空行不等于「学员没答」：可能是多按了一次回车，或共享流程桥上别的页面发来的空 /flow/input。
+    // 重新提示即可，别把访谈判死。只有 stdin 真正 EOF（answer===null，如 CLI 下 Ctrl-D）才收尾退出。
+    let answer = await readAnswer()
+    while (answer !== null && !answer.trim()) {
+      process.stdout.write('（还没收到回答，输入内容后回车；要中断请按 Ctrl-C）\n> ')
+      answer = await readAnswer()
+    }
+    if (answer === null) {
+      process.stderr.write('tutor: 输入已结束，访谈中止\n')
       await chat.flush()
       process.stdin.destroy()
-  exit(1)
+      exit(1)
       return
     }
     reply = await chat.ask(answer.trim())

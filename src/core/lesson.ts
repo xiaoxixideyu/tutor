@@ -1,4 +1,5 @@
 import { LessonDraftSchema, type KnowledgeMapResource, type KnowledgeMap, type LessonDraft, type Mastery, type Plan, type Profile } from './schema.ts'
+import { courseNodeOrder } from './plan.ts'
 
 export interface LessonResourceView {
   index: number
@@ -66,8 +67,8 @@ export function validateLessonDraft(
   return { ok: true, value }
 }
 
-export function currentNode(plan: Plan, mastery: Mastery | undefined): string | null {
-  const candidates = plan.path.length > 0 ? plan.path : plan.current ? [plan.current] : []
+export function currentNode(plan: Plan, mastery: Mastery | undefined, map?: KnowledgeMap): string | null {
+  const candidates = courseNodeOrder(plan, map)
   for (const node of candidates) {
     if (mastery?.[node]?.status !== 'mastered') return node
   }
@@ -145,7 +146,7 @@ export function buildPrepPrompt(input: PrepInput): string {
     masteryLine(input.mastery, input.node, node?.title ?? input.node),
     ...prerequisites.map((p) => masteryLine(input.mastery, p, input.map.nodes.find((n) => n.id === p)?.title ?? p)),
     ...(resources.length > 0
-      ? ['', '【已验证资料】（教学设计应基于这些资料；不得引入与其矛盾的说法）', ...resourceLines(resources, 400)]
+      ? ['', `【本课资料】（${node?.verified ? '已通过来源数量校验，仍须核对具体事实' : '尚未完成交叉验证，不能视为已证实的事实'}）`, ...resourceLines(resources, 400)]
       : []),
     '',
     '【要求】',

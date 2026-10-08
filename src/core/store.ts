@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { isMap, parseDocument, stringify, type Document as YamlDocument } from 'yaml'
 import { DocumentSchemas, type DocKind } from './schema.ts'
+import type { KnowledgeMap } from './schema.ts'
+import { enforceSourceVerification } from './knowledge.ts'
 
 export const COURSE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 
@@ -87,7 +89,8 @@ export class CourseStore {
       throw new Error(`${FILES[kind]} 内容必须是映射`)
     }
     try {
-      return DocumentSchemas[kind](data)
+      const validated = DocumentSchemas[kind](data)
+      return kind === 'knowledge-map' ? enforceSourceVerification(validated as KnowledgeMap) : validated
     } catch (error) {
       const message = error instanceof Error ? error.message.replace(/\n+/g, ' ') : String(error)
       throw new Error(`${FILES[kind]} 校验失败：${message}`)

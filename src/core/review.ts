@@ -1,5 +1,11 @@
 import { addDays } from './assessment.ts'
-import type { Mastery, Question, QuestionBank } from './schema.ts'
+import { createHash } from 'node:crypto'
+import type { Mastery, MasteryEntry, Question, QuestionBank } from './schema.ts'
+
+// 相同状态与题目对应同一次复习；状态或题库变化后，旧页面的提交必须重新取题。
+export function reviewAttemptId(courseId: string, node: string, entry: MasteryEntry, questions: Question[]): string {
+  return createHash('sha256').update(JSON.stringify([courseId, node, entry, questions])).digest('hex')
+}
 
 export interface DueReview {
   node: string

@@ -126,6 +126,11 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
   if (!COURSE_ID_PATTERN.test(courseId)) {
     throw new Error(`课程名 "${courseId}" 非法：仅允许小写字母/数字/连字符（1-64 位）`)
   }
+  const nodeIndex = argv.indexOf('--node', 2)
+  const nodeId = nodeIndex >= 0 ? argv[nodeIndex + 1] : ''
+  if (runnerMode === 'practice-gen' && nodeIndex >= 0 && (!nodeId || !/^[a-z0-9][a-z0-9-]*$/.test(nodeId))) {
+    throw new Error('--node 需要合法的知识点 id')
+  }
   const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md', 'practice-gen': 'practice-gen.md', exam: 'exam-grade.md' }
   const runnerByMode = {
     new: 'tutor-interview-runner',
@@ -167,7 +172,8 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
           id: runnerId,
           name: path.join(root, 'src', 'plugin', runnerModule),
           inject: ['agentDefaultModel', 'agents', 'sessions', 'courseState'],
-          config: runnerMode === 'exam' ? { courseId, milestoneId: argv[2] ?? '' } : { courseId },
+          config: runnerMode === 'exam' ? { courseId, milestoneId: argv[2] ?? '' }
+            : runnerMode === 'practice-gen' ? { courseId, nodeId } : { courseId },
         },
       ],
     },

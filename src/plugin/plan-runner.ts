@@ -5,6 +5,7 @@ import type { KnowledgeMap, LearnerProfile, Mastery, Plan } from '../core/schema
 import { createAgentChat } from './agent-chat.ts'
 import { generateTurn, parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { topoOrder } from '../core/knowledge.ts'
 
 const name = 'tutor-plan-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -54,7 +55,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const path = buildPlanPath(map, mastered)
   const titles = new Map(map.nodes.map((n) => [n.id, n.title]))
   if (path.length === 0) {
-    const plan = assemblePlan([], [])
+    const plan = assemblePlan([], [], topoOrder(map))
     store.write(config.courseId, 'plan', plan)
     out.write('所有知识点均已掌握，无需生成教学路径。\n')
     process.stdin.destroy()
@@ -89,7 +90,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     return validateMilestoneDraft(data.value, path)
   })
   const milestones = draft as { title: string; nodes: string[] }[]
-  const plan: Plan = assemblePlan(path, milestones)
+  const plan: Plan = assemblePlan(path, milestones, topoOrder(map))
   store.write(config.courseId, 'plan', plan)
 
   out.write(`\n教学计划已生成（${store.root}/${config.courseId}/plan.yaml）：\n`)

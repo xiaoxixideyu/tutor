@@ -17,12 +17,13 @@ export function trySchema(schema: (data: unknown) => unknown, data: unknown): Pa
   }
 }
 
-export async function generateTurn(chat: AgentChat, prompt: string, parse: (text: string) => ParseResult): Promise<unknown> {
-  let reply = await chat.ask(prompt)
-  for (let attempt = 0; attempt < 3; attempt++) {
+export async function generateTurn(chat: Pick<AgentChat, 'ask'>, prompt: string, parse: (text: string) => ParseResult): Promise<unknown> {
+  let request = prompt
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const reply = await chat.ask(request)
     const parsed = parse(reply)
     if (parsed.ok) return parsed.value
-    reply = await chat.ask(`你输出的 JSON 校验失败：${parsed.error}。请修正后重新输出完整 JSON 代码块，不要输出其他内容。`)
+    request = `你输出的 JSON 校验失败：${parsed.error}。请修正后重新输出完整 JSON 代码块，不要输出其他内容。`
   }
   throw new Error('多次生成仍未通过校验，中止')
 }

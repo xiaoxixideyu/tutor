@@ -92,7 +92,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   if (due.length > 0) {
     out.write(`提醒：${due.length} 个知识点到复习期（${due.map((d) => d.node).join('、')}）——回访先复习再继续：npm run agent -- review ${config.courseId}\n\n`)
   }
-  const node = currentNode(plan, mastery)
+  const node = currentNode(plan, mastery, map)
   if (!node) {
     out.write('计划内知识点均已掌握，无课可上。可运行 assess 重新摸底或 plan 修订计划。\n')
     exit(0)
@@ -190,10 +190,11 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       let correct = 0
       for (const [index, item] of draft.quiz.entries()) {
         out.write(`\n小测 ${index + 1}/${draft.quiz.length}：${item.question}\n`)
-        for (const choice of item.choices ?? []) out.write(`  ${choice}\n`)
+        const letters = 'ABCDEF'
+        for (const [i, choice] of (item.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
         out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
         const answer = await readAnswer()
-        if (!answer || !answer.trim()) {
+        if (!answer || !answer.trim() || answer.trim() === '/exit') {
           out.write('小测中止，本次不做掌握度更新，本课保留断点。\n')
           await pause()
           return
@@ -206,7 +207,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       const score = Math.round((correct / draft.quiz.length) * 100) / 100
       const updatedMastery = updateMasteryForNode(mastery, node, score, today())
       store.write(config.courseId, 'mastery', updatedMastery)
-      const pointer = currentNode(plan, updatedMastery)
+      const pointer = currentNode(plan, updatedMastery, map)
       const updatedPlan: Plan = pointer ? { ...plan, current: pointer } : { ...plan, current: undefined }
       store.write(config.courseId, 'plan', updatedPlan)
       store.remove(config.courseId, 'lesson')

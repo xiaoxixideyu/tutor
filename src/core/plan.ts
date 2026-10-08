@@ -23,6 +23,14 @@ export function buildPlanPath(map: KnowledgeMap, mastered: Set<string>): string[
   return topoOrder(map).filter((node) => !mastered.has(node))
 }
 
+// path 是规划时的待学路径，scope 是课程完整范围。旧计划从知识地图恢复范围，
+// 不能因节点曾经 mastered 就永远把它排除在补救课之外。
+export function courseNodeOrder(plan: Plan, map?: KnowledgeMap): string[] {
+  const scope = plan.scope ?? (map ? topoOrder(map) : plan.path)
+  const nodes = [...scope, ...plan.path]
+  return [...new Set(nodes.length || plan.scope || map ? nodes : plan.current ? [plan.current] : [])]
+}
+
 export interface MilestoneDraft {
   title: unknown
   nodes: unknown
@@ -78,9 +86,10 @@ export function validateMilestoneDraft(draft: unknown, path: string[]): { ok: tr
   return { ok: true, value: milestones }
 }
 
-export function assemblePlan(path: string[], milestones: { title: string; nodes: string[] }[]): Plan {
+export function assemblePlan(path: string[], milestones: { title: string; nodes: string[] }[], scope?: string[]): Plan {
   return {
     path,
+    ...(scope ? { scope: [...scope] } : {}),
     milestones: milestones.map((milestone, index) => ({
       id: `m${index + 1}`,
       title: milestone.title,

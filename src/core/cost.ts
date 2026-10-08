@@ -1,8 +1,24 @@
 import { parse } from 'yaml'
 
 export interface UsageSample {
+  // 总输入，包含缓存读取与写入；成本配置暂按同一输入单价估算。
   inputTokens: number
   outputTokens: number
+}
+
+export interface ReportedUsage {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+}
+
+// Harness 的输入计数互不重叠：inputTokens 仅为未缓存部分。
+export function normalizeUsage(usage: ReportedUsage | undefined): UsageSample | null {
+  if (!usage || typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') return null
+  const counts = [usage.inputTokens, usage.outputTokens, usage.cacheReadTokens ?? 0, usage.cacheWriteTokens ?? 0]
+  if (counts.some(count => !Number.isFinite(count) || count < 0)) return null
+  return { inputTokens: usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0), outputTokens: usage.outputTokens }
 }
 
 export interface CostRates {

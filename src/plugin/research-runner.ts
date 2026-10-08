@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
-import { topoOrder } from '../core/knowledge.ts'
+import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
@@ -60,7 +60,7 @@ function batchPrompt(profile: Profile, batch: { id: string; title?: string; summ
     '',
     '要求（克制搜索预算）：',
     '- 每个知识点最多 2 次搜索（mcp__searchix__ 工具，查询用英文，优先官方文档/一手资料）；必要时用 web_fetch 抓正文',
-    '- 两个独立来源相互印证即视为已验证，不要过度搜索；本批完成立即输出，不要扩大范围',
+    '- 两个独立来源相互印证才标 verified=true；系统要求至少两个不同注册域名（同站不同页面或子域不算两个来源）。不够则保留 verified=false，不要编造来源',
     '- summary 只写有来源支撑的事实；两个来源冲突时在 resources[].note 注明分歧',
     '',
     '输出 JSON（```json 代码块，只含本批知识点）：',
@@ -71,23 +71,21 @@ function batchPrompt(profile: Profile, batch: { id: string; title?: string; summ
 
 type ParseResult = { ok: true; value: unknown } | { ok: false; error: string }
 
-async function checkUrl(url: string): Promise<boolean> {
+async function checkUrl(url: string): Promise<string | null> {
   // 网关/网络抖动会把有效来源误判为死链（实测 pkg.go.dev 被误杀），失败后间隔 1s 重试一次再判死
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_000))
     try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 10_000)
-      const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal })
-      clearTimeout(timer)
-      if (response.status >= 200 && response.status < 400) return true
+      const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(10_000) })
+      await response.body?.cancel()
+      if (response.status >= 200 && response.status < 400) return response.url
       if (response.status >= 500) continue // 服务端错误可能是暂时性的，重试
-      return false // 404 等客户端错误是确定性的，直接判死
+      return null // 404 等客户端错误是确定性的，直接判死
     } catch {
       continue
     }
   }
-  return false
+  return null
 }
 
 async function pruneDeadResources(
@@ -97,8 +95,8 @@ async function pruneDeadResources(
   const withUrl = resources.filter((r) => r.url !== undefined)
   const verdicts = await Promise.all(withUrl.map((r) => checkUrl(r.url!)))
   for (let i = withUrl.length - 1; i >= 0; i--) {
-    if (verdicts[i]) continue
     const resource = withUrl[i]
+    if (verdicts[i]) { resource.url = verdicts[i]!; continue }
     out.write(`  ⚠ 来源失效，已剔除：${resource.title}（${resource.url}）\n`)
     const index = resources.indexOf(resource)
     if (index >= 0) resources.splice(index, 1)
@@ -109,6 +107,7 @@ function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
   const schemaResult = trySchema(BatchSchema, data)
   if (!schemaResult.ok) return schemaResult
   const batch = schemaResult.value as BatchResult
+  if (new Set(batch.nodes.map((n) => n.id)).size !== batch.nodes.length) return { ok: false, error: '本批知识点 id 重复' }
   const unknown = batch.nodes.find((n) => !batchIds.has(n.id))
   if (unknown) return { ok: false, error: `返回了不属于本批的知识点 "${unknown.id}"` }
   const missing = [...batchIds].filter((id) => !batch.nodes.some((n) => n.id === id))
@@ -138,23 +137,6 @@ const BatchSchema = z.object({
     .default([]),
 }) as unknown as Schema<unknown, BatchResult>
 
-function mergeBatch(map: KnowledgeMap, batch: BatchResult): void {
-  for (const node of batch.nodes) {
-    const existing = map.nodes.find((n) => n.id === node.id)
-    if (existing) {
-      if (node.title !== undefined) existing.title = node.title
-      if (node.summary !== undefined) existing.summary = node.summary
-      existing.verified = node.verified ?? false
-    } else {
-      map.nodes.push({ id: node.id, title: node.title ?? node.id, summary: node.summary, verified: node.verified ?? false })
-    }
-  }
-  const resources = map.resources ?? (map.resources = [])
-  for (const resource of batch.resources ?? []) {
-    resources.push(resource)
-  }
-}
-
 async function run(ctx: Context, config: { courseId: string; batchSize: number }): Promise<void> {
   const courseState = ctx.get('courseState') as { store: StoreView } | undefined
   if (!courseState) throw new Error('tutor: 核心服务未就绪')
@@ -179,7 +161,7 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
 
   let map: KnowledgeMap
   if (store.has(config.courseId, 'knowledge-map')) {
-    map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
+    map = enforceSourceVerification(store.read(config.courseId, 'knowledge-map') as KnowledgeMap)
     out.write(`已有知识地图（${map.nodes.length} 个知识点），继续教研。\n`)
   } else {
     out.write('正在构思知识地图骨架…\n')
@@ -222,11 +204,13 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
     if (result.resources && result.resources.length > 0) {
       await pruneDeadResources(result.resources, out)
     }
-    mergeBatch(map, result)
-    map.verified = map.nodes.every((n) => n.verified)
+    map = mergeResearchBatch(map, result)
     map.researched_at = today()
     store.write(config.courseId, 'knowledge-map', map)
-    const verified = result.nodes.filter((n) => batchIds.has(n.id) && n.verified).length
+    const verified = map.nodes.filter((n) => batchIds.has(n.id) && n.verified).length
+    for (const node of map.nodes.filter((n) => batchIds.has(n.id) && !n.verified)) {
+      out.write(`  ${node.id} 待验证（来源域名 ${sourceDomains(map.resources ?? [], node.id).length} 个，需两个独立来源并完成交叉核对）。\n`)
+    }
     out.write(`  已验证 ${verified}/${batch.length}，来源 +${result.resources?.length ?? 0}（进度已保存，可随时中断）\n`)
   }
 

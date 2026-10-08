@@ -5,6 +5,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { CourseStore } from '../src/core/store.ts'
 import { createRpcMethods, handleRpcRequest, type RpcRequest } from '../src/core/rpc.ts'
+import type { Mastery, ReviewResult } from '../src/core/schema.ts'
+
+function attemptId(store: CourseStore): string {
+  const result = createRpcMethods(store, today).reviewQuestions({ id: 'alpha' }) as { items: { attemptId: string }[] }
+  return result.items[0].attemptId
+}
 
 function makeStore(): CourseStore {
   return new CourseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-rpc-')))
@@ -92,6 +98,114 @@ describe('createRpcMethods', () => {
   })
 })
 
+describe('复习 RPC：reviewQuestions / submitReview', () => {
+  // alpha 的 a1 已到期（due 2026-09-17 ≤ today 2026-09-19），stage 2；再补一个含 2 题的题库
+  function seedReview(store: CourseStore): void {
+    seedStore(store)
+    store.write('alpha', 'question-bank', {
+      a1: [
+        { id: 'a1-q1', difficulty: 2, type: 'choice', question: '1+1=?', choices: ['A. 2', 'B. 3'], answer: 'A' },
+        { id: 'a1-q2', difficulty: 3, type: 'short', question: '2+2=?', answer: '4', accept: ['four'] },
+      ],
+    })
+  }
+
+  it('reviewQuestions 下发到期题且抹掉答案', () => {
+    const store = makeStore()
+    seedReview(store)
+    const result = createRpcMethods(store, today).reviewQuestions({ id: 'alpha' }) as {
+      today: string
+      items: { node: string; questions: { id: string; answer?: string }[] }[]
+    }
+    assert.equal(result.today, '2026-09-19')
+    assert.equal(result.items.length, 1)
+    assert.equal(result.items[0].node, 'a1')
+    assert.equal(result.items[0].questions.length, 2)
+    // 判分留服务端：下发的题目不得含 answer/accept
+    assert.equal('answer' in result.items[0].questions[0], false)
+    assert.equal('accept' in result.items[0].questions[0], false)
+  })
+
+  it('submitReview 全对：升阶回写 mastery', () => {
+    const store = makeStore()
+    seedReview(store)
+    const out = createRpcMethods(store, today).submitReview({ id: 'alpha', node: 'a1', attemptId: attemptId(store), answers: ['A', '4'] }) as {
+      score: number
+      correct: number
+      total: number
+      entry: { status: string; review_stage: number; review_due: string }
+    }
+    assert.equal(out.correct, 2)
+    assert.equal(out.total, 2)
+    assert.equal(out.score, 1)
+    assert.equal(out.entry.status, 'mastered')
+    assert.equal(out.entry.review_stage, 3) // 2 → 3
+    assert.equal(out.entry.review_due, '2026-09-26') // today + 7
+    const mastery = store.read('alpha', 'mastery') as { a1: { review_stage: number } }
+    assert.equal(mastery.a1.review_stage, 3)
+  })
+
+  it('submitReview 全错：回退一阶且留在复习队列', () => {
+    const store = makeStore()
+    seedReview(store)
+    const out = createRpcMethods(store, today).submitReview({ id: 'alpha', node: 'a1', attemptId: attemptId(store), answers: ['B', '错'] }) as {
+      score: number
+      entry: { status: string; review_stage: number; review_due: string }
+    }
+    assert.equal(out.score, 0)
+    assert.equal(out.entry.status, 'weak')
+    assert.equal(out.entry.review_stage, 1) // 2 → 1
+    assert.equal(out.entry.review_due, '2026-09-20') // today + 1
+  })
+
+  it('submitReview 题库缺失 / 参数非法带 rpcCode', () => {
+    const store = makeStore()
+    seedStore(store) // 无 question-bank
+    const methods = createRpcMethods(store, today)
+    assert.throws(() => methods.submitReview({ id: 'alpha', node: 'a1', attemptId: 'missing-bank', answers: ['A'] }), /没有可复习的题目/)
+    assert.throws(() => methods.submitReview({ id: 'alpha', node: 'a1', answers: 'A' }), /字符串数组/)
+    assert.throws(() => methods.submitReview({ id: 'alpha', node: 'ghost', answers: [] }), /没有知识点/)
+  })
+
+  it('同一作答重复提交及服务重启后的重试返回同一回执，不重复升阶', () => {
+    const store = makeStore()
+    seedReview(store)
+    const params = { id: 'alpha', node: 'a1', attemptId: attemptId(store), answers: ['A', '4'] }
+    const first = createRpcMethods(store, today).submitReview(params) as ReviewResult
+    const saved = store.read('alpha', 'mastery')
+    const restarted = new CourseStore(store.root)
+    const duplicate = createRpcMethods(restarted, today).submitReview(params)
+    assert.deepEqual(duplicate, first)
+    assert.deepEqual(restarted.read('alpha', 'mastery'), saved)
+    assert.throws(() => createRpcMethods(restarted, today).submitReview({ ...params, answers: ['B', '4'] }), /不能更改/)
+  })
+
+  it('题库或掌握状态变化后拒绝旧作答，漏答与未知 attemptId 不写状态', () => {
+    const store = makeStore()
+    seedReview(store)
+    const params = { id: 'alpha', node: 'a1', attemptId: attemptId(store), answers: ['A', '4'] }
+    const methods = createRpcMethods(store, today)
+    const before = store.read('alpha', 'mastery') as Mastery
+    assert.throws(() => methods.submitReview({ ...params, answers: ['A'] }), /全部复习题/)
+    assert.throws(() => methods.submitReview({ ...params, answers: ['A', ''] }), /全部复习题/)
+    assert.throws(() => methods.submitReview({ ...params, attemptId: 'old' }), /已变化/)
+    assert.deepEqual(store.read('alpha', 'mastery'), before)
+    store.write('alpha', 'question-bank', { a1: [{ id: 'changed', difficulty: 2, type: 'short', question: '新题', answer: '4' }] })
+    assert.throws(() => methods.submitReview(params), /已变化/)
+    store.write('alpha', 'mastery', { a1: { ...before.a1, review_due: '2026-10-01' } })
+    assert.throws(() => methods.submitReview(params), /已变化/)
+  })
+
+  it('旧 applyReview 入口也不能重复推进，拒绝 NaN 与伪造日期', () => {
+    const store = makeStore()
+    seedReview(store)
+    const methods = createRpcMethods(store, today)
+    assert.throws(() => methods.applyReview({ id: 'alpha', node: 'a1', score: NaN }), /0-1/)
+    methods.applyReview({ id: 'alpha', node: 'a1', score: 1 })
+    assert.throws(() => methods.applyReview({ id: 'alpha', node: 'a1', score: 1, today: '2099-01-01' }), /尚未到/)
+  })
+})
+
 describe('handleRpcRequest', () => {
   it('未知方法 -32601，非字符串 method -32600，id 原样回显', () => {
     const store = makeStore()
@@ -103,6 +217,8 @@ describe('handleRpcRequest', () => {
     const echoed = handleRpcRequest(store, { id: 'req-1', method: 'ping' }, today)
     assert.equal(echoed.id, 'req-1')
     assert.deepEqual(echoed.result, { ok: true })
+    assert.equal(handleRpcRequest(store, null as unknown as RpcRequest, today).error?.code, -32600)
+    assert.equal(handleRpcRequest(store, { method: 'toString' }, today).error?.code, -32601)
   })
 
   it('store 异常映射为 -32603', () => {

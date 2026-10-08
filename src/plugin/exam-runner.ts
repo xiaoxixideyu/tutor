@@ -1,11 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
-import { computeExamResult, EXAM_PASS_SCORE, gradeObjective, nextMilestone, paperTotalPoints, paperValid, updatePlanExamRecord, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
-import { extractProfileJson } from '../core/interview.ts'
+import { applyExamMastery, computeExamResult, EXAM_PASS_SCORE, gradeObjective, nextMilestone, paperTotalPoints, paperValid, updatePlanExamRecord, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
 import type { KnowledgeMap, Mastery, Plan } from '../core/schema.ts'
-import { updateMasteryForNode } from '../core/assessment.ts'
-import { createAgentChat, type AgentChat } from './agent-chat.ts'
+import { currentNode } from '../core/lesson.ts'
+import { createAgentChat } from './agent-chat.ts'
+import { printSessionTotal } from './cost-line.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 
@@ -67,7 +67,7 @@ function buildExamPrompt(milestone: { id: string; title: string; nodes: string[]
   ].join('\n')
 }
 
-function gradePrompt(questions: ExamQuestion[], answers: Map<string, string>): string {
+export function buildExamGradingPrompt(questions: ExamQuestion[], answers: Map<string, string>): string {
   const lines: string[] = ['任务：判分以下主观题作答。', '']
   for (const q of questions) {
     lines.push(`题目 ${q.id}（满分 ${q.points}）：${q.question}`)
@@ -76,7 +76,7 @@ function gradePrompt(questions: ExamQuestion[], answers: Map<string, string>): s
     lines.push(`学员作答：${answers.get(q.id) ?? ''}`)
     lines.push('')
   }
-  lines.push('输出判分 JSON（```json 代码块）。')
+  lines.push('输出判分 JSON（```json 代码块）。每题 score 必须是 0–1 的得分比例，不乘题目分值；必须逐题返回且不得重复或遗漏题号。')
   return lines.join('\n')
 }
 
@@ -115,6 +115,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
     if (!data.ok) return data
     const schemaResult = trySchema(ExamPaperSchema, data.value)
     if (!schemaResult.ok) return schemaResult
+    if ((schemaResult.value as ExamPaper).milestone !== milestone.id) return { ok: false, error: '试卷里程碑不匹配' }
     const invalid = paperValid(schemaResult.value as ExamPaper, milestone.nodes)
     if (invalid) return { ok: false as const, error: invalid }
     return schemaResult
@@ -128,7 +129,11 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   for (const question of paper.questions) {
     index++
     out.write(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
-    for (const choice of question.choices ?? []) out.write(`  ${choice}\n`)
+    const letters = 'ABCDEF'
+    for (const [i, choice] of (question.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
+    // 与 learn-runner 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
+    // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
+    out.write('\n> ')
     const answer = await readAnswer()
     if (!answer || !answer.trim()) {
       out.write('考试中止，未产生成绩（题卷不保存）。\n')
@@ -149,47 +154,37 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   if (subjectiveAnswers.size > 0) {
     out.write('\n主观题判分中…\n')
     const subjectiveQuestions = paper.questions.filter((q) => q.type === 'subjective')
-    const reply = await chat.ask(gradePrompt(subjectiveQuestions, subjectiveAnswers))
-    const data = extractProfileJson(reply)
-    const gradingsRaw = (data && typeof data === 'object' ? (data as { gradings?: unknown }).gradings : null) as
-      | { questionId: string; score: number; note?: string }[]
-      | null
-    if (Array.isArray(gradingsRaw)) {
-      for (const g of gradingsRaw) {
-        if (typeof g.score === 'number') gradings.push({ questionId: g.questionId, correct: g.score >= EXAM_PASS_SCORE, score: g.score, ...(g.note ? { note: g.note } : {}) })
-      }
-    } else {
-      for (const q of subjectiveQuestions) gradings.push({ questionId: q.id, correct: false, score: 0, note: '判分失败，计 0 分' })
+    try {
+      const validated = await generateTurn(chat, buildExamGradingPrompt(subjectiveQuestions, subjectiveAnswers), (text) => {
+        const parsed = parseJsonBlock(text)
+        return parsed.ok ? validateSubjectiveGradings(parsed.value, subjectiveQuestions) : parsed
+      }) as ExamGrading[]
+      gradings.push(...validated)
+    } catch (error) {
+      await chat.flush()
+      throw new Error(`主观题判分失败，成绩与掌握度未修改：${error instanceof Error ? error.message : String(error)}`)
     }
   }
   await chat.flush()
 
-  const { score, passed } = computeExamResult(gradings, totalPoints)
+  const { score, passed } = computeExamResult(paper, gradings)
   out.write(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''
-    out.write(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${grading.score}${note}\n`)
+    const points = paper.questions.find((q) => q.id === grading.questionId)!.points
+    out.write(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
   }
 
-  const updatedMastery = mastery ? { ...mastery } : {}
-  for (const question of paper.questions) {
-    const grading = gradings.find((g) => g.questionId === question.id)
-    if (!grading) continue
-    const perNodeScore = Math.round(grading.score * 100) / 100
-    const merged = updateMasteryForNode(updatedMastery, question.node, perNodeScore, today())
-    updatedMastery[question.node] = merged[question.node]
-  }
+  const updatedMastery = applyExamMastery(paper, gradings, mastery ?? {}, today())
   store.write(config.courseId, 'mastery', updatedMastery)
 
   const updatedPlan = updatePlanExamRecord(plan, milestone.id, { date: today(), score, passed })
-  if (!passed) {
-    const weak = milestone.nodes.find((node) => updatedMastery[node]?.status !== 'mastered')
-    if (weak) updatedPlan.current = weak
-  }
+  updatedPlan.current = currentNode(updatedPlan, updatedMastery, map) ?? undefined
   store.write(config.courseId, 'plan', updatedPlan)
 
   out.write(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
   out.write(updatedPlan.current ? `计划指针：${updatedPlan.current}\n` : '课程完成。\n')
+  printSessionTotal(chat, out)
   process.stdin.destroy()
   exit(passed ? 0 : 1)
 }

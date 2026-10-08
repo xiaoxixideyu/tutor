@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 复习</title>
+<style>
+  :root {
+    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
+    --accent: #2563eb; --green: #16a34a; --red: #dc2626; --due: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  header a.backlink { text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  header a.backlink:hover { background: var(--bg); }
+  .state { font-size: 12px; color: var(--muted); }
+  main { max-width: 720px; margin: 0 auto; padding: 20px 16px 48px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+  .nodehead { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .progress { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .q { margin: 14px 0; }
+  .q .qtext { font-size: 14px; line-height: 1.6; margin-bottom: 8px; }
+  .q .qtext .idx { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .choices { display: flex; flex-direction: column; gap: 8px; }
+  .choice { border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; text-align: left; font-family: inherit; }
+  .choice:hover { background: #eef2ff; }
+  .choice.selected { background: var(--accent); color: #fff; }
+  .choice.disabled { cursor: default; opacity: .7; }
+  .short input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: 14px; font-family: inherit; }
+  .submit { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; margin-top: 8px; }
+  .submit:disabled { opacity: .5; cursor: default; }
+  .verdict { font-size: 13px; margin-top: 6px; }
+  .verdict.ok { color: var(--green); }
+  .verdict.no { color: var(--red); }
+  .verdict .ans { color: var(--muted); }
+  .result { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+  .result .score { font-size: 15px; font-weight: 600; }
+  .result .due { color: var(--due); font-size: 13px; margin-top: 4px; }
+  .next { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; font-size: 14px; }
+  .next.secondary { background: none; color: var(--accent); border: 1px solid var(--accent); }
+  .empty { color: var(--muted); font-size: 14px; }
+  .err { color: var(--red); font-size: 14px; }
+  .chips { display: flex; gap: 8px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/" class="backlink">← 课程列表</a>
+  <h1 id="title">复习</h1>
+  <span class="state" id="state"></span>
+</header>
+<main id="main"></main>
+<!-- SCRIPT_PLACEHOLDER -->
+<script>
+const params = new URLSearchParams(location.search)
+const courseId = params.get('course')
+const $main = document.getElementById('main')
+const $title = document.getElementById('title')
+const $state = document.getElementById('state')
+const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
+
+function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
+function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
+
+async function rpc(method, rpcParams) {
+  const response = await fetch('/rpc', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params: rpcParams }),
+  })
+  const body = await response.json()
+  if (body.error) throw new Error(body.error.message)
+  return body.result
+}
+
+let items = []
+let titles = new Map()
+let cur = 0
+
+async function boot() {
+  if (!courseId) { $main.innerHTML = '<div class="err">缺少 course 参数——请从课程列表进入。</div>'; return }
+  $title.textContent = `复习 · ${courseId}`
+  try {
+    // courseStatus 仅用来把节点 id 换成可读标题，失败不阻断复习
+    const [status, review] = await Promise.all([
+      rpc('courseStatus', { id: courseId }).catch(() => null),
+      rpc('reviewQuestions', { id: courseId }),
+    ])
+    if (status) titles = new Map(status.nodes.map((n) => [n.id, n.title]))
+    const all = review.items ?? []
+    items = all.filter((it) => it.questions.length > 0)
+    const skipped = all.filter((it) => it.questions.length === 0)
+    if (skipped.length) $state.textContent = `${skipped.length} 个到期知识点缺少题库，暂未纳入本轮`
+    if (items.length === 0) {
+      const msg = skipped.length ? '到期知识点缺少题库，暂无法复习。' : '🎉 没有到期的复习。'
+      const card = el(`<div class="card"><div class="empty">${msg}</div><div class="chips"></div></div>`)
+      const back = el('<button class="next">← 课程列表</button>')
+      back.addEventListener('click', () => { location.href = '/' })
+      card.querySelector('.chips').appendChild(back)
+      $main.appendChild(card)
+      return
+    }
+    $state.textContent = `${items.length} 个知识点待复习${skipped.length ? `，另 ${skipped.length} 个缺少题库` : ''}`
+    renderNode()
+  } catch (error) {
+    $main.innerHTML = `<div class="err">加载失败：${esc(error.message)}</div>`
+  }
+}
+
+function renderNode() {
+  const item = items[cur]
+  const title = titles.get(item.node) || item.node
+  const answers = new Array(item.questions.length).fill('')
+  const card = el('<div class="card"></div>')
+  card.appendChild(el(`<div class="nodehead">${esc(title)}</div>`))
+  card.appendChild(el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题</div>`))
+  item.questions.forEach((q, qi) => {
+    const qDiv = el('<div class="q"></div>')
+    qDiv.appendChild(el(`<div class="qtext"><span class="idx">${qi + 1}.</span>${esc(q.question)}</div>`))
+    if (q.type === 'choice' && Array.isArray(q.choices)) {
+      const wrap = el('<div class="choices"></div>')
+      q.choices.forEach((choiceText, ci) => {
+        const letter = LETTERS[ci]
+        const btn = el(`<button class="choice">${esc(choiceText)}</button>`)
+        btn.addEventListener('click', () => {
+          if (btn.classList.contains('disabled')) return
+          answers[qi] = letter
+          for (const c of wrap.querySelectorAll('.choice')) c.classList.remove('selected')
+          btn.classList.add('selected')
+        })
+        wrap.appendChild(btn)
+      })
+      qDiv.appendChild(wrap)
+    } else {
+      const box = el('<div class="short"><input placeholder="输入你的答案…"></div>')
+      box.querySelector('input').addEventListener('input', (e) => { answers[qi] = e.target.value })
+      qDiv.appendChild(box)
+    }
+    card.appendChild(qDiv)
+  })
+  const submit = el('<button class="submit">提交本节</button>')
+  submit.addEventListener('click', async () => {
+    if (answers.some((answer) => !answer.trim())) {
+      $state.textContent = '请完成全部题目后提交'
+      return
+    }
+    submit.disabled = true
+    for (const c of card.querySelectorAll('.choice')) c.classList.add('disabled')
+    for (const i of card.querySelectorAll('input')) i.disabled = true
+    try {
+      const out = await rpc('submitReview', { id: courseId, node: item.node, attemptId: item.attemptId, answers })
+      showResult(card, item, out)
+    } catch (error) {
+      submit.disabled = false
+      for (const c of card.querySelectorAll('.choice')) c.classList.remove('disabled')
+      for (const i of card.querySelectorAll('input')) i.disabled = false
+      card.appendChild(el(`<div class="err">提交失败：${esc(error.message)}</div>`))
+    }
+  })
+  card.appendChild(submit)
+  $main.innerHTML = ''
+  $main.appendChild(card)
+}
+
+function showResult(card, item, out) {
+  const qDivs = card.querySelectorAll('.q')
+  out.perQuestion.forEach((pq, i) => {
+    const q = item.questions[i]
+    let answerText = pq.answer
+    // choice 的标准答案是字母，换成选项原文更友好
+    if (q && q.type === 'choice' && Array.isArray(q.choices)) {
+      const idx = LETTERS.indexOf(String(pq.answer).trim().toUpperCase())
+      if (idx >= 0 && q.choices[idx]) answerText = q.choices[idx]
+    }
+    const tail = pq.correct ? '' : `　<span class="ans">正确答案：${esc(answerText)}</span>`
+    const v = el(`<div class="verdict ${pq.correct ? 'ok' : 'no'}">${pq.correct ? '✓ 正确' : '✗ 错误'}${tail}</div>`)
+    if (qDivs[i]) qDivs[i].appendChild(v)
+  })
+  const pct = Math.round(out.score * 100)
+  const result = el('<div class="result"></div>')
+  result.appendChild(el(`<div class="score">得分 ${out.correct}/${out.total}（${pct}%）</div>`))
+  result.appendChild(el(`<div class="due">下次复习：${esc(out.entry.review_due)}（状态 ${esc(out.entry.status)}）</div>`))
+  const row = el('<div class="chips"></div>')
+  if (cur < items.length - 1) {
+    const next = el('<button class="next">下一节 →</button>')
+    next.addEventListener('click', () => { cur += 1; window.scrollTo(0, 0); renderNode() })
+    row.appendChild(next)
+  } else {
+    const done = el('<button class="next">全部完成 → 课程列表</button>')
+    done.addEventListener('click', () => { location.href = '/' })
+    row.appendChild(done)
+  }
+  const back = el('<button class="next secondary">← 课程列表</button>')
+  back.addEventListener('click', () => { location.href = '/' })
+  row.appendChild(back)
+  result.appendChild(row)
+  card.appendChild(result)
+  $state.textContent = `已复习 ${cur + 1}/${items.length}`
+}
+
+boot()
+</script>
+</body>
+</html>

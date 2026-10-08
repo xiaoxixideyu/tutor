@@ -42,6 +42,16 @@ describe('parseSessionLog', () => {
     assert.equal(log.userTexts.length, 2)
     assert.deepEqual(sumUsage(log.usage), { inputTokens: 300, outputTokens: 30 })
   })
+  it('成本包括缓存和失败尝试，失败尝试不计入已讲授内容', () => {
+    const log = parseSessionLog([
+      { type: 'assistant/attempt', data: { usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 20 },
+        message: { content: [{ type: 'text', text: '未完成的尝试' }] } } },
+      { type: 'assistant/message', data: { usage: { inputTokens: 30, outputTokens: 10, cacheWriteTokens: 40 },
+        message: { content: [{ type: 'text', text: '已讲内容' }] } } },
+    ])
+    assert.deepEqual(sumUsage(log.usage), { inputTokens: 100, outputTokens: 15 })
+    assert.deepEqual(log.assistantTexts, ['已讲内容'])
+  })
 })
 
 describe('parseLessonIntro', () => {
