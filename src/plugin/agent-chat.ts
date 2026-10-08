@@ -4,6 +4,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import { addUsage, normalizeUsage, type ReportedUsage, type UsageSample } from '../core/cost.ts'
 import { TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from './turn-timeout.ts'
 
@@ -48,9 +49,12 @@ interface SessionsRegistry {
 
 export interface CreateAgentChatOptions {
   resumeSessionId?: string
+  isolatedSystemPrompt?: string
+  tools?: 'none' | 'research'
 }
 
 export async function createAgentChat(ctx: Context, options: CreateAgentChatOptions = {}): Promise<AgentChat | null> {
+  if (options.resumeSessionId && options.isolatedSystemPrompt) throw new Error('独立审查禁止恢复历史会话')
   await (ctx.get('loader' as never) as { await(): Promise<void> } | undefined)?.await()
   const agentDefaultModel = ctx.get('agentDefaultModel') as
     | { currentSelection(): { provider: string; model: string } }
@@ -69,6 +73,19 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
+      const allowed = (name: string) => !options.isolatedSystemPrompt && options.tools === 'research'
+        && (name.startsWith('mcp__searchix__') || name === 'web_fetch')
+      agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+        const result = await next()
+        return { ...result, tools: result.tools.filter(tool => allowed(tool.name)) }
+      })
+      ;(agentCtx.get('tools') as { guard: (fn: (execution: { name: string }) => string | undefined) => unknown })
+        .guard(execution => allowed(execution.name) ? undefined : '教学内容必须通过 runner 审查后发布，禁止模型调用此工具')
+      if (options.isolatedSystemPrompt) {
+        // Agent 局部作用域，避免教学生成角色、课程插件上下文和工具泄漏进盲解/审查会话。
+        agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => ({ ...await next(),
+          sections: [{ name: 'tutor:isolated-review', text: options.isolatedSystemPrompt! }], contexts: [], tools: [], variables: {} }))
+      }
       ;(agentCtx as { on?: (name: string, listener: (payload: { frame?: { type?: string } }) => void) => unknown })
         .on?.('agent/assistant-stream', (payload) => {
           if (payload?.frame?.type === 'chunk') streamTicks++

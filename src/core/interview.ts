@@ -1,5 +1,13 @@
 import { ProfileSchema, type Profile } from './schema.ts'
 
+export function profileScope(profile: Profile): string {
+  return [profile.goal, ...(profile.requests?.length ? ['学员访谈原话（明确范围优先于目标摘要）：', ...profile.requests] : [])].join('\n')
+}
+
+export function preserveLearnerRequests(profile: Profile, requests: string[]): Profile {
+  return { ...profile, requests: [...requests] }
+}
+
 export function extractProfileJson(text: string): unknown | null {
   const fenced = text.match(/```json\s*([\s\S]*?)```/)
   const candidates: string[] = []

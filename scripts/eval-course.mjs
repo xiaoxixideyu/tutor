@@ -17,9 +17,9 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
 } })
 const [mode, courseId] = positionals
 const modes = { new: ['interview', 'interview'], research: ['research', 'research'], assess: ['assess', 'assess'],
-  plan: ['plan', 'plan'], learn: ['learn', 'teach'], 'practice-gen': ['practice-gen', 'practice-gen'], exam: ['exam', 'exam-grade'] }
+  plan: ['plan', 'plan'], learn: ['learn', 'teach'], 'practice-gen': ['practice-gen', 'practice-gen'], exam: ['exam', 'exam-grade'], 'audit-content': ['audit-content', 'exam-grade'] }
 if (!values.live) {
-  console.log('用法：node scripts/eval-course.mjs <new|research|assess|plan|learn|practice-gen|exam|practice|review|status> <course> --live [--run data/evals/course-...] [--node id] [--milestone m1]')
+  console.log('用法：node scripts/eval-course.mjs <new|research|assess|plan|learn|practice-gen|exam|practice|review|status|audit-content> <course> --live [--run data/evals/course-...] [--node id] [--milestone m1]')
   console.log('仅 --live 调用模型。每阶段上限 8 分钟、24 次业务请求、单次输出 8192 token；真实账单需另行核对。')
   process.exit(0)
 }
@@ -88,6 +88,7 @@ const report = { version: 1, courseId, stage: mode, model: env.TUTOR_LLM_MODEL, 
   settings: { officialRunner: true, titleGeneration: false, tools: mode === 'research' ? 'search-and-fetch' : 'none' } }
 report.sourceHashes = Object.fromEntries([
   'scripts/eval-course.mjs', 'src/eval/course-observer.ts', 'src/plugin/agent-chat.ts', 'src/plugin/generation.ts', 'config/cost.yaml',
+  'src/plugin/content-gate.ts',
   ...fs.readdirSync(path.join(root, 'src/core')).filter(file => file.endsWith('.ts')).map(file => `src/core/${file}`),
   ...(modes[mode] ? [`src/plugin/${modes[mode][0]}-runner.ts`, `config/persona/${modes[mode][1]}.md`] : []),
   ...(!modes[mode] ? [`scripts/${mode === 'status' ? 'view' : mode}.mjs`] : []),

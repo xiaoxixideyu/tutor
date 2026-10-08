@@ -9,7 +9,9 @@ import { currentNode } from '../src/core/lesson.ts'
 import { updateMasteryForNode } from '../src/core/assessment.ts'
 import { createRpcMethods } from '../src/core/rpc.ts'
 import { practiceGenerationNodes, selectPracticeNode } from '../src/core/practice.ts'
-import type { KnowledgeMap, Mastery, Plan } from '../src/core/schema.ts'
+import type { KnowledgeMap, Mastery, Plan, QuestionBank } from '../src/core/schema.ts'
+import { bankContent } from '../src/core/content-quality.ts'
+import { approveFixture } from './fixtures/quality.ts'
 
 const map: KnowledgeMap = { verified: false, nodes: [{ id: 'basics', title: '基础' }, { id: 'advanced', title: '进阶' }],
   edges: [['advanced', 'basics']] }
@@ -30,6 +32,7 @@ it('重规划跳过已掌握节点后，复习全错让看板和课堂回到该�
     { id: 'q1', difficulty: 2, type: 'short', question: '1+1', answer: '2' },
     { id: 'q2', difficulty: 3, type: 'short', question: '2+2', answer: '4' },
   ] })
+  approveFixture(root, 'alpha', bankContent(store.read('alpha', 'question-bank') as QuestionBank, 'basics', { goal: '学习' }, map))
   const rpc = createRpcMethods(store, () => '2026-10-08')
   const quiz = rpc.reviewQuestions({ id: 'alpha' }) as { items: { attemptId: string }[] }
   rpc.submitReview({ id: 'alpha', node: 'basics', attemptId: quiz.items[0].attemptId, answers: ['错', '错'] })

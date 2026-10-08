@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "eval:grading": "node scripts/eval-grading.mjs",
+    "eval:content": "node scripts/eval-content.mjs",
     "serve": "node scripts/agent.mjs serve"
   },
   "dependencies": {

@@ -4,8 +4,11 @@ import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
 import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
-import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
+import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { mapContent } from '../core/content-quality.ts'
+import { createContentGate, generateApproved } from './content-gate.ts'
+import { profileScope } from '../core/interview.ts'
 
 const name = 'tutor-research-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -34,7 +37,7 @@ function skeletonPrompt(profile: Profile): string {
     '任务：为课程构思知识地图骨架（暂不联网）。',
     '',
     '学员档案：',
-    `- 学习目的：${profile.goal}`,
+    `- 学习目的与原始范围：${profileScope(profile)}`,
     `- 现有基础：${profile.background || '未填写'}`,
     `- 每日投入：约 ${minutes} 分钟`,
     '',
@@ -57,7 +60,7 @@ function batchPrompt(profile: Profile, batch: { id: string; title?: string; summ
     '本批知识点：',
     lines,
     '',
-    `学员目的：${profile.goal}；基础：${profile.background || '未填写'}`,
+    `学员目的与原始范围：${profileScope(profile)}；基础：${profile.background || '未填写'}`,
     '',
     '要求（克制搜索预算）：',
     '- 每个知识点最多 2 次搜索（mcp__searchix__ 工具，查询用英文，优先官方文档/一手资料）；必要时用 web_fetch 抓正文',
@@ -158,7 +161,8 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
-  const chat = await createAgentChat(ctx)
+  const gate = createContentGate(ctx, store, config.courseId)
+  const chat = await createAgentChat(ctx, { tools: 'research' })
   if (!chat) throw new Error('tutor: 模型会话创建失败')
 
   let map: KnowledgeMap
@@ -167,14 +171,26 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
     out.write(`已有知识地图（${map.nodes.length} 个知识点），继续教研。\n`)
   } else {
     out.write('正在构思知识地图骨架…\n')
-    map = (await generateTurn(chat, skeletonPrompt(profile), (text) => {
+    map = await generateApproved<KnowledgeMap>(chat, skeletonPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       return trySchema(KnowledgeMapSchema, data.value)
-    })) as KnowledgeMap
+    }, gate, value => mapContent(value, profile))
     map.researched_at = today()
     store.write(config.courseId, 'knowledge-map', map)
     out.write(`骨架完成：${map.nodes.length} 个知识点。\n`)
+  }
+
+  // verified 只代表来源数量；旧地图仍需独立内容审查。修复通过前保留原文件。
+  const previousReview = await gate.review(mapContent(map, profile))
+  if (!previousReview.approved) {
+    map = await generateApproved<KnowledgeMap>(chat, [skeletonPrompt(profile),
+      '修复已有地图，保留仍在课程范围内的节点 id；返回完整地图并修正摘要与资料。',
+      JSON.stringify(map), `独立审查发现：${previousReview.issues.join('\n')}`].join('\n'), text => {
+      const data = parseJsonBlock(text)
+      return data.ok ? trySchema(KnowledgeMapSchema, data.value) : data
+    }, gate, value => mapContent(value, profile))
+    store.write(config.courseId, 'knowledge-map', map)
   }
 
   const pending = map.nodes.filter((n) => n.verified !== true)
@@ -198,22 +214,22 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   for (const [index, batch] of batches.entries()) {
     out.write(`\n第 ${index + 1}/${batches.length} 批教研中（${batch.map((n) => n.id).join('、')}）…\n`)
     const batchIds = new Set(batch.map((n) => n.id))
-    const result = (await generateTurn(chat, batchPrompt(profile, batch, index, batches.length), (text) => {
+    const nextMap = await generateApproved<KnowledgeMap>(chat, batchPrompt(profile, batch, index, batches.length), async (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
-      return validateBatch(data.value, batchIds)
-    })) as BatchResult
-    if (result.resources && result.resources.length > 0) {
-      await pruneDeadResources(result.resources, out)
-    }
-    map = mergeResearchBatch(map, result)
-    map.researched_at = today()
+      const validated = validateBatch(data.value, batchIds)
+      if (!validated.ok) return validated
+      const result = validated.value as BatchResult
+      if (result.resources?.length) await pruneDeadResources(result.resources, out)
+      return { ok: true, value: { ...mergeResearchBatch(map, result), researched_at: today() } }
+    }, gate, value => mapContent(value, profile))
+    map = nextMap
     store.write(config.courseId, 'knowledge-map', map)
     const verified = map.nodes.filter((n) => batchIds.has(n.id) && n.verified).length
     for (const node of map.nodes.filter((n) => batchIds.has(n.id) && !n.verified)) {
       out.write(`  ${node.id} 待验证（来源域名 ${sourceDomains(map.resources ?? [], node.id).length} 个，需两个独立来源并完成交叉核对）。\n`)
     }
-    out.write(`  已验证 ${verified}/${batch.length}，来源 +${result.resources?.length ?? 0}（进度已保存，可随时中断）\n`)
+    out.write(`  已验证 ${verified}/${batch.length}，来源共 ${map.resources?.length ?? 0}（进度已保存，可随时中断）\n`)
   }
 
   const verifiedTotal = map.nodes.filter((n) => n.verified).length

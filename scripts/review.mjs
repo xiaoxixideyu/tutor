@@ -8,6 +8,7 @@ import { CourseStore, COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { dueReviews, pickReviewQuestions, postponeReview } from '../src/core/review.ts'
 import { listDueReviews } from '../src/core/summary.ts'
 import { applyReviewResult, formatChoice, judgeQuizAnswer } from '../src/core/assessment.ts'
+import { requireReviewedBank } from '../src/core/quality-store.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
@@ -82,6 +83,7 @@ async function reviewCourse(courseId) {
       out.write(`\n【${review.node}】题库缺失，顺延至明天（可重跑 assess 重建题库）。\n`)
       continue
     }
+    requireReviewedBank(store, courseId, bank, review.node)
     out.write(`\n【${review.node}】\n`)
     let correct = 0
     for (const [index, question] of questions.entries()) {

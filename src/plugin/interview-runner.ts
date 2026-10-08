@@ -1,6 +1,6 @@
 import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import { extractProfileJson, parseProfile, profileValidationError } from '../core/interview.ts'
+import { extractProfileJson, parseProfile, preserveLearnerRequests, profileValidationError } from '../core/interview.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
 import { printSessionTotal } from './cost-line.ts'
@@ -27,12 +27,13 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
 
   let reply = await chat.ask(START_MESSAGE)
   let turns = 0
+  const requests: string[] = []
   while (true) {
     process.stdout.write(`${reply}\n> `)
 
     const profile = parseProfile(reply)
     if (profile) {
-      store.create(config.courseId, profile)
+      store.create(config.courseId, preserveLearnerRequests(profile, requests))
       process.stdout.write(`\n课程 "${config.courseId}" 已创建，档案位于 ${store.root}/${config.courseId}/profile.yaml\n`)
       await chat.flush()
       printSessionTotal(chat, process.stdout)
@@ -69,6 +70,7 @@ async function run(ctx: Context, config: { courseId: string; maxTurns: number })
       exit(1)
       return
     }
+    requests.push(answer.trim())
     reply = await chat.ask(answer.trim())
   }
 }

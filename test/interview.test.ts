@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractProfileJson, parseProfile, profileValidationError } from '../src/core/interview.ts'
+import { extractProfileJson, parseProfile, preserveLearnerRequests, profileScope, profileValidationError } from '../src/core/interview.ts'
 
 const VALID_JSON = JSON.stringify({
   goal: '掌握 Go 后端开发',
@@ -8,6 +8,15 @@ const VALID_JSON = JSON.stringify({
   daily_minutes: 60,
   background: '5 年 Java 经验',
   style: '例子驱动',
+})
+
+it('保存学员访谈原话，覆盖模型伪造的原话字段并用于后续范围上下文', () => {
+  const requests = ['只用一次掷一枚骰子，不写程序']
+  const saved = preserveLearnerRequests({ goal: '广泛学习概率', requests: ['模型自行增加两枚骰子'] }, requests)
+  requests.push('不影响已保存数组')
+  assert.deepEqual(saved.requests, ['只用一次掷一枚骰子，不写程序'])
+  assert.match(profileScope(saved), /只用一次掷一枚骰子/)
+  assert.doesNotMatch(profileScope(saved), /模型自行增加/)
 })
 
 describe('extractProfileJson', () => {

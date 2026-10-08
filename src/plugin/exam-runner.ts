@@ -9,6 +9,9 @@ import { createAgentChat } from './agent-chat.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
+import { examContent, mapContent, planContent } from '../core/content-quality.ts'
+import { createContentGate, generateApproved } from './content-gate.ts'
+import { profileScope } from '../core/interview.ts'
 
 const name = 'tutor-exam-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -56,7 +59,7 @@ function buildExamPrompt(milestone: { id: string; title: string; nodes: string[]
     '覆盖知识点：',
     ...nodeLines,
     '',
-    `全课程目标与排除项（可能含后续课，不能据此扩大本里程碑考查范围）：${profile.goal}`,
+    `全课程目标与排除项（可能含后续课，不能据此扩大本里程碑考查范围）：${profileScope(profile)}`,
     `现有基础：${profile.background || '未填写'}`,
     '',
     '要求：',
@@ -103,6 +106,9 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
+  const gate = createContentGate(ctx, store, config.courseId)
+  await gate.require(mapContent(map, profile))
+  await gate.require(planContent(plan, profile, map))
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const milestone = config.milestoneId
     ? (plan.milestones.find((m) => m.id === config.milestoneId) ?? null)
@@ -118,7 +124,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   const chat = await createAgentChat(ctx)
   if (!chat) throw new Error('tutor: 模型会话创建失败')
   out.write('正在生成试卷…\n')
-  const paper = (await generateTurn(chat, buildExamPrompt(milestone, map, profile), (text) => {
+  const paper = await generateApproved<ExamPaper>(chat, buildExamPrompt(milestone, map, profile), (text) => {
     const data = parseJsonBlock(text)
     if (!data.ok) return data
     const schemaResult = trySchema(ExamPaperSchema, data.value)
@@ -127,7 +133,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
     const invalid = paperValid(schemaResult.value as ExamPaper, milestone.nodes)
     if (invalid) return { ok: false as const, error: invalid }
     return schemaResult
-  })) as ExamPaper
+  }, gate, value => examContent(value, profile, map, milestone))
 
   const totalPoints = paperTotalPoints(paper)
   out.write(`试卷就绪：${paper.questions.length} 题，满分 ${totalPoints}（客观题规则判分，主观题模型判分）。\n\n`)

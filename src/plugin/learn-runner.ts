@@ -1,15 +1,16 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
+import { buildPrepPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
 import { formatChoice, judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
 import { dueReviews } from '../core/review.ts'
-import { extractProfileJson } from '../core/interview.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../core/schema.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
-import { generateTurn, parseJsonBlock } from './generation.ts'
+import { parseJsonBlock } from './generation.ts'
 import { loadCostConfigFromRepo, printSessionTotal } from './cost-line.ts'
 import { formatTurnCost } from '../core/cost.ts'
+import { lessonContent, mapContent, planContent, replayApprovedReply, teachingContent, type ApprovedTeachingTurn } from '../core/content-quality.ts'
+import { createContentGate, generateApproved, generateApprovedTeaching, type ContentGate } from './content-gate.ts'
 
 const name = 'tutor-learn-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -38,33 +39,40 @@ async function startFreshLesson(
   mastery: Mastery | undefined,
   node: string,
   resources: LessonResourceView[],
-  readAnswer: () => Promise<string | null>
-): Promise<{ chat: AgentChat; draft: LessonDraft }> {
+  gate: ContentGate,
+  savedDraft?: LessonDraft,
+  previousTurn?: ApprovedTeachingTurn
+): Promise<{ chat: AgentChat; draft: LessonDraft; turn: ApprovedTeachingTurn }> {
   const out = process.stdout
-  const prepChat = await createAgentChat(ctx)
-  if (!prepChat) throw new Error('tutor: 备课会话创建失败')
-  out.write(`正在备课：${node}…\n`)
-  const cap = lessonStructureCap(profile.daily_minutes)
-  const draft = (await generateTurn(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery }), (text) => {
-    const data = parseJsonBlock(text)
-    if (!data.ok) return data
-    return validateLessonDraft(data.value, node, cap)
-  })) as LessonDraft
-  await prepChat.flush()
-  out.write('备课完成，开始上课。\n')
+  let draft = savedDraft
+  if (!draft) {
+    const prepChat = await createAgentChat(ctx)
+    if (!prepChat) throw new Error('tutor: 备课会话创建失败')
+    out.write(`正在备课：${node}…\n`)
+    const cap = lessonStructureCap(profile.daily_minutes)
+    draft = await generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery }), (text) => {
+      const data = parseJsonBlock(text)
+      if (!data.ok) return data
+      return validateLessonDraft(data.value, node, cap)
+    }, gate, value => lessonContent(value, profile, map))
+    out.write('备课完成并通过审查，准备开课。\n')
+  }
 
   const teachChat = await createAgentChat(ctx)
   if (!teachChat) throw new Error('tutor: 课堂会话创建失败')
-  void readAnswer
+  const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources })
+  const turn = await generateApprovedTeaching(teachChat, previousTurn
+    ? `${intro}\n恢复课堂：上一段已向学员展示的内容为 ${JSON.stringify(previousTurn)}。从这个进度继续，不重讲已完成的部分。` : intro,
+  gate, { node, profile, map, learnerMessage: previousTurn ? '恢复本课' : '开始本课', previousReply: previousTurn?.reply ?? '' })
   store.write(config.courseId, 'lesson', {
     session_id: teachChat.sessionId,
     node,
     started_at: today(),
     draft,
+    approved_turn: turn,
   })
-  const reply = await teachChat.ask(buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources }))
-  out.write(`\n${reply}`)
-  return { chat: teachChat, draft }
+  out.write(`\n${turn.reply}`)
+  return { chat: teachChat, draft, turn }
 }
 
 async function run(ctx: Context, config: { courseId: string }): Promise<void> {
@@ -86,6 +94,9 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
+  const gate = createContentGate(ctx, store, config.courseId)
+  await gate.require(mapContent(map, profile))
+  await gate.require(planContent(plan, profile, map))
   const readAnswer = createLineReader(process.stdin)
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const due = mastery ? dueReviews(mastery, today()) : []
@@ -101,32 +112,40 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
 
   let chat: AgentChat | null = null
   let draft: LessonDraft | null = null
+  let approvedTurn: ApprovedTeachingTurn | undefined
   let resumed = false
   if (store.has(config.courseId, 'lesson')) {
     const lesson = store.read(config.courseId, 'lesson') as LessonState
     const draftValid = validateLessonDraft(lesson.draft, lesson.node, lessonStructureCap(profile.daily_minutes)).ok
     if (draftValid && lesson.node === node && lesson.session_id) {
-      const adopted = await createAgentChat(ctx, { resumeSessionId: lesson.session_id })
-      if (adopted) {
-        chat = adopted
+      const admitted = await gate.review(lessonContent(lesson.draft, profile, map))
+      if (admitted.approved) {
         draft = lesson.draft
-        resumed = true
-        out.write(`从上次断点继续本课（${node}）。\n\n${chat.lastReply()}`)
+        if (lesson.approved_turn && (await gate.review(teachingContent(lesson.approved_turn, node, profile, map))).approved) {
+          approvedTurn = lesson.approved_turn
+          const adopted = await createAgentChat(ctx, { resumeSessionId: lesson.session_id })
+          const replay = adopted ? replayApprovedReply(adopted.lastReply(), approvedTurn) : null
+          if (adopted && replay !== null) {
+            chat = adopted; resumed = true
+            out.write(`从上次断点继续本课（${node}）。\n\n${replay}`)
+          }
+        }
       }
     }
     if (!resumed) {
-      store.remove(config.courseId, 'lesson')
-      out.write('上次课堂已失效，重新备课。\n')
+      out.write('正在从可用的已审查内容恢复课堂…\n')
     }
   }
   const resources = resourcesForNode(map.resources, node)
   if (!resumed || chat === null || draft === null) {
-    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node, resources, readAnswer)
+    const fresh = await startFreshLesson(ctx, config, store, plan, map, profile, mastery, node, resources, gate, draft ?? undefined, approvedTurn)
     chat = fresh.chat
     draft = fresh.draft
+    approvedTurn = fresh.turn
   }
   if (chat === null || draft === null) throw new Error('tutor: 课堂会话初始化失败')
-  const replies: string[] = [chat.lastReply()].filter((r) => r !== '')
+  if (!approvedTurn) throw new Error('tutor: 缺少已通过审查的讲授断点')
+  const approvedTurns: ApprovedTeachingTurn[] = [approvedTurn]
 
   const costConfig = loadCostConfigFromRepo()
   const colorEnabled = out.isTTY === true
@@ -149,41 +168,12 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       return
     }
     if (command === '/check') {
-      if (replies.length === 0) {
-        out.write('\n本课尚无讲授内容，无需核对。\n')
-        continue
-      }
-      out.write('\n事实核对（规则引用检查 + 模型断言核对）…\n')
-      const citation = checkCitations(replies.join('\n'), resources.length)
+      out.write('\n核对内容准入记录与资料引用编号…\n')
+      const citation = checkCitations(approvedTurns.map(turn => turn.reply).join('\n'), resources.length)
       out.write(`引用标记：${citation.cited.length > 0 ? `使用了 [资料:${citation.cited.join('] [资料:')}]` : '未使用'}${citation.invalid.length > 0 ? `，无效编号：${citation.invalid.join('、')}` : ''}\n`)
-      if (resources.length === 0) {
-        out.write('本课知识点无联网资料（先运行 research），仅做规则检查。\n')
-        continue
-      }
-      // 事实核对走独立丢弃会话：不写入教学会话日志，否则会污染忠实度审计语料与本课成本累计
-      const checkChat = await createAgentChat(ctx)
-      if (!checkChat) {
-        out.write('核对会话创建失败，已完成规则检查，跳过模型核对。\n')
-        continue
-      }
-      const checkReply = await checkChat.ask(buildCheckPrompt(replies, resources))
-      await checkChat.flush()
-      const checkData = extractProfileJson(checkReply)
-      const claims = (checkData && typeof checkData === 'object' ? (checkData as { claims?: unknown }).claims : null) as
-        | { claim: string; verdict: string; evidence?: string }[]
-        | null
-      if (Array.isArray(claims) && claims.length > 0) {
-        const mark: Record<string, string> = { supported: '✓', unverified: '?', contradicted: '✗' }
-        for (const claim of claims) {
-          out.write(`  ${mark[claim.verdict] ?? '?'} ${claim.claim}${claim.evidence ? `（${claim.evidence}）` : ''}\n`)
-        }
-        const bad = claims.filter((c) => c.verdict !== 'supported').length
-        out.write(bad === 0 ? '资料对照完成：模型认为上述断言有资料支撑。\n' : `发现 ${bad} 处资料未证实或存在矛盾的断言，需要进一步核实。\n`)
-        out.write('此结果只对照本课资料摘录；资料和模型判断也可能出错，不能替代独立事实验证。\n')
-      } else {
-        out.write('核对结果解析失败，请重试。\n')
-      }
-      out.write(`核对开销（独立计，不计入本课）：${formatTurnCost(checkChat.lastTurnUsage(), checkChat.model, costConfig, colorEnabled)}\n`)
+      for (const turn of approvedTurns) await gate.require(teachingContent(turn, node, profile, map))
+      out.write(`本次课堂 ${approvedTurns.length} 段讲授均持有当前范围下的独立审查记录。记录位于 ${store.root}/${config.courseId}/quality/。\n`)
+      out.write('引用编号检查只验证编号；内容审查依靠独立推理与数值复算，仍可能漏错。\n')
       continue
     }
     if (command === '/quiz') {
@@ -221,9 +211,10 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       exit(0)
       return
     }
-    const reply = await chat.ask(command)
-    replies.push(reply)
-    out.write(`\n${reply}\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
+    approvedTurn = await generateApprovedTeaching(chat, command, gate, { node, profile, map, learnerMessage: command, previousReply: approvedTurn.reply })
+    store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: today(), draft, approved_turn: approvedTurn })
+    approvedTurns.push(approvedTurn)
+    out.write(`\n${approvedTurn.reply}\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
   }
 }
 

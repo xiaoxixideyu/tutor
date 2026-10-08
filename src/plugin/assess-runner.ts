@@ -5,8 +5,11 @@ import { topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { createLineReader } from './line-reader.ts'
-import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
+import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { bankContent, mapContent } from '../core/content-quality.ts'
+import { createContentGate, generateApproved } from './content-gate.ts'
+import { profileScope } from '../core/interview.ts'
 
 const name = 'tutor-assess-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -30,7 +33,7 @@ function mapPrompt(profile: Profile): string {
     '任务 1/2：生成知识地图。',
     '',
     '学员档案：',
-    `- 学习目的：${profile.goal}`,
+    `- 学习目的与原始范围：${profileScope(profile)}`,
     `- 现有基础：${profile.background || '未填写'}`,
     `- 讲解偏好：${profile.style || '未填写'}`,
     `- 每日投入：${profile.daily_minutes ? `${profile.daily_minutes} 分钟` : '未填写'}`,
@@ -53,7 +56,7 @@ function bankPrompt(map: KnowledgeMap, profile: Profile): string {
   return [
     '任务 2/2：生成摸底题库。需覆盖以下知识点：',
     nodes,
-    `学习目的与范围：${profile.goal}`,
+    `学习目的与范围：${profileScope(profile)}`,
     `现有基础：${profile.background || '未填写'}`,
     '题目严格遵守上述范围与排除项，不借综合题引入未要求的内容。',
     '',
@@ -135,33 +138,35 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
+  const gate = createContentGate(ctx, store, config.courseId)
   if (!store.has(config.courseId, 'knowledge-map')) {
     const chat = await createAgentChat(ctx)
     if (!chat) throw new Error('tutor: 模型会话创建失败')
     out.write('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
-    const mapValue = await generateTurn(chat, mapPrompt(profile), (text) => {
+    const mapValue = await generateApproved<KnowledgeMap>(chat, mapPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       return trySchema(KnowledgeMapSchema, data.value)
-    })
+    }, gate, value => mapContent(value, profile))
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
     out.write('知识地图生成开销：')
     printSessionTotal(chat, out)
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
+  await gate.require(mapContent(map, profile))
   out.write(`知识地图就绪：${map.nodes.length} 个知识点。\n`)
 
   // 按节点独立出题并保存：一次要求整门课程容易耗尽输出预算，中断后也不应重做已完成的题目。
   const bank: QuestionBank = store.has(config.courseId, 'question-bank')
     ? (store.read(config.courseId, 'question-bank') as QuestionBank) : {}
   for (const node of map.nodes) {
-    if (!validateBank(bank, [node.id])) continue
+    if (!validateBank(bank, [node.id]) && (await gate.review(bankContent(bank, node.id, profile, map))).approved) continue
     out.write(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
     const bankChat = await createAgentChat(ctx)
     if (!bankChat) throw new Error('tutor: 出题会话创建失败')
     const nodeMap = { ...map, nodes: [node], edges: [] }
-    const bankValue = await generateTurn(bankChat, bankPrompt(nodeMap, profile), (text) => {
+    const bankValue = await generateApproved<QuestionBank>(bankChat, bankPrompt(nodeMap, profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       const schemaResult = trySchema(QuestionBankSchema, data.value)
@@ -169,7 +174,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       const bankError = validateBank(schemaResult.value as QuestionBank, [node.id])
       if (bankError) return { ok: false as const, error: bankError }
       return schemaResult
-    })
+    }, gate, value => bankContent(value, node.id, profile, map))
     bank[node.id] = (bankValue as QuestionBank)[node.id]
     store.write(config.courseId, 'question-bank', bank)
     await bankChat.flush()

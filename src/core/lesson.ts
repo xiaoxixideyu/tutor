@@ -1,5 +1,6 @@
 import { LessonDraftSchema, type KnowledgeMapResource, type KnowledgeMap, type LessonDraft, type Mastery, type Plan, type Profile } from './schema.ts'
 import { courseNodeOrder } from './plan.ts'
+import { profileScope } from './interview.ts'
 
 export interface LessonResourceView {
   index: number
@@ -137,7 +138,7 @@ export function buildPrepPrompt(input: PrepInput): string {
     prerequisites.length > 0 ? `- 前置知识：${prerequisites.join('、')}（学员状态见下）` : '- 前置知识：无',
     '',
     '【学员档案】',
-    `- 学习目的：${input.profile.goal}`,
+    `- 学习目的与原始范围：${profileScope(input.profile)}`,
     `- 现有基础：${input.profile.background || '未填写'}`,
     `- 讲解偏好：${input.profile.style || '未填写'}`,
     `- 每日投入：${input.profile.daily_minutes ? `${input.profile.daily_minutes} 分钟` : '未填写'}`,
@@ -180,7 +181,7 @@ export function buildTeachingIntro(input: TeachingIntroInput): string {
   const resources = input.resources ?? []
   const lines = [
     `【课程】${input.courseId}`,
-    `【学员档案】目的：${input.profile.goal}｜基础：${input.profile.background || '未填写'}｜偏好：${input.profile.style || '未填写'}｜每日投入：${input.profile.daily_minutes ?? '未填写'} 分钟`,
+    `【学员档案】目的与原始范围：${profileScope(input.profile)}｜基础：${input.profile.background || '未填写'}｜偏好：${input.profile.style || '未填写'}｜每日投入：${input.profile.daily_minutes ?? '未填写'} 分钟`,
     `【本课知识点】${input.draft.node}（${input.draft.title}）`,
     ...(resources.length > 0
       ? ['', '【本课资料】（讲授中引用事实时标注 [资料:编号]）', ...resourceLines(resources, 500)]

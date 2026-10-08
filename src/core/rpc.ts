@@ -3,6 +3,7 @@ import { dueReviews, pickReviewQuestions, reviewAttemptId } from './review.ts'
 import { courseProgress, listCourseSummaries, listDueReviews } from './summary.ts'
 import { applyReviewResult, judgeQuizAnswer } from './assessment.ts'
 import type { DocKind, Mastery, Question, QuestionBank, ReviewResult } from './schema.ts'
+import { requireReviewedBank } from './quality-store.ts'
 
 // JSON-RPC 方法表（设计 §4.3：业务在核心，壳只做传输——http/stdio/未来 Harness 档案都可复用）
 
@@ -144,6 +145,7 @@ export function createRpcMethods(
       const day = today()
       const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : {}
       const bank = store.has(id, 'question-bank') ? (store.read(id, 'question-bank') as QuestionBank) : {}
+      for (const due of dueReviews(mastery, day)) if (pickReviewQuestions(bank, due.node).length) requireReviewedBank(store, id, bank, due.node)
       const items = dueReviews(mastery, day).map((due) => ({
         node: due.node,
         stage: due.stage,
@@ -188,6 +190,7 @@ export function createRpcMethods(
       if (answers.length !== questions.length || answers.some((answer) => !answer.trim())) {
         throw rpcError(RPC_ERRORS.invalidParams, '请完成全部复习题后提交')
       }
+      requireReviewedBank(store, id, bank, node)
       const perQuestion = questions.map((question, index) => {
         const your = answers[index] ?? ''
         return {

@@ -1,0 +1,1501 @@
+{
+  "version": 1,
+  "provenance": "冻结 2026-10-08 真实课程验收错误与正确对照。原文件不改写；上下文仅保留原节点标题，避免错误源摘要污染独立判断。profile.requests 从原始访谈 input.txt 恢复。预期由代码助手基于题干、Go反例和精确分数确定，尚非真人盲评。",
+  "cases": [
+    {
+      "id": "go-copy-length-bad",
+      "provenance": "原 Go knowledge-map.yaml 第二节点 summary，逐字冻结；范围来自原始访谈",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "把一个切片直接赋值给另一个变量只得到共享底层数组的浅拷贝，修改副本元素会影响原切片；要得到互不影响的副本，需先用 make 按源切片长度分配新底层数组（dst := make([]int, len(src))），再用内建 copy(dst, src) 复制元素——copy 返回复制的元素个数，且只复制 min(len(dst), len(src)) 个元素，因此目标切片必须按源长度创建；复制完成后两个切片指向不同底层数组（打印地址不同），改副本不影响原切片、改原切片也不影响副本。",
+              "learnerMessage": "请解释这个结论",
+              "previousReply": ""
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "copy 复制 min 长度；完整复制只要求目标长度至少等于源长度，等长不是必须"
+      }
+    },
+    {
+      "id": "go-address-bad",
+      "provenance": "原 Go /check 在 07-41-14 课堂日志第106行被误判 supported 的断言原文",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "打印底层数组地址不同，就直接证明两者不是同一块数组",
+              "learnerMessage": "请解释这个结论",
+              "previousReply": ""
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "s:=[]int{1,2,3};t:=s[1:] 的 %p 不同但共享底层数组"
+      }
+    },
+    {
+      "id": "go-next-lesson-bad",
+      "provenance": "原 Go m1 第5题，逐字冻结",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "slice-shared-backing-array"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能通过一个可运行的小程序演示 []int 切片共享底层数组：修改一个切片的元素后，另一个切片同样看到变化，并能解释原因",
+            "nodes": [
+              "slice-shared-backing-array"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q5",
+            "node": "slice-shared-backing-array",
+            "content": {
+              "id": "q5",
+              "node": "slice-shared-backing-array",
+              "type": "objective",
+              "question": "已知 original := []int{1, 2, 3}。要得到一个与 original 元素独立、修改 original 不会影响它的 []int，最合适的是？",
+              "choices": [
+                "A. independent := original",
+                "B. independent := original[:]",
+                "C. independent := original[0:1]",
+                "D. independent := make([]int, len(original)); copy(independent, original)"
+              ],
+              "answer": "D",
+              "points": 1
+            },
+            "question": {
+              "id": "q5",
+              "question": "已知 original := []int{1, 2, 3}。要得到一个与 original 元素独立、修改 original 不会影响它的 []int，最合适的是？",
+              "choices": [
+                "A. independent := original",
+                "B. independent := original[:]",
+                "C. independent := original[0:1]",
+                "D. independent := make([]int, len(original)); copy(independent, original)"
+              ],
+              "answer": "D"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "当前只考共享，make+copy 是下一课",
+        "rejectedUnits": [
+          {
+            "id": "q5",
+            "dimension": "scope"
+          }
+        ]
+      }
+    },
+    {
+      "id": "probability-sum-bad",
+      "provenance": "evals/course-grading-regressions.json 概率原题、错误答案与关键词，逐字冻结",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能列出等可能试验的样本空间，并数出指定事件包含的有利结果数",
+            "nodes": [
+              "dice-sample-space"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q4",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "q4",
+              "node": "dice-sample-space",
+              "type": "subjective",
+              "question": "掷一枚公平的六面骰子一次，观察朝上的点数。请完整作答：\n(1) 写出该等可能试验的样本空间，并说明为什么其中的结果等可能；\n(2) 分别写出事件 A=「点数小于 3」、事件 B=「点数是偶数」、事件 C=「点数既不小于 3 也不是偶数」所包含的有利结果，并数出各自的结果个数；\n(3) 分别计算 P(A)、P(B)、P(C)，写出你所使用的计数公式（用 |E| 与 |S| 表示），并检验三个事件的概率总和是否合理。",
+              "answer": "(1) 样本空间 S={1,2,3,4,5,6}，共有 |S|=6 个结果。骰子公平，每个面朝上的机会相同，故这 6 个结果等可能。\n(2) A={1,2}，|A|=2；B={2,4,6}，|B|=3；C 要求「不小于 3」即点数≥3，且不是偶数，故 C={3,5}，|C|=2。\n(3) 计数公式：P(E)=|E|/|S|，即事件中的结果数 ÷ 样本空间中的结果数。\nP(A)=2/6=1/3；P(B)=3/6=1/2；P(C)=2/6=1/3。\n检验：A∪B={1,2,4,6}（4 个结果），C={3,5}（2 个结果），C 与前两者互不相交且合起来正好覆盖全部 6 个结果，1/3+1/2+1/3=1（也可看作 2/6+3/6+2/6=6/6=1），结果合理。",
+              "keywords": [
+                "样本空间 {1,2,3,4,5,6}",
+                "6 个结果等可能（公平骰子每面机会相同）",
+                "A={1,2}，|A|=2",
+                "B={2,4,6}，|B|=3",
+                "C={3,5}，|C|=2",
+                "P(E)=|E|/|S|（有利结果数 ÷ 样本空间结果数）",
+                "P(A)=2/6=1/3",
+                "P(B)=3/6=1/2",
+                "P(C)=2/6=1/3",
+                "三概率之和为 1（覆盖全部样本空间）"
+              ],
+              "points": 2
+            },
+            "question": {
+              "id": "q4",
+              "question": "掷一枚公平的六面骰子一次，观察朝上的点数。请完整作答：\n(1) 写出该等可能试验的样本空间，并说明为什么其中的结果等可能；\n(2) 分别写出事件 A=「点数小于 3」、事件 B=「点数是偶数」、事件 C=「点数既不小于 3 也不是偶数」所包含的有利结果，并数出各自的结果个数；\n(3) 分别计算 P(A)、P(B)、P(C)，写出你所使用的计数公式（用 |E| 与 |S| 表示），并检验三个事件的概率总和是否合理。",
+              "answer": "(1) 样本空间 S={1,2,3,4,5,6}，共有 |S|=6 个结果。骰子公平，每个面朝上的机会相同，故这 6 个结果等可能。\n(2) A={1,2}，|A|=2；B={2,4,6}，|B|=3；C 要求「不小于 3」即点数≥3，且不是偶数，故 C={3,5}，|C|=2。\n(3) 计数公式：P(E)=|E|/|S|，即事件中的结果数 ÷ 样本空间中的结果数。\nP(A)=2/6=1/3；P(B)=3/6=1/2；P(C)=2/6=1/3。\n检验：A∪B={1,2,4,6}（4 个结果），C={3,5}（2 个结果），C 与前两者互不相交且合起来正好覆盖全部 6 个结果，1/3+1/2+1/3=1（也可看作 2/6+3/6+2/6=6/6=1），结果合理。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "1/3+1/2+1/3=7/6，原参考和关键词错称1"
+      }
+    },
+    {
+      "id": "probability-exam-scope-bad",
+      "provenance": "原 probability-exam-m2-paper.json 全卷，逐字冻结",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "complement-rule",
+            "content": {
+              "id": "q1",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "设 A 是某个随机试验中的一个事件，A′ 是它的补集。下列说法一定正确的是：",
+              "choices": [
+                "A. A 与 A′ 互斥（没有共同结果），并且 P(A)+P(A′)=1",
+                "B. A 与 A′ 互斥，但 P(A)+P(A′) 可能小于 1",
+                "C. A 与 A′ 可以同时发生",
+                "D. 只要 P(B)=1−P(A)，B 就一定是 A′"
+              ],
+              "answer": "A",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "设 A 是某个随机试验中的一个事件，A′ 是它的补集。下列说法一定正确的是：",
+              "choices": [
+                "A. A 与 A′ 互斥（没有共同结果），并且 P(A)+P(A′)=1",
+                "B. A 与 A′ 互斥，但 P(A)+P(A′) 可能小于 1",
+                "C. A 与 A′ 可以同时发生",
+                "D. 只要 P(B)=1−P(A)，B 就一定是 A′"
+              ],
+              "answer": "A"
+            }
+          },
+          {
+            "id": "q2",
+            "node": "complement-rule",
+            "content": {
+              "id": "q2",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "掷一枚公平的六面骰子（样本空间为 1,2,3,4,5,6，每个结果概率相同）。设 A=「点数是偶数」，B=「点数大于 3」。此时 P(A)=1/2，P(B)=1/2，两者相加恰好等于 1。下列说法正确的是：",
+              "choices": [
+                "A. B 是 A 的补集，因为 P(A)+P(B)=1",
+                "B. B 不是 A 的补集，因为 A 与 B 有共同结果（4 和 6）",
+                "C. B 是 A 的补集，因为 A 与 B 都含有 3 个结果",
+                "D. B 不是 A 的补集，因为 P(A)+P(B) 恰好等于 1"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q2",
+              "question": "掷一枚公平的六面骰子（样本空间为 1,2,3,4,5,6，每个结果概率相同）。设 A=「点数是偶数」，B=「点数大于 3」。此时 P(A)=1/2，P(B)=1/2，两者相加恰好等于 1。下列说法正确的是：",
+              "choices": [
+                "A. B 是 A 的补集，因为 P(A)+P(B)=1",
+                "B. B 不是 A 的补集，因为 A 与 B 有共同结果（4 和 6）",
+                "C. B 是 A 的补集，因为 A 与 B 都含有 3 个结果",
+                "D. B 不是 A 的补集，因为 P(A)+P(B) 恰好等于 1"
+              ],
+              "answer": "B"
+            }
+          },
+          {
+            "id": "q3",
+            "node": "complement-rule",
+            "content": {
+              "id": "q3",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "同时掷两枚公平的六面骰子，求「至少有一枚骰子的点数是 6」的概率。用补集方法计算，结果是多少？",
+              "choices": [
+                "A. 1/36",
+                "B. 11/36",
+                "C. 25/36",
+                "D. 1/3"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q3",
+              "question": "同时掷两枚公平的六面骰子，求「至少有一枚骰子的点数是 6」的概率。用补集方法计算，结果是多少？",
+              "choices": [
+                "A. 1/36",
+                "B. 11/36",
+                "C. 25/36",
+                "D. 1/3"
+              ],
+              "answer": "B"
+            }
+          },
+          {
+            "id": "q4",
+            "node": "complement-rule",
+            "content": {
+              "id": "q4",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "有三个相同的转盘，每个转盘都被平均分成 5 份，其中只有 1 份涂成红色，其余 4 份是白色。同时旋转这三个转盘，每个转盘等可能地停在 5 份中的任意一份。求「至少有一个转盘停在红色」的概率。",
+              "choices": [
+                "A. 64/125",
+                "B. 61/125",
+                "C. 1/125",
+                "D. 3/5"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q4",
+              "question": "有三个相同的转盘，每个转盘都被平均分成 5 份，其中只有 1 份涂成红色，其余 4 份是白色。同时旋转这三个转盘，每个转盘等可能地停在 5 份中的任意一份。求「至少有一个转盘停在红色」的概率。",
+              "choices": [
+                "A. 64/125",
+                "B. 61/125",
+                "C. 1/125",
+                "D. 3/5"
+              ],
+              "answer": "B"
+            }
+          },
+          {
+            "id": "q5",
+            "node": "complement-rule",
+            "content": {
+              "id": "q5",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "掷一枚公平的六面骰子 4 次。设 A=「至少出现一次 6」。在把 P(A) 改算为 1−P(A′) 时，A′ 指的是下面哪一个事件？",
+              "choices": [
+                "A. 四次都出现 6",
+                "B. 四次都不出现 6",
+                "C. 恰好出现一次 6",
+                "D. 至少出现一次 6"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q5",
+              "question": "掷一枚公平的六面骰子 4 次。设 A=「至少出现一次 6」。在把 P(A) 改算为 1−P(A′) 时，A′ 指的是下面哪一个事件？",
+              "choices": [
+                "A. 四次都出现 6",
+                "B. 四次都不出现 6",
+                "C. 恰好出现一次 6",
+                "D. 至少出现一次 6"
+              ],
+              "answer": "B"
+            }
+          },
+          {
+            "id": "q6",
+            "node": "complement-rule",
+            "content": {
+              "id": "q6",
+              "node": "complement-rule",
+              "type": "subjective",
+              "question": "用补集方法求下面问题中的概率，并按要求写清过程。\n一个密码锁的密码由 2 位数字组成，每一位都可以是 0~9 中的任意一个数字，每种 2 位组合都等可能（样本空间共 100 种）。求随机设置的密码「至少有一位数字是 0」的概率。\n要求：(1) 写出所求事件 A 以及它的补集 A′；(2) 说明为什么可以写成 P(A)=1−P(A′)；(3) 先用计数算出 P(A′)，再求出 P(A)。",
+              "answer": "设 A=「密码至少有一位数字是 0」。它的补集（反面）A′=「两位数字都不是 0」，也就是一位 0 都没有。\n因为 A′ 由样本空间中所有不属于 A 的结果组成，A 与 A′ 互斥（不能同时发生），而且它们合起来穷尽了所有可能结果，所以 P(A)+P(A′)=1，即 P(A)=1−P(A′)。这样只需数清楚「一个 0 都没有」有多少种，比直接逐项相加「恰好一位是 0」「两位都是 0」更省事。\n样本空间共有 10×10=100 种等可能的两位数字组合。\nA′ 的有利结果：每一位都不能是 0，只能从其余 9 个数字中选，所以共有 9×9=81 种，因此 P(A′)=81/100。\n于是 P(A)=1−81/100=19/100。",
+              "keywords": [
+                "补集",
+                "反面",
+                "至少一位是0",
+                "两位都不是0",
+                "互斥",
+                "穷尽",
+                "P(A)+P(A′)=1",
+                "样本空间共100种",
+                "9×9=81",
+                "P(A′)=81/100",
+                "P(A)=1−81/100=19/100"
+              ],
+              "points": 2
+            },
+            "question": {
+              "id": "q6",
+              "question": "用补集方法求下面问题中的概率，并按要求写清过程。\n一个密码锁的密码由 2 位数字组成，每一位都可以是 0~9 中的任意一个数字，每种 2 位组合都等可能（样本空间共 100 种）。求随机设置的密码「至少有一位数字是 0」的概率。\n要求：(1) 写出所求事件 A 以及它的补集 A′；(2) 说明为什么可以写成 P(A)=1−P(A′)；(3) 先用计数算出 P(A′)，再求出 P(A)。",
+              "answer": "设 A=「密码至少有一位数字是 0」。它的补集（反面）A′=「两位数字都不是 0」，也就是一位 0 都没有。\n因为 A′ 由样本空间中所有不属于 A 的结果组成，A 与 A′ 互斥（不能同时发生），而且它们合起来穷尽了所有可能结果，所以 P(A)+P(A′)=1，即 P(A)=1−P(A′)。这样只需数清楚「一个 0 都没有」有多少种，比直接逐项相加「恰好一位是 0」「两位都是 0」更省事。\n样本空间共有 10×10=100 种等可能的两位数字组合。\nA′ 的有利结果：每一位都不能是 0，只能从其余 9 个数字中选，所以共有 9×9=81 种，因此 P(A′)=81/100。\n于是 P(A)=1−81/100=19/100。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "双骰、三转盘、多次投掷和密码偏离两节单骰微课",
+        "rejectedUnits": [
+          {
+            "id": "q3",
+            "dimension": "scope"
+          },
+          {
+            "id": "q4",
+            "dimension": "scope"
+          },
+          {
+            "id": "q5",
+            "dimension": "scope"
+          },
+          {
+            "id": "q6",
+            "dimension": "scope"
+          }
+        ]
+      }
+    },
+    {
+      "id": "probability-optional-bad",
+      "provenance": "原 probability/practice.yaml 第一任务，包含原始可选活动",
+      "input": {
+        "kind": "practice",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ]
+        },
+        "units": [
+          {
+            "id": "dice-sample-space-favorable-counting",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "dice-sample-space-favorable-counting",
+              "node": "dice-sample-space",
+              "title": "掷一枚公平六面骰子：数出有利结果，写出概率",
+              "prompt": "任务：用等可能样本空间数出有利结果（掷一枚公平六面骰子）。\n\n背景：一枚公平六面骰子的样本空间是 6 个等可能结果 1, 2, 3, 4, 5, 6。因为结果等可能，所以 P(事件) = 事件包含的结果数 ÷ 6。\n\n步骤：\n1. 在当前工作目录新建一个纯文本文件 answers.txt。\n2. 写出样本空间（6 个结果，按从小到大、用英文逗号连接）。\n3. 从 1 到 6 逐个判断，分别写出下面三个事件的有利结果集合（按从小到大、用英文逗号连接，逗号后不留空格）：\n   - 事件“点数是偶数”（even）\n   - 事件“点数小于 3”（lt3）\n   - 事件“点数不是 6”（not6）\n4. 对每个事件写出概率，用最简分数（不要写小数，不要写未约分的 3/6 这类形式）。\n5. 把结果写成下面 7 行（顺序不限，可以另外加以 # 开头的说明行；每行必须逐字符一致：键名全小写，等号两边不留空格，行尾不留空格或标点）：\n   sample_space=<所有结果>\n   even_favorable=<事件“偶数”的结果>\n   even_prob=<最简分数>\n   lt3_favorable=<事件“小于 3”的结果>\n   lt3_prob=<最简分数>\n   not6_favorable=<事件“不是 6”的结果>\n   not6_prob=<最简分数>\n\n格式示意（不是本题答案）：\n   # sample_space=a,b,c\n   # win_favorable=a,b\n   # win_prob=2/3\n\n验收标准：answers.txt 存在，且上面 7 行逐字符正确——特别是“小于 3”的结果集合（别把 3 算进去）、“不是 6”的结果集合，以及三个约到最简的概率分数。\n\n提交前自检：在终端运行 cat answers.txt，逐行核对等号两边是否有空格、结果是否有空格、分数是否最简。",
+              "starter_files": [
+                {
+                  "path": "README.md",
+                  "content": "# 任务：掷一枚公平六面骰子的等可能样本空间\n\n一枚公平六面骰子有 6 个等可能结果：1, 2, 3, 4, 5, 6。\n因为所有结果等可能，所以 P(事件) = 事件包含的结果数 ÷ 6。\n\n## 你要产出什么\n在当前目录新建纯文本文件 answers.txt，写入下面 7 行（顺序不限，可以加以 # 开头的说明行，这些说明行不影响判分）：\n\nsample_space=<所有结果，按从小到大，用英文逗号连接>\neven_favorable=<事件“点数是偶数”包含的结果>\neven_prob=<最简分数>\nlt3_favorable=<事件“点数小于 3”包含的结果>\nlt3_prob=<最简分数>\nnot6_favorable=<事件“点数不是 6”包含的结果>\nnot6_prob=<最简分数>\n\n## 格式约定\n- 键名全小写，等号两边不写空格，行尾不留空格或标点。\n- 值里的结果用英文逗号分隔，逗号后不留空格，例如 1,2,3。\n- 概率写成最简分数，例如 1/2、1/3（不要写小数，也不要写 3/6 这种未约分形式）。\n\n## 格式示意（不是本题答案）\n# sample_space=a,b,c\n# win_favorable=a,b\n# win_prob=2/3\n\n## 提交前自检\n在终端运行：cat answers.txt\n逐行核对：等号两边有没有多余空格？分数有没有约到最简？“小于 3”里有没有混进 3？“不是 6”有没有漏掉结果？\n\n## 动手体会（可选，不影响自动判分）\n如果你手边有骰子，实际掷 30 次并记录每个点数出现的次数。次数通常不会正好各 5 次，这是正常的：概率说的是“等可能的结果有多少个”，不是“掷 30 次一定各出现 5 次”。\n"
+                }
+              ],
+              "tests": [
+                {
+                  "name": "answers-file-exists",
+                  "command": "test -f answers.txt && echo ANSWERS_FOUND",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "ANSWERS_FOUND"
+                  ]
+                },
+                {
+                  "name": "favorable-sets",
+                  "command": "for p in \"sample_space=1,2,3,4,5,6\" \"even_favorable=2,4,6\" \"lt3_favorable=1,2\" \"not6_favorable=1,2,3,4,5\"; do grep -Fxq \"$p\" answers.txt || { echo \"MISSING: $p\"; exit 1; }; done; echo FAVORABLE_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "FAVORABLE_OK"
+                  ]
+                },
+                {
+                  "name": "probabilities",
+                  "command": "for p in \"even_prob=1/2\" \"lt3_prob=1/3\" \"not6_prob=5/6\"; do grep -Fxq \"$p\" answers.txt || { echo \"MISSING: $p\"; exit 1; }; done; echo PROBS_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "PROBS_OK"
+                  ]
+                }
+              ],
+              "hints": [
+                "先把 1 到 6 从小到大写下来，这就是样本空间。然后对每个事件，从 1 开始一个一个问自己“这个数符合条件吗”，把符合条件的数按从小到大写进对应的 *_favorable 里——不要凭印象，逐个检查。",
+                "三个概率的算法一样：有利结果的个数 ÷ 6，写成分数后要约到最简。注意“小于 3”只含 1 和 2（3 不算）；“不是 6”要在 1 到 6 中挑出所有不是 6 的数，再数一数有几个，然后写分数。"
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "可选30次投掷和频数比较也属于内容范围审查"
+      }
+    },
+    {
+      "id": "map-expanded-bad",
+      "provenance": "原 rejected-maps/probability.yaml 全地图，逐字冻结",
+      "input": {
+        "kind": "map",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [],
+          "activeNodes": []
+        },
+        "units": [
+          {
+            "id": "outline",
+            "content": {
+              "nodes": [
+                {
+                  "id": "random-phenomenon",
+                  "title": "随机现象与随机试验"
+                },
+                {
+                  "id": "sample-space",
+                  "title": "样本空间：把所有可能结果列全"
+                },
+                {
+                  "id": "event-as-subset",
+                  "title": "事件：样本空间的子集"
+                },
+                {
+                  "id": "equally-likely-assumption",
+                  "title": "等可能性与公平骰子"
+                },
+                {
+                  "id": "counting-favorable-outcomes",
+                  "title": "有利结果的系统计数"
+                },
+                {
+                  "id": "classical-probability-definition",
+                  "title": "古典概型 P(A)=有利结果数÷总结果数"
+                },
+                {
+                  "id": "probability-range",
+                  "title": "概率的取值范围与必然、不可能事件"
+                },
+                {
+                  "id": "die-sample-space",
+                  "title": "一枚公平六面骰的样本空间与常见事件"
+                },
+                {
+                  "id": "die-event-probability",
+                  "title": "计算骰子事件的概率"
+                },
+                {
+                  "id": "fraction-to-percent",
+                  "title": "概率的分数、小数与百分数表示"
+                },
+                {
+                  "id": "complement-event-definition",
+                  "title": "补集事件「A 不发生」"
+                },
+                {
+                  "id": "complement-formula",
+                  "title": "用 1 减求概率 P(A)=1-P(A不发生)"
+                },
+                {
+                  "id": "choosing-complement",
+                  "title": "何时用补集更省事"
+                },
+                {
+                  "id": "everyday-probability-language",
+                  "title": "读懂生活中的概率说法"
+                },
+                {
+                  "id": "probability-misconceptions",
+                  "title": "常见概率误解辨析"
+                }
+              ],
+              "edges": [
+                [
+                  "sample-space",
+                  "random-phenomenon"
+                ],
+                [
+                  "event-as-subset",
+                  "sample-space"
+                ],
+                [
+                  "equally-likely-assumption",
+                  "random-phenomenon"
+                ],
+                [
+                  "counting-favorable-outcomes",
+                  "event-as-subset"
+                ],
+                [
+                  "classical-probability-definition",
+                  "counting-favorable-outcomes"
+                ],
+                [
+                  "classical-probability-definition",
+                  "equally-likely-assumption"
+                ],
+                [
+                  "probability-range",
+                  "classical-probability-definition"
+                ],
+                [
+                  "die-sample-space",
+                  "sample-space"
+                ],
+                [
+                  "die-sample-space",
+                  "equally-likely-assumption"
+                ],
+                [
+                  "die-event-probability",
+                  "die-sample-space"
+                ],
+                [
+                  "die-event-probability",
+                  "classical-probability-definition"
+                ],
+                [
+                  "fraction-to-percent",
+                  "classical-probability-definition"
+                ],
+                [
+                  "complement-event-definition",
+                  "event-as-subset"
+                ],
+                [
+                  "complement-formula",
+                  "complement-event-definition"
+                ],
+                [
+                  "complement-formula",
+                  "probability-range"
+                ],
+                [
+                  "choosing-complement",
+                  "complement-formula"
+                ],
+                [
+                  "everyday-probability-language",
+                  "fraction-to-percent"
+                ],
+                [
+                  "probability-misconceptions",
+                  "probability-range"
+                ],
+                [
+                  "probability-misconceptions",
+                  "equally-likely-assumption"
+                ]
+              ]
+            }
+          },
+          {
+            "id": "node:random-phenomenon",
+            "node": "random-phenomenon",
+            "content": {
+              "title": "随机现象与随机试验",
+              "summary": "随机现象指结果事先无法确定但所有可能结果已知的现象，掷一次骰子就是典型随机试验，与「明天太阳升起」这类确定现象相对。"
+            }
+          },
+          {
+            "id": "node:sample-space",
+            "node": "sample-space",
+            "content": {
+              "title": "样本空间：把所有可能结果列全",
+              "summary": "样本空间是随机试验所有可能结果的集合，常用 S 或 Ω 表示，掷一枚六面骰子时 S={1,2,3,4,5,6}，列举时要求不重不漏。"
+            }
+          },
+          {
+            "id": "node:event-as-subset",
+            "node": "event-as-subset",
+            "content": {
+              "title": "事件：样本空间的子集",
+              "summary": "事件是样本空间的一个子集，例如「点数是偶数」对应 {2,4,6}，事件发生当且仅当试验结果落在该子集里。"
+            }
+          },
+          {
+            "id": "node:equally-likely-assumption",
+            "node": "equally-likely-assumption",
+            "content": {
+              "title": "等可能性与公平骰子",
+              "summary": "等可能指每个基本结果出现的可能性相同，公平六面骰子六个面等可能，这是能否直接用「有利结果数÷总结果数」的前提。"
+            }
+          },
+          {
+            "id": "node:counting-favorable-outcomes",
+            "node": "counting-favorable-outcomes",
+            "content": {
+              "title": "有利结果的系统计数",
+              "summary": "有利结果指事件包含的那些基本结果，可用有序列举、表格或树形图逐个列出并核对，避免遗漏与重复。"
+            }
+          },
+          {
+            "id": "node:classical-probability-definition",
+            "node": "classical-probability-definition",
+            "content": {
+              "title": "古典概型 P(A)=有利结果数÷总结果数",
+              "summary": "在结果有限且等可能的场合，事件 A 的概率 P(A)=A 包含的结果数 m 除以样本空间结果总数 n，即 P(A)=m/n。"
+            }
+          },
+          {
+            "id": "node:probability-range",
+            "node": "probability-range",
+            "content": {
+              "title": "概率的取值范围与必然、不可能事件",
+              "summary": "任何事件的概率都满足 0≤P(A)≤1，必然事件（如「点数不超过6」）概率为 1，不可能事件（如「点数为7」）概率为 0。"
+            }
+          },
+          {
+            "id": "node:die-sample-space",
+            "node": "die-sample-space",
+            "content": {
+              "title": "一枚公平六面骰的样本空间与常见事件",
+              "summary": "掷一枚公平骰子的样本空间为 {1,2,3,4,5,6}，共 6 个等可能结果，常见事件如「点数为3」「点数为偶数」「点数大于2」都可写成子集。"
+            }
+          },
+          {
+            "id": "node:die-event-probability",
+            "node": "die-event-probability",
+            "content": {
+              "title": "计算骰子事件的概率",
+              "summary": "把骰子事件写成结果集合后数出个数，再除以 6，例如「点数为偶数」的概率为 3/6=1/2，「点数大于4」的概率为 2/6=1/3。"
+            }
+          },
+          {
+            "id": "node:fraction-to-percent",
+            "node": "fraction-to-percent",
+            "content": {
+              "title": "概率的分数、小数与百分数表示",
+              "summary": "同一概率可用分数、小数或百分数表示，需约分到最简分数，如 1/6≈0.167≈16.7%，这是读懂生活中概率说法的换算基础。"
+            }
+          },
+          {
+            "id": "node:complement-event-definition",
+            "node": "complement-event-definition",
+            "content": {
+              "title": "补集事件「A 不发生」",
+              "summary": "事件 A 的补集记作 A 的对立事件（A 不发生），它由样本空间中所有不属于 A 的结果组成，例如「不是3点」对应 {1,2,4,5,6}。"
+            }
+          },
+          {
+            "id": "node:complement-formula",
+            "node": "complement-formula",
+            "content": {
+              "title": "用 1 减求概率 P(A)=1-P(A不发生)",
+              "summary": "同一事件与其补集的概率之和为 1，因此 P(A)=1-P(A 不发生)，如「点数是3」的概率可由 1-5/6 得 1/6。"
+            }
+          },
+          {
+            "id": "node:choosing-complement",
+            "node": "choosing-complement",
+            "content": {
+              "title": "何时用补集更省事",
+              "summary": "当事件描述含「不是」「至少」「除…以外」等字样、直接数有利结果麻烦时，改数它的补集再作 1 减计算往往更快。"
+            }
+          },
+          {
+            "id": "node:everyday-probability-language",
+            "node": "everyday-probability-language",
+            "content": {
+              "title": "读懂生活中的概率说法",
+              "summary": "天气预报的「降水概率70%」、广告与游戏抽奖的百分比、以及「很可能」「十有八九」等字眼，都可换算成 0 到 1 之间的数值来比较大小。"
+            }
+          },
+          {
+            "id": "node:probability-misconceptions",
+            "node": "probability-misconceptions",
+            "content": {
+              "title": "常见概率误解辨析",
+              "summary": "「连续五次不是6，下次更该是6」的赌徒谬误、「不是发生就是不发生所以各50%」的误判，都源自忽略结果是否等可能与各次试验相互独立的事实。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "明确两节课被拆成15节点且增加周边主题",
+        "rejectedUnits": [
+          {
+            "id": "outline",
+            "dimension": "scope"
+          }
+        ]
+      }
+    },
+    {
+      "id": "go-lesson-bad",
+      "provenance": "原 Go 第二课首阶段 course-snapshot/lesson.yaml 的完整 draft，逐字冻结",
+      "input": {
+        "kind": "lesson",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "body",
+            "node": "make-copy-independent",
+            "content": {
+              "node": "make-copy-independent",
+              "title": "make + copy：造一个改不串的切片副本",
+              "hook": "上一节我们看到 s2 := s1 之后两者共享同一底层数组，改一个另一个跟着变。那要怎么才能拿到真正互不影响的副本？答案就是 make 加 copy 两行代码。",
+              "structure": [
+                "要点1：先用 make 按源长度开出新底层数组——dst := make([]int, len(src))。此时 dst 已经指向一块全新的数组，和 src 互不相关，但元素还是零值，所以它还不是副本的内容。",
+                "要点2：再用 copy(dst, src) 把元素搬过去。目标在前、源在后，返回实际复制的元素个数；它只复制 min(len(dst), len(src)) 个元素 [资料:1][资料:2]，因此目标切片必须按源长度创建，否则会少复制甚至一个都不复制。",
+                "要点3：用 go test 验证确实不串联——改副本元素不影响原切片、改原切片也不影响副本；再用 %p 打印两者底层数组地址，两行地址不同，就证明了它们不是同一块数组 [资料:1]。"
+              ],
+              "example": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tsrc := []int{1, 2, 3}\n\n\t// 1) 按源切片长度分配一块新的底层数组\n\tdst := make([]int, len(src))\n\n\t// 2) 目标在前，源在后；返回值是复制的元素个数\n\tn := copy(dst, src)\n\tfmt.Println(\"复制的元素个数:\", n) // 3\n\n\t// 3) 改副本，原切片不动\n\tdst[0] = 100\n\tfmt.Println(\"src:\", src) // [1 2 3]\n\tfmt.Println(\"dst:\", dst) // [100 2 3]\n\n\t// 4) 反过来改原切片，副本也不动\n\tsrc[1] = 200\n\tfmt.Println(\"src:\", src) // [1 200 3]\n\tfmt.Println(\"dst:\", dst) // [100 2 3]\n\n\t// 5) 打印底层数组地址，两行不同\n\tfmt.Printf(\"src 底层数组地址: %p\\n\", src)\n\tfmt.Printf(\"dst 底层数组地址: %p\\n\", dst)\n}\n",
+              "misconceptions": [
+                "以为 s2 := s1 就是复制：它只复制切片头，两者共享同一底层数组，改任一方元素另一方都受影响；要互不影响必须 make + copy [资料:2]。",
+                "以为 copy 会自动替 dst 分配空间或自动按源长度创建 dst：copy 不改变 dst 的长度，只复制 min(len(dst), len(src)) 个元素，len(dst) 为 0 时一个都不复制 [资料:1][资料:2]。",
+                "把参数顺序写反成 copy(src, dst)，或以为 copy 会返回一个新切片：它是 copy(目标, 源)，结果写进第一个参数，返回值是复制的元素个数 [资料:1][资料:2]。"
+              ]
+            }
+          },
+          {
+            "id": "practice:0",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "先预测再运行：\nsrc := []int{1, 2, 3}\ndst := make([]int, 2)\nn := copy(dst, src)\nfmt.Println(n, dst)\n输出是什么？为什么？",
+              "answer": "输出 2 [1 2]。copy 只复制 min(len(dst), len(src)) = min(2, 3) = 2 个元素 [资料:1][资料:2]，所以 dst 只拿到前两个元素，返回值 n 是 2。这就是为什么目标切片必须按源长度创建。",
+              "accept": [],
+              "choices": []
+            },
+            "question": {
+              "id": "practice:0",
+              "question": "先预测再运行：\nsrc := []int{1, 2, 3}\ndst := make([]int, 2)\nn := copy(dst, src)\nfmt.Println(n, dst)\n输出是什么？为什么？",
+              "choices": [],
+              "answer": "输出 2 [1 2]。copy 只复制 min(len(dst), len(src)) = min(2, 3) = 2 个元素 [资料:1][资料:2]，所以 dst 只拿到前两个元素，返回值 n 是 2。这就是为什么目标切片必须按源长度创建。"
+            }
+          },
+          {
+            "id": "practice:1",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "下面这个函数想返回 src 的独立副本，却总是返回空切片，错在哪？\nfunc clone(src []int) []int {\n\tvar dst []int\n\tcopy(dst, src)\n\treturn dst\n}",
+              "answer": "dst 用 var 声明，是长度 0 的 nil 切片，copy 复制的个数是 min(0, len(src)) = 0，一个元素都没复制 [资料:2]。改成先分配：dst := make([]int, len(src))，再 copy(dst, src)。注意 copy 不会替 dst 分配空间。",
+              "accept": [],
+              "choices": []
+            },
+            "question": {
+              "id": "practice:1",
+              "question": "下面这个函数想返回 src 的独立副本，却总是返回空切片，错在哪？\nfunc clone(src []int) []int {\n\tvar dst []int\n\tcopy(dst, src)\n\treturn dst\n}",
+              "choices": [],
+              "answer": "dst 用 var 声明，是长度 0 的 nil 切片，copy 复制的个数是 min(0, len(src)) = 0，一个元素都没复制 [资料:2]。改成先分配：dst := make([]int, len(src))，再 copy(dst, src)。注意 copy 不会替 dst 分配空间。"
+            }
+          },
+          {
+            "id": "practice:2",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "写一个测试 TestCloneNoSharing：把 s := []int{1, 2, 3} 用 make+copy 克隆成 c，改 c[0] = 99 后断言 s[0] 仍为 1；再改 s[1] = 88，断言 c[1] 仍为 2。",
+              "answer": "func clone(src []int) []int {\n\tdst := make([]int, len(src))\n\tcopy(dst, src)\n\treturn dst\n}\n\nfunc TestCloneNoSharing(t *testing.T) {\n\ts := []int{1, 2, 3}\n\tc := clone(s)\n\n\tc[0] = 99\n\tif s[0] != 1 {\n\t\tt.Fatalf(\"改副本影响了原切片: s=%v\", s)\n\t}\n\n\ts[1] = 88\n\tif c[1] != 2 {\n\t\tt.Fatalf(\"改原切片影响了副本: c=%v\", c)\n\t}\n}\n两个方向的断言都要有，才说明真的互不影响。",
+              "accept": [],
+              "choices": []
+            },
+            "question": {
+              "id": "practice:2",
+              "question": "写一个测试 TestCloneNoSharing：把 s := []int{1, 2, 3} 用 make+copy 克隆成 c，改 c[0] = 99 后断言 s[0] 仍为 1；再改 s[1] = 88，断言 c[1] 仍为 2。",
+              "choices": [],
+              "answer": "func clone(src []int) []int {\n\tdst := make([]int, len(src))\n\tcopy(dst, src)\n\treturn dst\n}\n\nfunc TestCloneNoSharing(t *testing.T) {\n\ts := []int{1, 2, 3}\n\tc := clone(s)\n\n\tc[0] = 99\n\tif s[0] != 1 {\n\t\tt.Fatalf(\"改副本影响了原切片: s=%v\", s)\n\t}\n\n\ts[1] = 88\n\tif c[1] != 2 {\n\t\tt.Fatalf(\"改原切片影响了副本: c=%v\", c)\n\t}\n}\n两个方向的断言都要有，才说明真的互不影响。"
+            }
+          },
+          {
+            "id": "quiz:0",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "copy(dst, src) 的返回值是什么？",
+              "answer": "B",
+              "accept": [],
+              "choices": [
+                "A. 目标切片 dst",
+                "B. 实际复制的元素个数",
+                "C. 源切片 src 的长度",
+                "D. 表示是否复制成功的布尔值"
+              ]
+            },
+            "question": {
+              "id": "quiz:0",
+              "question": "copy(dst, src) 的返回值是什么？",
+              "choices": [
+                "A. 目标切片 dst",
+                "B. 实际复制的元素个数",
+                "C. 源切片 src 的长度",
+                "D. 表示是否复制成功的布尔值"
+              ],
+              "answer": "B"
+            }
+          },
+          {
+            "id": "quiz:1",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "src := []int{1, 2, 3, 4, 5}；dst := make([]int, 3)；n := copy(dst, src) 之后，下面说法正确的是？",
+              "answer": "C",
+              "accept": [],
+              "choices": [
+                "A. dst 是 [1 2 3 4 5]，n 是 5",
+                "B. dst 是 [3 4 5]，n 是 3",
+                "C. dst 是 [1 2 3]，n 是 3",
+                "D. dst 还是 [0 0 0]，n 是 0"
+              ]
+            },
+            "question": {
+              "id": "quiz:1",
+              "question": "src := []int{1, 2, 3, 4, 5}；dst := make([]int, 3)；n := copy(dst, src) 之后，下面说法正确的是？",
+              "choices": [
+                "A. dst 是 [1 2 3 4 5]，n 是 5",
+                "B. dst 是 [3 4 5]，n 是 3",
+                "C. dst 是 [1 2 3]，n 是 3",
+                "D. dst 还是 [0 0 0]，n 是 0"
+              ],
+              "answer": "C"
+            }
+          },
+          {
+            "id": "quiz:2",
+            "node": "make-copy-independent",
+            "content": {
+              "question": "执行 dst := make([]int, len(src)) 之后、还没调用 copy 之前，dst 里的元素是什么值？",
+              "answer": "零值（int 的零值就是 0）",
+              "accept": [
+                "0",
+                "零值",
+                "全为 0",
+                "都是 0",
+                "0 值"
+              ],
+              "choices": []
+            },
+            "question": {
+              "id": "quiz:2",
+              "question": "执行 dst := make([]int, len(src)) 之后、还没调用 copy 之前，dst 里的元素是什么值？",
+              "choices": [],
+              "answer": "零值（int 的零值就是 0）"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "教案与练习参考传播必须等长、地址不同即证明独立的错误"
+      }
+    },
+    {
+      "id": "go-copy-length-good",
+      "provenance": "依据 Go 语义为原错误构造的正确对照，由代码助手核查",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "对于 []int，copy(dst, src) 复制 min(len(dst), len(src)) 个元素。要复制 src 全部元素，目标长度至少应为 len(src)，不要求恰好相等。dst := make([]int, len(src)); copy(dst, src) 是建立独立副本的一种做法。",
+              "learnerMessage": "请解释这个结论",
+              "previousReply": ""
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "接受充分明确的条件，不能把等长常见做法当作唯一合法做法"
+      }
+    },
+    {
+      "id": "go-address-good",
+      "provenance": "固定反例 address-counterexample.go 及原课堂纠错，整理为独立正确对照",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "对非空 []int 切片，fmt.Printf(\"%p\", s) 打印的是首元素地址。地址不同不能单独证明底层数组独立：s:=[]int{1,2,3}; t:=s[1:] 时地址不同，但 t[0] 和 s[1] 是同一个元素。用 make 分配新切片再 copy，并检查双向元素修改，是本课建立和验证独立副本的方法。",
+              "learnerMessage": "请解释这个结论",
+              "previousReply": ""
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "共享切片可有不同起点；比较和纠错并非教授排除内容"
+      }
+    },
+    {
+      "id": "go-shared-question-good",
+      "provenance": "原 Go m1 第1题，逐字冻结",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "slice-shared-backing-array"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能通过一个可运行的小程序演示 []int 切片共享底层数组：修改一个切片的元素后，另一个切片同样看到变化，并能解释原因",
+            "nodes": [
+              "slice-shared-backing-array"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "slice-shared-backing-array",
+            "content": {
+              "id": "q1",
+              "node": "slice-shared-backing-array",
+              "type": "objective",
+              "question": "关于 s := []int{1, 2, 3, 4, 5} 以及 t := s[1:4]，下列说法正确的是？",
+              "choices": [
+                "A. t 会复制 s 下标 1 到 3 的元素，因此修改 t[0] 不影响 s",
+                "B. t 与 s 共享同一个底层数组；修改 t[0] 等价于修改 s[1]",
+                "C. t 与 s 共享底层数组；但修改 t[0] 等价于修改 s[0]",
+                "D. t 的长度为 4，容量为 5"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "关于 s := []int{1, 2, 3, 4, 5} 以及 t := s[1:4]，下列说法正确的是？",
+              "choices": [
+                "A. t 会复制 s 下标 1 到 3 的元素，因此修改 t[0] 不影响 s",
+                "B. t 与 s 共享同一个底层数组；修改 t[0] 等价于修改 s[1]",
+                "C. t 与 s 共享底层数组；但修改 t[0] 等价于修改 s[0]",
+                "D. t 的长度为 4，容量为 5"
+              ],
+              "answer": "B"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "题目只考当前课共享；错误选项不能被当作事实断言"
+      }
+    },
+    {
+      "id": "probability-sum-good",
+      "provenance": "与错误概率题同题干，用已独立核算的7/6答案修正参考和关键词",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能列出等可能试验的样本空间，并数出指定事件包含的有利结果数",
+            "nodes": [
+              "dice-sample-space"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q4",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "q4",
+              "node": "dice-sample-space",
+              "type": "subjective",
+              "question": "掷一枚公平的六面骰子一次，观察朝上的点数。请完整作答：\n(1) 写出该等可能试验的样本空间，并说明为什么其中的结果等可能；\n(2) 分别写出事件 A=「点数小于 3」、事件 B=「点数是偶数」、事件 C=「点数既不小于 3 也不是偶数」所包含的有利结果，并数出各自的结果个数；\n(3) 分别计算 P(A)、P(B)、P(C)，写出你所使用的计数公式（用 |E| 与 |S| 表示），并检验三个事件的概率总和是否合理。",
+              "answer": "(1) S={1,2,3,4,5,6}，骰子公平，所以每个点数概率都是1/6。(2) A={1,2}有2个，B={2,4,6}有3个，C={3,5}有2个。(3) 对等可能结果 P(E)=|E|/|S|，所以P(A)=1/3，P(B)=1/2，P(C)=1/3。三者相加是7/6；这是合理的，因为A和B都包含2，重复计数了一次，它们并不是互斥划分，不能要求三个概率之和为1。",
+              "keywords": [
+                "样本空间 {1,2,3,4,5,6}",
+                "6 个结果等可能（公平骰子每面机会相同）",
+                "A={1,2}，|A|=2",
+                "B={2,4,6}，|B|=3",
+                "C={3,5}，|C|=2",
+                "P(E)=|E|/|S|（有利结果数 ÷ 样本空间结果数）",
+                "P(A)=2/6=1/3",
+                "P(B)=3/6=1/2",
+                "P(C)=2/6=1/3",
+                "概率之和为7/6，因为A与B都含2，不构成互斥划分"
+              ],
+              "points": 2
+            },
+            "question": {
+              "id": "q4",
+              "question": "掷一枚公平的六面骰子一次，观察朝上的点数。请完整作答：\n(1) 写出该等可能试验的样本空间，并说明为什么其中的结果等可能；\n(2) 分别写出事件 A=「点数小于 3」、事件 B=「点数是偶数」、事件 C=「点数既不小于 3 也不是偶数」所包含的有利结果，并数出各自的结果个数；\n(3) 分别计算 P(A)、P(B)、P(C)，写出你所使用的计数公式（用 |E| 与 |S| 表示），并检验三个事件的概率总和是否合理。",
+              "answer": "(1) S={1,2,3,4,5,6}，骰子公平，所以每个点数概率都是1/6。(2) A={1,2}有2个，B={2,4,6}有3个，C={3,5}有2个。(3) 对等可能结果 P(E)=|E|/|S|，所以P(A)=1/3，P(B)=1/2，P(C)=1/3。三者相加是7/6；这是合理的，因为A和B都包含2，重复计数了一次，它们并不是互斥划分，不能要求三个概率之和为1。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "事件重叠允许概率之和大于1，不能机械拒绝"
+      }
+    },
+    {
+      "id": "probability-complement-good",
+      "provenance": "原概率 m2 第2题，逐字冻结",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q2",
+            "node": "complement-rule",
+            "content": {
+              "id": "q2",
+              "node": "complement-rule",
+              "type": "objective",
+              "question": "掷一枚公平的六面骰子（样本空间为 1,2,3,4,5,6，每个结果概率相同）。设 A=「点数是偶数」，B=「点数大于 3」。此时 P(A)=1/2，P(B)=1/2，两者相加恰好等于 1。下列说法正确的是：",
+              "choices": [
+                "A. B 是 A 的补集，因为 P(A)+P(B)=1",
+                "B. B 不是 A 的补集，因为 A 与 B 有共同结果（4 和 6）",
+                "C. B 是 A 的补集，因为 A 与 B 都含有 3 个结果",
+                "D. B 不是 A 的补集，因为 P(A)+P(B) 恰好等于 1"
+              ],
+              "answer": "B",
+              "points": 1
+            },
+            "question": {
+              "id": "q2",
+              "question": "掷一枚公平的六面骰子（样本空间为 1,2,3,4,5,6，每个结果概率相同）。设 A=「点数是偶数」，B=「点数大于 3」。此时 P(A)=1/2，P(B)=1/2，两者相加恰好等于 1。下列说法正确的是：",
+              "choices": [
+                "A. B 是 A 的补集，因为 P(A)+P(B)=1",
+                "B. B 不是 A 的补集，因为 A 与 B 有共同结果（4 和 6）",
+                "C. B 是 A 的补集，因为 A 与 B 都含有 3 个结果",
+                "D. B 不是 A 的补集，因为 P(A)+P(B) 恰好等于 1"
+              ],
+              "answer": "B"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "单骰子中的等概率不等于互补，干扰项的错误应保留"
+      }
+    },
+    {
+      "id": "probability-optional-good",
+      "provenance": "原第一实践任务仅移除README的可选30次投掷段落，其他内容保持不变",
+      "input": {
+        "kind": "practice",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ]
+        },
+        "units": [
+          {
+            "id": "dice-sample-space-favorable-counting",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "dice-sample-space-favorable-counting",
+              "node": "dice-sample-space",
+              "title": "掷一枚公平六面骰子：数出有利结果，写出概率",
+              "prompt": "任务：用等可能样本空间数出有利结果（掷一枚公平六面骰子）。\n\n背景：一枚公平六面骰子的样本空间是 6 个等可能结果 1, 2, 3, 4, 5, 6。因为结果等可能，所以 P(事件) = 事件包含的结果数 ÷ 6。\n\n步骤：\n1. 在当前工作目录新建一个纯文本文件 answers.txt。\n2. 写出样本空间（6 个结果，按从小到大、用英文逗号连接）。\n3. 从 1 到 6 逐个判断，分别写出下面三个事件的有利结果集合（按从小到大、用英文逗号连接，逗号后不留空格）：\n   - 事件“点数是偶数”（even）\n   - 事件“点数小于 3”（lt3）\n   - 事件“点数不是 6”（not6）\n4. 对每个事件写出概率，用最简分数（不要写小数，不要写未约分的 3/6 这类形式）。\n5. 把结果写成下面 7 行（顺序不限，可以另外加以 # 开头的说明行；每行必须逐字符一致：键名全小写，等号两边不留空格，行尾不留空格或标点）：\n   sample_space=<所有结果>\n   even_favorable=<事件“偶数”的结果>\n   even_prob=<最简分数>\n   lt3_favorable=<事件“小于 3”的结果>\n   lt3_prob=<最简分数>\n   not6_favorable=<事件“不是 6”的结果>\n   not6_prob=<最简分数>\n\n格式示意（不是本题答案）：\n   # sample_space=a,b,c\n   # win_favorable=a,b\n   # win_prob=2/3\n\n验收标准：answers.txt 存在，且上面 7 行逐字符正确——特别是“小于 3”的结果集合（别把 3 算进去）、“不是 6”的结果集合，以及三个约到最简的概率分数。\n\n提交前自检：在终端运行 cat answers.txt，逐行核对等号两边是否有空格、结果是否有空格、分数是否最简。",
+              "starter_files": [
+                {
+                  "path": "README.md",
+                  "content": "# 任务：掷一枚公平六面骰子的等可能样本空间\n\n一枚公平六面骰子有 6 个等可能结果：1, 2, 3, 4, 5, 6。\n因为所有结果等可能，所以 P(事件) = 事件包含的结果数 ÷ 6。\n\n## 你要产出什么\n在当前目录新建纯文本文件 answers.txt，写入下面 7 行（顺序不限，可以加以 # 开头的说明行，这些说明行不影响判分）：\n\nsample_space=<所有结果，按从小到大，用英文逗号连接>\neven_favorable=<事件“点数是偶数”包含的结果>\neven_prob=<最简分数>\nlt3_favorable=<事件“点数小于 3”包含的结果>\nlt3_prob=<最简分数>\nnot6_favorable=<事件“点数不是 6”包含的结果>\nnot6_prob=<最简分数>\n\n## 格式约定\n- 键名全小写，等号两边不写空格，行尾不留空格或标点。\n- 值里的结果用英文逗号分隔，逗号后不留空格，例如 1,2,3。\n- 概率写成最简分数，例如 1/2、1/3（不要写小数，也不要写 3/6 这种未约分形式）。\n\n## 格式示意（不是本题答案）\n# sample_space=a,b,c\n# win_favorable=a,b\n# win_prob=2/3\n\n## 提交前自检\n在终端运行：cat answers.txt\n逐行核对：等号两边有没有多余空格？分数有没有约到最简？“小于 3”里有没有混进 3？“不是 6”有没有漏掉结果？\n\n"
+                }
+              ],
+              "tests": [
+                {
+                  "name": "answers-file-exists",
+                  "command": "test -f answers.txt && echo ANSWERS_FOUND",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "ANSWERS_FOUND"
+                  ]
+                },
+                {
+                  "name": "favorable-sets",
+                  "command": "for p in \"sample_space=1,2,3,4,5,6\" \"even_favorable=2,4,6\" \"lt3_favorable=1,2\" \"not6_favorable=1,2,3,4,5\"; do grep -Fxq \"$p\" answers.txt || { echo \"MISSING: $p\"; exit 1; }; done; echo FAVORABLE_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "FAVORABLE_OK"
+                  ]
+                },
+                {
+                  "name": "probabilities",
+                  "command": "for p in \"even_prob=1/2\" \"lt3_prob=1/3\" \"not6_prob=5/6\"; do grep -Fxq \"$p\" answers.txt || { echo \"MISSING: $p\"; exit 1; }; done; echo PROBS_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "PROBS_OK"
+                  ]
+                }
+              ],
+              "hints": [
+                "先把 1 到 6 从小到大写下来，这就是样本空间。然后对每个事件，从 1 开始一个一个问自己“这个数符合条件吗”，把符合条件的数按从小到大写进对应的 *_favorable 里——不要凭印象，逐个检查。",
+                "三个概率的算法一样：有利结果的个数 ÷ 6，写成分数后要约到最简。注意“小于 3”只含 1 和 2（3 不算）；“不是 6”要在 1 到 6 中挑出所有不是 6 的数，再数一数有几个，然后写分数。"
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "不编程的文本填答、课程内枚举与计数均可用"
+      }
+    },
+    {
+      "id": "map-two-lessons-good",
+      "provenance": "原地图只保留两个节点的原id/title/edge，移除摘要与资源",
+      "input": {
+        "kind": "map",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [],
+          "activeNodes": []
+        },
+        "units": [
+          {
+            "id": "outline",
+            "content": {
+              "nodes": [
+                {
+                  "id": "dice-sample-space",
+                  "title": "等可能样本空间与有利结果计数"
+                },
+                {
+                  "id": "complement-rule",
+                  "title": "补集与用 1−P(A) 求概率"
+                }
+              ],
+              "edges": [
+                [
+                  "complement-rule",
+                  "dice-sample-space"
+                ]
+              ]
+            }
+          },
+          {
+            "id": "node:dice-sample-space",
+            "node": "dice-sample-space",
+            "content": {
+              "title": "等可能样本空间与有利结果计数"
+            }
+          },
+          {
+            "id": "node:complement-rule",
+            "node": "complement-rule",
+            "content": {
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "两节课的目标不要求拆成更多节点"
+      }
+    }
+  ]
+}

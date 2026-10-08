@@ -3,8 +3,11 @@ import z from '@deepseek-ai/schemastery'
 import { buildPracticeGenPrompt, practiceGenerationNodes, validatePracticeTasks } from '../core/practice.ts'
 import type { KnowledgeMap, Plan, PracticeTaskFile, Profile } from '../core/schema.ts'
 import { createAgentChat, type AgentChat } from './agent-chat.ts'
-import { generateTurn, parseJsonBlock } from './generation.ts'
+import { parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { mapContent, planContent, practiceContent } from '../core/content-quality.ts'
+import { createContentGate, generateApproved } from './content-gate.ts'
+import { profileScope } from '../core/interview.ts'
 
 const name = 'tutor-practice-gen-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -42,12 +45,20 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
   const profile = store.read(config.courseId, 'profile') as Profile
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const plan = store.read(config.courseId, 'plan') as Plan
+  const gate = createContentGate(ctx, store, config.courseId)
+  await gate.require(mapContent(map, profile))
+  await gate.require(planContent(plan, profile, map))
   const file: PracticeTaskFile = store.has(config.courseId, 'practice')
     ? (store.read(config.courseId, 'practice') as PracticeTaskFile)
     : { generated_at: today(), tasks: [] }
   if (store.has(config.courseId, 'practice')) out.write(`已有实践任务（${file.tasks.length} 个），继续补齐。\n`)
 
   const queue = practiceGenerationNodes(plan, map, file, config.nodeId)
+  // 老任务不因文件存在而跳过；逐节点审查，通过后才可复用，修复通过后才替换。
+  for (const node of new Set(file.tasks.map(task => task.node))) {
+    if (config.nodeId && config.nodeId !== node) continue
+    if (!(await gate.review(practiceContent(file.tasks.filter(task => task.node === node), node, profile, map))).approved && !queue.includes(node)) queue.push(node)
+  }
   if (queue.length === 0) {
     out.write('所选知识点均已有实践任务，无需生成。\n')
     exit(0)
@@ -63,12 +74,12 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
     const batch = queue.slice(i, i + config.batchSize)
     for (const node of batch) {
       out.write(`\n正在出题：${node}（${titles.get(node)?.title ?? node}）…\n`)
-      const result = (await generateTurn(chat, buildPracticeGenPrompt({
+      const result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
         courseId: config.courseId,
         node,
         title: titles.get(node)?.title,
         summary: titles.get(node)?.summary,
-        goal: profile.goal,
+        goal: profileScope(profile),
         background: profile.background,
         style: profile.style,
       }), (text) => {
@@ -76,7 +87,8 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
         if (!data.ok) return data
         // 校验单节点任务（node 不匹配、任务数超限等由 validatePracticeTasks 拦）
         return validatePracticeTasks({ generated_at: today(), tasks: (data.value as { tasks?: unknown[] }).tasks ?? data.value }, node)
-      })) as PracticeTaskFile
+      }, gate, value => practiceContent(value.tasks, node, profile, map))
+      file.tasks = file.tasks.filter(task => task.node !== node)
       file.tasks.push(...result.tasks)
       file.generated_at = today()
       store.write(config.courseId, 'practice', file)

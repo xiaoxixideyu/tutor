@@ -17,11 +17,11 @@ export function trySchema(schema: (data: unknown) => unknown, data: unknown): Pa
   }
 }
 
-export async function generateTurn(chat: Pick<AgentChat, 'ask'>, prompt: string, parse: (text: string) => ParseResult): Promise<unknown> {
+export async function generateTurn(chat: Pick<AgentChat, 'ask'>, prompt: string, parse: (text: string) => ParseResult | Promise<ParseResult>): Promise<unknown> {
   let request = prompt
   for (let attempt = 0; attempt < 4; attempt++) {
     const reply = await chat.ask(request)
-    const parsed = parse(reply)
+    const parsed = await parse(reply)
     if (parsed.ok) return parsed.value
     request = `你输出的 JSON 校验失败：${parsed.error}。请修正后重新输出完整 JSON 代码块，不要输出其他内容。`
   }

@@ -6,7 +6,9 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { CourseStore } from '../src/core/store.ts'
-import type { Mastery, PracticeTaskState } from '../src/core/schema.ts'
+import type { KnowledgeMap, Mastery, PracticeTaskFile, PracticeTaskState, Profile } from '../src/core/schema.ts'
+import { practiceContent } from '../src/core/content-quality.ts'
+import { approveFixture } from './fixtures/quality.ts'
 
 it('真实实践 CLI 能在课程全部掌握后练习指定节点，执行测试且不推进复习阶梯', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-practice-cli-'))
@@ -24,6 +26,15 @@ it('真实实践 CLI 能在课程全部掌握后练习指定节点，执行测�
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'answer.txt'), '学员已有作答')
   const script = fileURLToPath(new URL('../scripts/practice.mjs', import.meta.url))
+  const unreviewed = spawnSync(process.execPath, [script, 'practice', 'alpha', '--node', 'basics'], {
+    env: { ...process.env, TUTOR_COURSES_ROOT: root }, input: 'r\n', encoding: 'utf8', timeout: 5000,
+  })
+  assert.equal(unreviewed.status, 1)
+  assert.match(unreviewed.stderr, /audit-content/)
+  assert.equal(store.has('alpha', 'practice-state'), false)
+  assert.doesNotMatch(unreviewed.stdout, /完成文件|运行测试/)
+  approveFixture(root, 'alpha', practiceContent((store.read('alpha', 'practice') as PracticeTaskFile).tasks, 'basics',
+    store.read('alpha', 'profile') as Profile, store.read('alpha', 'knowledge-map') as KnowledgeMap))
   const result = spawnSync(process.execPath, [script, 'practice', 'alpha', '--node', 'basics'], {
     env: { ...process.env, TUTOR_COURSES_ROOT: root }, input: 'r\n', encoding: 'utf8', timeout: 5000,
   })

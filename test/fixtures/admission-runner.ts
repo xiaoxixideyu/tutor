@@ -1,0 +1,59 @@
+// 在独立进程中运行正式 runner，模型边界用确定性响应替代；测试展示/落盘的位置。
+import type { Context } from '@deepseek-ai/cordis'
+import { CourseStore } from '../../src/core/store.ts'
+import { requiredAssertions, type ContentInput } from '../../src/core/content-quality.ts'
+import { apply as exam } from '../../src/plugin/exam-runner.ts'
+import { apply as practice } from '../../src/plugin/practice-gen-runner.ts'
+import { apply as learn } from '../../src/plugin/learn-runner.ts'
+
+const [mode, root, behavior] = process.argv.slice(2)
+const store = new CourseStore(root)
+const json = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``
+let serial = 0
+function agent(resumed: boolean) {
+  const events: { type: string; data: unknown }[] = resumed ? [{ type: 'assistant/message', data: {
+    message: { content: [{ type: 'text', text: 'REJECT_CANDIDATE 原始历史中未获批准的最后回复' }] } } }] : []
+  let generation = 0
+  return {
+    session: { id: `fake-${++serial}`, get seq() { return events.length }, eventAt: (seq: number) => events[seq] },
+    whenIdle: async () => {},
+    followup: (message: { content: { text?: string }[] }) => {
+      const prompt = message.content.map(c => c.text ?? '').join('')
+      let parsed: Record<string, any> | undefined
+      try { parsed = JSON.parse(prompt) } catch {}
+      let reply: string
+      if (parsed?.content) {
+        const input = parsed.content as ContentInput
+        reply = json({ units: input.units.map(unit => ({ id: unit.id, scope: JSON.stringify(unit.content).includes('REJECT_CANDIDATE') ? 'fail' : 'pass',
+          correctness: 'pass', explanation: '固定审查结果', arithmetic: [],
+          assertions: requiredAssertions(input, unit).map(a => ({ id: a.id, verdict: 'pass', explanation: '固定断言核查' })) })) })
+      } else if (parsed?.claims) {
+        reply = json({ claims: parsed.claims.map((q: { id: string }) => ({ id: q.id, verdict: 'pass', explanation: '固定断言核查', arithmetic: [] })) })
+      } else if (parsed?.questions) {
+        reply = json({ solutions: parsed.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '固定解答', arithmetic: [] })) })
+      } else {
+        generation++
+        const approved = behavior !== 'fail' && generation === (mode === 'learn' ? 3 : 4)
+        const text = approved ? 'APPROVED_CONTENT' : `REJECT_CANDIDATE-${generation}`
+        if (mode === 'exam') reply = json({ milestone: 'm1', questions: Array.from({ length: 4 }, (_, i) => ({
+          id: `q${i}`, node: 'topic', type: 'objective', question: `${text} 第${i}题`, choices: ['2', '3', '4', '5'], answer: 'A', points: 1,
+        })) })
+        else if (mode === 'practice-gen') reply = json({ tasks: [{ id: 'topic-task', node: 'topic', title: text, prompt: text, tests: [{ name: 'test', command: 'true' }] }] })
+        else reply = text
+      }
+      events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: reply }] } } },
+        { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    },
+  }
+}
+const services: Record<string, unknown> = {
+  courseState: { store }, appExit: (code: number) => process.exit(code),
+  agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
+  agents: { create: async () => ({ agent: agent(false) }), resume: async () => ({ agent: agent(true) }) },
+  sessions: { flush: async () => {} },
+}
+const ctx = { get: (name: string) => services[name] } as unknown as Context
+if (mode === 'exam') exam(ctx, { courseId: 'alpha', milestoneId: 'm1' })
+else if (mode === 'practice-gen') practice(ctx, { courseId: 'alpha', batchSize: 1, nodeId: 'topic' })
+else if (mode === 'learn') learn(ctx, { courseId: 'alpha' })
+else throw new Error('未知测试 runner')

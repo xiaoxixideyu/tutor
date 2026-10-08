@@ -5,6 +5,7 @@
 //   npm run agent -- status <课程名>     进度看板（设计 §6.4 tutor status，零模型）
 //   npm run agent -- review <课程名>     复习到期知识点（设计 §6.4 tutor review，零模型）
 //   npm run agent -- audit [会话id]      课堂忠实度抽查（零模型，四期评测）
+//   npm run agent -- audit-content <课程名>  独立审查已有课程内容（需模型，学习状态不变）
 //   npm run agent -- serve               前端壳（默认 8788，TUTOR_SERVER_PORT 可改）
 //   npm run agent -- practice <课程名>   实践任务：写代码跑规则化测试（三期，零模型）
 //   npm run agent -- practice-gen <课程名>  生成实践任务（三期，需模型）
@@ -120,7 +121,7 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0
 
 let runnerArgs = []
 let runnerMode = null
-if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] === 'learn' || argv[0] === 'research' || argv[0] === 'practice-gen' || argv[0] === 'exam') {
+if (['new', 'assess', 'plan', 'learn', 'research', 'practice-gen', 'exam', 'audit-content'].includes(argv[0])) {
   runnerMode = argv[0]
   const courseId = argv[1] ?? ''
   if (!COURSE_ID_PATTERN.test(courseId)) {
@@ -140,6 +141,7 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
     research: 'tutor-research-runner',
     'practice-gen': 'tutor-practice-gen-runner',
     exam: 'tutor-exam-runner',
+    'audit-content': 'tutor-audit-content-runner',
   }
   const moduleByMode = {
     new: 'interview-runner.ts',
@@ -149,11 +151,12 @@ if (argv[0] === 'new' || argv[0] === 'assess' || argv[0] === 'plan' || argv[0] =
     research: 'research-runner.ts',
     'practice-gen': 'practice-gen-runner.ts',
     exam: 'exam-runner.ts',
+    'audit-content': 'audit-content-runner.ts',
   }
   const personaFile = personaByMode[runnerMode]
   const runnerId = runnerByMode[runnerMode]
   const runnerModule = moduleByMode[runnerMode]
-  const persona = fs.readFileSync(path.join(root, 'config', 'persona', personaFile), 'utf8').trim()
+  const persona = runnerMode === 'audit-content' ? '独立审查已有课程的范围与正确性。' : fs.readFileSync(path.join(root, 'config', 'persona', personaFile), 'utf8').trim()
   const modePatch = [
     {
       id: 'system-prompt',

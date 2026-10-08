@@ -13,6 +13,7 @@ export interface Profile {
   daily_minutes?: number
   background?: string
   style?: string
+  requests?: string[] // 访谈中学员的原话，由 runner 保存，不能由模型摘要替代或扩大。
 }
 
 export interface KnowledgeMapResource {
@@ -68,6 +69,7 @@ export const ProfileSchema = z.object({
   daily_minutes: z.number().min(1).max(600),
   background: z.string(),
   style: z.string(),
+  requests: z.array(z.string()),
 }) as unknown as Schema<any, Profile>
 
 export const KnowledgeMapSchema = z.object({
@@ -246,6 +248,7 @@ export interface LessonState {
   node: string
   started_at: string
   draft: LessonDraft
+  approved_turn?: { reply: string; learnerMessage: string; previousReply: string }
 }
 
 export const LessonStateSchema = z.object({
@@ -253,6 +256,9 @@ export const LessonStateSchema = z.object({
   node: z.string().required(),
   started_at: z.string().required(),
   draft: LessonDraftSchema.required(),
+  approved_turn: z.union([z.const(undefined), z.object({
+    reply: z.string().required(), learnerMessage: z.string().required(), previousReply: z.string().required(),
+  })]),
 }) as unknown as Schema<any, LessonState>
 
 export interface PracticeTest {

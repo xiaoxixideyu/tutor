@@ -9,6 +9,7 @@ import { CourseStore } from '../src/core/store.ts'
 import { judgePracticeTask, buildPracticeIntro, applyPracticeResult, selectPracticeNode } from '../src/core/practice.ts'
 import { runTests, ensureStarterFiles } from '../src/plugin/practice-executor.ts'
 import { createLineReader } from '../src/plugin/line-reader.ts'
+import { requireReviewedPractice } from '../src/core/quality-store.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
@@ -73,6 +74,7 @@ if (tasks.length === 0) {
   out.write(`知识点 ${node} 还没有实践任务（当前 practice.yaml 只覆盖其他知识点）。请重新运行 practice-gen ${courseId}。\n`)
   process.exit(0)
 }
+requireReviewedPractice(store, courseId, practiceFile, node)
 
 // 多任务菜单 / 断点续做检测
 const readLine = createLineReader(process.stdin)

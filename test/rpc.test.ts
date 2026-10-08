@@ -5,7 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { CourseStore } from '../src/core/store.ts'
 import { createRpcMethods, handleRpcRequest, type RpcRequest } from '../src/core/rpc.ts'
-import type { Mastery, ReviewResult } from '../src/core/schema.ts'
+import type { KnowledgeMap, Mastery, Profile, QuestionBank, ReviewResult } from '../src/core/schema.ts'
+import { bankContent } from '../src/core/content-quality.ts'
+import { approveFixture } from './fixtures/quality.ts'
 
 function attemptId(store: CourseStore): string {
   const result = createRpcMethods(store, today).reviewQuestions({ id: 'alpha' }) as { items: { attemptId: string }[] }
@@ -108,7 +110,23 @@ describe('复习 RPC：reviewQuestions / submitReview', () => {
         { id: 'a1-q2', difficulty: 3, type: 'short', question: '2+2=?', answer: '4', accept: ['four'] },
       ],
     })
+    approveFixture(store.root, 'alpha', bankContent(store.read('alpha', 'question-bank') as QuestionBank, 'a1',
+      store.read('alpha', 'profile') as Profile, store.read('alpha', 'knowledge-map') as KnowledgeMap))
   }
+
+  it('旧题库和修改课程范围后的题库不能下发或判分，掌握度保持不变', () => {
+    const store = makeStore()
+    seedReview(store)
+    const id = attemptId(store)
+    const before = store.read('alpha', 'mastery')
+    store.write('alpha', 'profile', { goal: '只学习加法，不学其他运算' })
+    const methods = createRpcMethods(store, today)
+    assert.throws(() => methods.reviewQuestions({ id: 'alpha' }), /audit-content/)
+    assert.throws(() => methods.submitReview({ id: 'alpha', node: 'a1', attemptId: id, answers: ['A', '4'] }), /audit-content/)
+    assert.deepEqual(store.read('alpha', 'mastery'), before)
+    fs.rmSync(path.join(store.root, 'alpha', 'quality'), { recursive: true })
+    assert.throws(() => methods.reviewQuestions({ id: 'alpha' }), /尚未通过审查/)
+  })
 
   it('reviewQuestions 下发到期题且抹掉答案', () => {
     const store = makeStore()
