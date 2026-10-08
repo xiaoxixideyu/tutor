@@ -119,7 +119,7 @@ export function applyPracticeResult(mastery: Mastery, node: string, practiceScor
 
 export function buildPracticeGenPrompt(input: PracticeGenInput): string {
   const lines = [
-    `任务：为课程《${input.courseId}》的知识点设计 1 个动手实践任务（学员在终端写代码、跑规则化测试）。`,
+    `任务：为课程《${input.courseId}》的知识点设计 1 个动手实践任务（学员提交文件，规则化测试自动验收）。`,
     '',
     '【知识点】',
     `- ${input.node}${input.title ? `（${input.title}）` : ''}${input.summary ? `：${input.summary}` : ''}`,
@@ -130,6 +130,9 @@ export function buildPracticeGenPrompt(input: PracticeGenInput): string {
     `- 讲解偏好：${input.style || '未填写'}`,
     '',
     '【要求】',
+    '- 学员明确的范围和排除项优先于知识点摘要、资料例子与常见教学扩展；所有题目、提示和 README 都必须遵守，不得以选做形式引入范围外内容',
+    '- 非编程课程允许学员填写纯文本答案，不要求写代码；编程课程才要求实现程序',
+    '- 区分某种解法的实现要求与通用必要条件，不把示例限制写成知识定律',
     '- 单个任务：学员 10-20 分钟能完成；贴合学员基础与讲解偏好',
     '- starter_files 提供必要初始文件（如 README 说明）；不要提供答案文件',
     '- tests 为规则自动执行的 shell 命令（在工作目录逐条执行）：1-3 条，命令必须确定性、无网络依赖、无交互（不等待 stdin）；首条验证文件/模块存在，末条验证行为正确',

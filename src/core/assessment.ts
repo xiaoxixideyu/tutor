@@ -2,6 +2,12 @@ import type { AssessmentState, LearnerProfile, LessonPractice, Mastery, Question
 
 export const MAX_QUESTIONS_PER_NODE = 3
 
+export function formatChoice(choice: string, index: number): string {
+  const letter = String.fromCharCode(65 + index)
+  const text = choice.replace(new RegExp(`^\\s*${letter}[.、．)）]\\s*`, 'i'), '')
+  return `${letter}. ${text}`
+}
+
 function normalizeAnswer(s: string): string {
   return s
     .trim()

@@ -145,6 +145,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
           await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs())
           let text = ''
           let turnError: string | null = null
+          let aborted = false
           for (let seq = cursor; seq < agent.session.seq; seq++) {
             const event = agent.session.eventAt(SessionSeq(seq))
             if (!event) continue
@@ -156,18 +157,23 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
               if (joined !== '') text = joined
             }
             if (event.type === 'turn/end' && event.data?.reason && event.data.reason.kind !== 'completed') {
+              aborted = event.data.reason.kind === 'aborted'
               turnError = event.data.reason.error
                 ? `${event.data.reason.error.code}: ${event.data.reason.error.message}`
                 : event.data.reason.kind
             }
           }
-          if (turnError !== null) throw new Error(turnError)
+          if (turnError !== null) {
+            const error = new Error(turnError)
+            if (aborted) error.name = 'AbortError'
+            throw error
+          }
           return text
         } catch (error) {
           lastError = error
           // 停滞超时（连续无新事件）无法 abort：底层回合可能仍在后台跑，重试会在同一 session 叠加 followup。
           // 直接抛出，交给 runner 的 catch 保存进度并退出（重跑可从 session 断点续上）。
-          if (error instanceof TurnTimeoutError) throw error
+          if (error instanceof TurnTimeoutError || (error instanceof Error && error.name === 'AbortError')) throw error
           if (attempt === 0) {
             process.stderr.write(`tutor: 模型回合异常（${error instanceof Error ? error.message : String(error)}），重试一次…\n`)
             await new Promise((resolve) => setTimeout(resolve, 1500))

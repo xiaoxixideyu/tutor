@@ -42,8 +42,8 @@ function renderStatus(courseId) {
   out.write(`${paint('课程', 1)} ${progress.id}${progress.goal ? ` · ${progress.goal}` : ''}\n`)
   const currentLine = progress.current
     ? progress.current
-    : progress.path.length > 0
-      ? '（未开始）'
+    : progress.hasPlan
+      ? '（本计划无待学知识点）'
       : '（无计划，先运行 assess + plan）'
   const milestoneForCurrent = progress.milestones.find((m) => m.nodes.includes(progress.current ?? ''))
   out.write(

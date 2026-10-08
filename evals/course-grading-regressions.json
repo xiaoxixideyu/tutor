@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "provenance": "2026-10-08真实微课验收产生的原题、参考答案和代码助手独立作答；保留原始错误参考，预期满分由代码助手按题干确定，尚未经真人盲评。",
+  "maxSpread": 0,
+  "suites": [
+    {
+      "id": "go-slices",
+      "title": "Go：题干外细节不得扣分",
+      "cases": [
+        {
+          "id": "unrequested-rubric-detail",
+          "category": "course-acceptance-regression",
+          "question": {
+            "id": "q6",
+            "node": "slice-shared-backing-array",
+            "type": "subjective",
+            "question": "请写一个可运行的 Go 小程序（包含 main 函数或完整关键代码），演示 []int 切片共享底层数组：用 original := []int{1, 2, 3, 4, 5} 创建 subset := original[1:4]，修改 subset 的一个元素（例如 subset[0] = 99），并打印 original 与 subset，证明 original 的对应元素也随之改变。最后用 2-3 句话解释原因。要求只使用 []int 的切片、len/cap 等本课内容，不要使用 append、扩容、并发或嵌套切片。",
+            "answer": "参考代码：\n\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n    original := []int{1, 2, 3, 4, 5}\n    subset := original[1:4]\n    subset[0] = 99\n    fmt.Println(original) // 输出 [1 99 3 4 5]\n    fmt.Println(subset)   // 输出 [99 3 4]\n}\n\n解释：subset := original[1:4] 不会复制底层数组，而是产生一个指向同一底层数组的新切片值。subset[0] 对应的就是 original[1]，所以修改 subset[0] = 99 会直接修改共享的底层数组，original 也就能看到变化。此时 subset 的 len 为 3，cap 为 4。",
+            "keywords": [
+              "original[1:4]",
+              "共享底层数组",
+              "不复制数据",
+              "切片描述符",
+              "subset[0] 对应 original[1]",
+              "subset[0] = 99",
+              "original 变为 [1 99 3 4 5]",
+              "len 为 3",
+              "cap 为 4"
+            ],
+            "points": 2
+          },
+          "answer": "package main; import \"fmt\"; func main() { original := []int{1,2,3,4,5}; subset := original[1:4]; subset[0] = 99; fmt.Println(original); fmt.Println(subset) } // 输出为 [1 99 3 4 5] 和 [99 3 4]。切片表达式创建描述符而不复制元素，subset和original共享同一底层数组。subset从original的下标1开始，因此写subset[0]就是写original[1]，两边能看到同一处修改。",
+          "expected": {
+            "min": 1,
+            "max": 1,
+            "rationale": "题干要求可运行程序、共享修改及2–3句解释；作答全部满足，不能因未打印题干未要求的len/cap而扣分。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "probability",
+      "title": "概率：错误参考答案不得压过正确作答",
+      "cases": [
+        {
+          "id": "incorrect-reference-sum",
+          "category": "course-acceptance-regression",
+          "question": {
+            "id": "q4",
+            "node": "dice-sample-space",
+            "type": "subjective",
+            "question": "掷一枚公平的六面骰子一次，观察朝上的点数。请完整作答：\n(1) 写出该等可能试验的样本空间，并说明为什么其中的结果等可能；\n(2) 分别写出事件 A=「点数小于 3」、事件 B=「点数是偶数」、事件 C=「点数既不小于 3 也不是偶数」所包含的有利结果，并数出各自的结果个数；\n(3) 分别计算 P(A)、P(B)、P(C)，写出你所使用的计数公式（用 |E| 与 |S| 表示），并检验三个事件的概率总和是否合理。",
+            "answer": "(1) 样本空间 S={1,2,3,4,5,6}，共有 |S|=6 个结果。骰子公平，每个面朝上的机会相同，故这 6 个结果等可能。\n(2) A={1,2}，|A|=2；B={2,4,6}，|B|=3；C 要求「不小于 3」即点数≥3，且不是偶数，故 C={3,5}，|C|=2。\n(3) 计数公式：P(E)=|E|/|S|，即事件中的结果数 ÷ 样本空间中的结果数。\nP(A)=2/6=1/3；P(B)=3/6=1/2；P(C)=2/6=1/3。\n检验：A∪B={1,2,4,6}（4 个结果），C={3,5}（2 个结果），C 与前两者互不相交且合起来正好覆盖全部 6 个结果，1/3+1/2+1/3=1（也可看作 2/6+3/6+2/6=6/6=1），结果合理。",
+            "keywords": [
+              "样本空间 {1,2,3,4,5,6}",
+              "6 个结果等可能（公平骰子每面机会相同）",
+              "A={1,2}，|A|=2",
+              "B={2,4,6}，|B|=3",
+              "C={3,5}，|C|=2",
+              "P(E)=|E|/|S|（有利结果数 ÷ 样本空间结果数）",
+              "P(A)=2/6=1/3",
+              "P(B)=3/6=1/2",
+              "P(C)=2/6=1/3",
+              "三概率之和为 1（覆盖全部样本空间）"
+            ],
+            "points": 2
+          },
+          "answer": "(1) S={1,2,3,4,5,6}，骰子公平，所以每个点数概率都是1/6。(2) A={1,2}有2个，B={2,4,6}有3个，C={3,5}有2个。(3) 对等可能结果 P(E)=|E|/|S|，所以P(A)=1/3，P(B)=1/2，P(C)=1/3。三者相加是7/6；这是合理的，因为A和B都包含2，重复计数了一次，它们并不是互斥划分，不能要求三个概率之和为1。",
+          "expected": {
+            "min": 1,
+            "max": 1,
+            "rationale": "作答独立算出7/6并指出事件重叠，纠正参考答案的算术错误；其余要点完整，应得满分。"
+          }
+        }
+      ]
+    }
+  ]
+}

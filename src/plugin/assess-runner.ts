@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { AssessmentEngine } from '../core/assessment.ts'
+import { AssessmentEngine, formatChoice } from '../core/assessment.ts'
 import { topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
 import { createAgentChat } from './agent-chat.ts'
@@ -37,13 +37,13 @@ function mapPrompt(profile: Profile): string {
     '',
     '请输出知识地图 JSON（```json 代码块）：',
     '- verified: false（未联网验证）',
-    '- nodes: 6-10 个知识点对象 {id, title, summary}，id 用小写英文连字符（如 goroutines、channels），按学习进阶排列',
+    '- nodes: 知识点对象 {id, title, summary}，id 用小写英文连字符（如 goroutines、channels），按学习进阶排列；每节点为一节课，数量遵守学员目标范围与明确课时，没有最低数量，不加入已排除或已会的内容',
     '- edges: 依赖对数组，格式 [知识点, 前置知识点]',
     '- resources: 空数组',
   ].join('\n')
 }
 
-function bankPrompt(map: KnowledgeMap): string {
+function bankPrompt(map: KnowledgeMap, profile: Profile): string {
   const nodes = topoOrder(map)
     .map((id) => {
       const node = map.nodes.find((n) => n.id === id)
@@ -53,6 +53,9 @@ function bankPrompt(map: KnowledgeMap): string {
   return [
     '任务 2/2：生成摸底题库。需覆盖以下知识点：',
     nodes,
+    `学习目的与范围：${profile.goal}`,
+    `现有基础：${profile.background || '未填写'}`,
+    '题目严格遵守上述范围与排除项，不借综合题引入未要求的内容。',
     '',
     '对每个知识点出恰好 3 道题，难度 1（基础概念）/ 2（简单应用）/ 3（综合分析）各一道，全部为四选一单选题。',
     '',
@@ -77,7 +80,7 @@ function answerText(q: Question): string {
   const letter = q.answer.trim().toUpperCase()
   const idx = 'ABCD'.indexOf(letter)
   const text = idx >= 0 ? q.choices?.[idx] : undefined
-  return text ? `${letter}. ${text}` : letter
+  return text ? formatChoice(text, idx) : letter
 }
 
 async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEngine, map: KnowledgeMap): Promise<void> {
@@ -95,8 +98,7 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
       out.write(`\n（难度 ${q.difficulty}，第 ${current.askedCount + 1} 题）${q.question}\n`)
       if (q.type === 'choice') {
         // 带定位字母（A/B/C…，与题库里 answer 的字母语义一致）：CLI 端看得清，Web 端才能把这些行解析成可点选项。
-        const letters = 'ABCDEF'
-        for (const [i, choice] of (q.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
+        for (const [i, choice] of (q.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
         out.write('（回答选项字母，如 A）\n')
       }
       out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
@@ -133,10 +135,9 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     return
   }
   const profile = store.read(config.courseId, 'profile') as Profile
-  const chat = await createAgentChat(ctx)
-  if (!chat) throw new Error('tutor: 模型会话创建失败')
-
   if (!store.has(config.courseId, 'knowledge-map')) {
+    const chat = await createAgentChat(ctx)
+    if (!chat) throw new Error('tutor: 模型会话创建失败')
     out.write('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
     const mapValue = await generateTurn(chat, mapPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
@@ -144,24 +145,37 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       return trySchema(KnowledgeMapSchema, data.value)
     })
     store.write(config.courseId, 'knowledge-map', mapValue)
+    await chat.flush()
+    out.write('知识地图生成开销：')
+    printSessionTotal(chat, out)
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   out.write(`知识地图就绪：${map.nodes.length} 个知识点。\n`)
 
-  if (!store.has(config.courseId, 'question-bank')) {
-    out.write('正在生成摸底题库…\n')
-    const bankValue = await generateTurn(chat, bankPrompt(map), (text) => {
+  // 按节点独立出题并保存：一次要求整门课程容易耗尽输出预算，中断后也不应重做已完成的题目。
+  const bank: QuestionBank = store.has(config.courseId, 'question-bank')
+    ? (store.read(config.courseId, 'question-bank') as QuestionBank) : {}
+  for (const node of map.nodes) {
+    if (!validateBank(bank, [node.id])) continue
+    out.write(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
+    const bankChat = await createAgentChat(ctx)
+    if (!bankChat) throw new Error('tutor: 出题会话创建失败')
+    const nodeMap = { ...map, nodes: [node], edges: [] }
+    const bankValue = await generateTurn(bankChat, bankPrompt(nodeMap, profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       const schemaResult = trySchema(QuestionBankSchema, data.value)
       if (!schemaResult.ok) return schemaResult
-      const bankError = validateBank(schemaResult.value as QuestionBank, map.nodes.map((n) => n.id))
+      const bankError = validateBank(schemaResult.value as QuestionBank, [node.id])
       if (bankError) return { ok: false as const, error: bankError }
       return schemaResult
     })
-    store.write(config.courseId, 'question-bank', bankValue)
+    bank[node.id] = (bankValue as QuestionBank)[node.id]
+    store.write(config.courseId, 'question-bank', bank)
+    await bankChat.flush()
+    out.write('该知识点出题开销：')
+    printSessionTotal(bankChat, out)
   }
-  const bank = store.read(config.courseId, 'question-bank') as QuestionBank
 
   const resumed = store.has(config.courseId, 'assessment')
   const state = resumed ? (store.read(config.courseId, 'assessment') as AssessmentState) : AssessmentEngine.create(topoOrder(map))
@@ -174,8 +188,6 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   store.write(config.courseId, 'mastery', engine.buildMastery())
   store.remove(config.courseId, 'assessment')
   out.write(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
-  await chat.flush()
-  printSessionTotal(chat, out)
   process.stdin.destroy()
   exit(0)
 }

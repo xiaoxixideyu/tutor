@@ -65,3 +65,10 @@ it('恢复会话计入已报告的失败尝试用量，最终失败也不清掉�
   assert.deepEqual(chat.lastTurnUsage(), { inputTokens: 300, outputTokens: 50 })
   assert.deepEqual(chat.totalUsage(), { inputTokens: 330, outputTokens: 53 })
 })
+
+it('主动中止不会自动重启模型回合，已产生的用量仍被保留', async () => {
+  const ctx = fixture([], [[output({ inputTokens: 30, outputTokens: 8 }, '', 'assistant/attempt'), end('aborted')]])
+  const chat = (await createAgentChat(ctx))!
+  await assert.rejects(chat.ask('中途取消'), { name: 'AbortError' })
+  assert.deepEqual(chat.totalUsage(), { inputTokens: 30, outputTokens: 8 })
+})

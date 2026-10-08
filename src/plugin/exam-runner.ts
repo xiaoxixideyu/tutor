@@ -2,8 +2,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 import { applyExamMastery, computeExamResult, EXAM_PASS_SCORE, gradeObjective, nextMilestone, paperTotalPoints, paperValid, updatePlanExamRecord, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
-import type { KnowledgeMap, Mastery, Plan } from '../core/schema.ts'
+import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
 import { currentNode } from '../core/lesson.ts'
+import { formatChoice } from '../core/assessment.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { createLineReader } from './line-reader.ts'
@@ -44,7 +45,7 @@ const ExamPaperSchema = z.object({
     .required(),
 }) as unknown as Schema<unknown, ExamPaper>
 
-function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap): string {
+function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap, profile: Profile): string {
   const nodeLines = milestone.nodes.map((id) => {
     const node = map.nodes.find((n) => n.id === id)
     return `- ${id}（${node?.title ?? id}）：${node?.summary ?? ''}`
@@ -55,10 +56,16 @@ function buildExamPrompt(milestone: { id: string; title: string; nodes: string[]
     '覆盖知识点：',
     ...nodeLines,
     '',
+    `全课程目标与排除项（可能含后续课，不能据此扩大本里程碑考查范围）：${profile.goal}`,
+    `现有基础：${profile.background || '未填写'}`,
+    '',
     '要求：',
-    '- 每个知识点 1-2 道客观题（选择题 4 项、或唯一简短答案），全部围绕该知识点的核心事实与应用',
+    '- 全卷共 4-10 题，覆盖全部里程碑知识点；按范围分配客观题（选择题 4 项、或唯一简短答案），全部围绕核心事实与应用',
+    '- 只考上面列出的里程碑知识点及其验收目标；全课程目标中的后续课内容不属于本次考查范围',
+    '- 学员明确的范围与排除项优先于知识点摘要和常见扩展；不得为凑题数引入未学或已排除的内容',
     '- 最后 1 道综合性主观题，直接对应里程碑标题的验收目标（如"能写出并发安全的 worker pool"就要求写出/描述完整方案）；主观题给参考答案与 keywords（判分关键词）',
     '- 题目难度对齐里程碑验收（偏向综合与应用，不是背概念）',
+    '- 输出前逐题独立求解并核对参考答案；所有数值、边界与检查条件都要在本题成立，不能机械套用公式（例如事件有重叠时，概率之和未必等于 1）',
     '- points：客观题 1 分/题，主观题 2 分',
     '',
     '输出 JSON（```json 代码块）：',
@@ -68,7 +75,7 @@ function buildExamPrompt(milestone: { id: string; title: string; nodes: string[]
 }
 
 export function buildExamGradingPrompt(questions: ExamQuestion[], answers: Map<string, string>): string {
-  const lines: string[] = ['任务：判分以下主观题作答。', '']
+  const lines: string[] = ['任务：判分以下主观题作答。', '评分只覆盖题干明确要求；不因遗漏参考答案中的额外细节扣分。独立核对计算与逻辑，发现参考答案错误时按正确内容评分并说明。', '']
   for (const q of questions) {
     lines.push(`题目 ${q.id}（满分 ${q.points}）：${q.question}`)
     lines.push(`参考答案：${q.answer}`)
@@ -95,6 +102,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   }
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
+  const profile = store.read(config.courseId, 'profile') as Profile
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const milestone = config.milestoneId
     ? (plan.milestones.find((m) => m.id === config.milestoneId) ?? null)
@@ -110,7 +118,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   const chat = await createAgentChat(ctx)
   if (!chat) throw new Error('tutor: 模型会话创建失败')
   out.write('正在生成试卷…\n')
-  const paper = (await generateTurn(chat, buildExamPrompt(milestone, map), (text) => {
+  const paper = (await generateTurn(chat, buildExamPrompt(milestone, map, profile), (text) => {
     const data = parseJsonBlock(text)
     if (!data.ok) return data
     const schemaResult = trySchema(ExamPaperSchema, data.value)
@@ -129,8 +137,7 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   for (const question of paper.questions) {
     index++
     out.write(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
-    const letters = 'ABCDEF'
-    for (const [i, choice] of (question.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
+    for (const [i, choice] of (question.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
     // 与 learn-runner 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
     // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
     out.write('\n> ')

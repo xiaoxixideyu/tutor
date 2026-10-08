@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { CourseStore, COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { dueReviews, pickReviewQuestions, postponeReview } from '../src/core/review.ts'
 import { listDueReviews } from '../src/core/summary.ts'
-import { applyReviewResult, judgeQuizAnswer } from '../src/core/assessment.ts'
+import { applyReviewResult, formatChoice, judgeQuizAnswer } from '../src/core/assessment.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
@@ -86,7 +86,7 @@ async function reviewCourse(courseId) {
     let correct = 0
     for (const [index, question] of questions.entries()) {
       out.write(`\n复习题 ${index + 1}/${questions.length}：${question.question}\n`)
-      for (const choice of question.choices ?? []) out.write(`  ${choice}\n`)
+      for (const [index, choice] of (question.choices ?? []).entries()) out.write(`  ${formatChoice(choice, index)}\n`)
       const answer = await readAnswer()
       if (!answer || !answer.trim()) {
         out.write('复习中止，进度未变。\n')

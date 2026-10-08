@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, resourcesForNode, validateLessonDraft, type LessonResourceView } from '../core/lesson.ts'
-import { judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
+import { formatChoice, judgeQuizAnswer, updateMasteryForNode } from '../core/assessment.ts'
 import { dueReviews } from '../core/review.ts'
 import { extractProfileJson } from '../core/interview.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../core/schema.ts'
@@ -178,7 +178,8 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
           out.write(`  ${mark[claim.verdict] ?? '?'} ${claim.claim}${claim.evidence ? `（${claim.evidence}）` : ''}\n`)
         }
         const bad = claims.filter((c) => c.verdict !== 'supported').length
-        out.write(bad === 0 ? '核对通过：全部断言有资料支撑。\n' : `发现 ${bad} 处需注意的断言，讲授中请以此为准。\n`)
+        out.write(bad === 0 ? '资料对照完成：模型认为上述断言有资料支撑。\n' : `发现 ${bad} 处资料未证实或存在矛盾的断言，需要进一步核实。\n`)
+        out.write('此结果只对照本课资料摘录；资料和模型判断也可能出错，不能替代独立事实验证。\n')
       } else {
         out.write('核对结果解析失败，请重试。\n')
       }
@@ -190,8 +191,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
       let correct = 0
       for (const [index, item] of draft.quiz.entries()) {
         out.write(`\n小测 ${index + 1}/${draft.quiz.length}：${item.question}\n`)
-        const letters = 'ABCDEF'
-        for (const [i, choice] of (item.choices ?? []).entries()) out.write(`  ${letters[i] ?? '?'}. ${choice}\n`)
+        for (const [i, choice] of (item.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
         out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
         const answer = await readAnswer()
         if (!answer || !answer.trim() || answer.trim() === '/exit') {
