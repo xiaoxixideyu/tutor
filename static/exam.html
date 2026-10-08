@@ -121,9 +121,6 @@ let bubbleText = ''
 let busy = false
 let busyTimer = null
 let busySeconds = 0
-let chipMulti = false
-let chipSelection = []
-let chipsAnswered = false
 let flowFinished = false
 let examOutcome = null
 
@@ -135,6 +132,7 @@ function setBusy(on, label) {
   $input.disabled = on || flowFinished
   if ($send) $send.disabled = on || flowFinished
   document.getElementById('stopBtn').disabled = flowFinished
+  if (on || flowFinished) for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
@@ -208,11 +206,11 @@ function maybeChips(text) {
   const letters = options.map((o) => o.letter)
   const expects = ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, letters.length)
   if (letters.join('') !== expects.join('')) return
+  for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   const multi = /可多选|可多選|多选题|（多选）|\(多选\)/.test(text)
-  const container = el('<div class="chips"></div>')
-  chipMulti = multi
-  chipSelection = []
-  chipsAnswered = false
+  const container = el('<div class="chips choices"></div>')
+  const chipSelection = []
+  let chipsAnswered = false
   if (multi) container.appendChild(el('<span class="hint">可多选，选完点「提交选择」</span>'))
   for (const opt of options) {
     const chip = el(`<button class="chip">${esc(opt.letter)}. ${esc(opt.label)}</button>`)

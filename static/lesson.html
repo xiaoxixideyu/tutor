@@ -130,9 +130,6 @@ let flowFinished = true
 let busyTimer = null
 let busySeconds = 0
 let chips = null
-let chipMulti = false
-let chipSelection = []
-let chipsAnswered = false
 
 function setBusy(on, label) {
   busy = on
@@ -143,6 +140,7 @@ function setBusy(on, label) {
   if ($send) $send.disabled = on || flowFinished
   for (const button of document.querySelectorAll('.quick button')) button.disabled = on || flowFinished
   document.getElementById('stopBtn').disabled = flowFinished
+  if (on || flowFinished) for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
@@ -219,17 +217,17 @@ function maybeChips(text) {
   const letters = options.map((o) => o.letter)
   const expects = ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, letters.length)
   if (letters.join('') !== expects.join('')) return
-  // 旧 chips 未答复则作废
+  // 下一题出现后，旧题按钮也不能再次提交。
+  for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   const multi = /可多选|可多選|多选题|（多选）|\(多选\)/.test(text)
-  const container = el('<div class="chips"></div>')
-  chipMulti = multi
-  chipSelection = []
-  chipsAnswered = false
+  const container = el('<div class="chips choices"></div>')
+  const chipSelection = []
+  let chipsAnswered = false
   if (multi) container.appendChild(el('<span class="hint">可多选，选完点「提交选择」</span>'))
   for (const opt of options) {
     const chip = el(`<button class="chip">${esc(opt.letter)}. ${esc(opt.label)}</button>`)
     chip.addEventListener('click', () => {
-      if (chipsAnswered) return
+      if (chipsAnswered || busy || flowFinished) return
       if (multi) {
         const idx = chipSelection.indexOf(opt.letter)
         if (idx >= 0) chipSelection.splice(idx, 1)
@@ -247,7 +245,7 @@ function maybeChips(text) {
   if (multi) {
     const submit = el('<button class="chip">提交选择</button>')
     submit.addEventListener('click', () => {
-      if (chipsAnswered || chipSelection.length === 0) return
+      if (chipsAnswered || busy || flowFinished || chipSelection.length === 0) return
       chipsAnswered = true
       for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
       submitChips(chipSelection)
@@ -259,6 +257,7 @@ function maybeChips(text) {
 }
 
 function submitChips(letters) {
+  if (busy || flowFinished) return
   const line = letters.join('')
   $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
   closeBubble()
