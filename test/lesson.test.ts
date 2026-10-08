@@ -33,7 +33,7 @@ const draft: LessonDraft = {
   example: 'go fmt.Println("hi")',
   practice: [{ question: '如何启动一个 goroutine？', answer: 'go 函数调用' }],
   quiz: [
-    { question: 'go 关键字的作用？', answer: '启动 goroutine' },
+    { question: 'go 关键字的作用？', choices: ['启动 goroutine', '终止进程', '锁住变量', '关闭通道'], answer: 'A' },
     { question: '1+1=?', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'B' },
   ],
   misconceptions: ['goroutine 等于线程'],

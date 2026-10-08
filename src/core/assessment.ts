@@ -1,4 +1,5 @@
 import type { AssessmentState, LearnerProfile, LessonPractice, Mastery, Question, QuestionBank } from './schema.ts'
+import { matchesRuleAnswer, normalizeRuleText } from './rule-grading.ts'
 
 export const MAX_QUESTIONS_PER_NODE = 3
 
@@ -8,15 +9,8 @@ export function formatChoice(choice: string, index: number): string {
   return `${letter}. ${text}`
 }
 
-function normalizeAnswer(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[\s，。,.;；:：!！?？"'“”‘’（）()[\]【】]+/g, '')
-}
-
 export function judgeAnswer(q: Question, raw: string): boolean {
-  const answer = normalizeAnswer(raw)
+  const answer = normalizeRuleText(raw)
   if (!answer) return false
   if (q.type === 'choice') {
     const letter = q.answer.trim().toLowerCase()
@@ -25,9 +19,9 @@ export function judgeAnswer(q: Question, raw: string): boolean {
     const choiceText = q.choices?.[index]
     if (choiceText === undefined) return false
     const bareText = choiceText.replace(/^[a-d][.、,，:：\)）]?\s*/i, '')
-    return normalizeAnswer(choiceText) === answer || normalizeAnswer(bareText) === answer
+    return matchesRuleAnswer(raw, [choiceText, bareText])
   }
-  return [q.answer, ...(q.accept ?? [])].some((candidate) => normalizeAnswer(candidate) === answer)
+  return matchesRuleAnswer(raw, [q.answer, ...(q.accept ?? [])])
 }
 
 function scoreForNode(asked: { difficulty: 1 | 2 | 3; correct: boolean }[]): number {

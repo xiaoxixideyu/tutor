@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { evaluateRational, sameRational } from '../src/core/rational.ts'
 import { bankContent, blindQuestions, contentIssues, contentKey, lessonContent, mapContent, parseBlindSolutions, parseContentReview,
-  planContent, practiceContent, replayApprovedReply, requiredAssertions, teachingContent, type ContentInput, type ContentReview } from '../src/core/content-quality.ts'
+  planContent, practiceContent, replayApprovedReply, requiredAssertions, teachingContent, parseFactChecks, type ContentInput, type ContentReview } from '../src/core/content-quality.ts'
 import { QualityStore, type QualityRecord } from '../src/core/quality-store.ts'
 import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/plugin/content-gate.ts'
 import { OutputLimitError, type AgentChat } from '../src/plugin/agent-chat.ts'
@@ -102,6 +102,26 @@ it('盲解返回完整选项或等价分数时按选项唯一映射，错误或�
   assert.ok(contentIssues(words, [solution], reviewFor(words)).length)
 })
 
+it('审查算式接受有限 JSON 数字结果，错误数值仍由精确运算拒绝', () => {
+  const raw = reviewFor(input) as any
+  raw.units[0].arithmetic = [{ expression: '3-1', result: 2 }]
+  const review = parseContentReview(raw, input)
+  assert.deepEqual(contentIssues(input, [], review), [])
+  raw.units[0].arithmetic = [{ expression: '1-1/3', result: 0.6666666666666666 }]
+  assert.deepEqual(contentIssues(input, [], parseContentReview(raw, input)), [])
+  for (const result of [0.6667, 0.6666666666666667, '0.6666666666666666', '2/30']) {
+    raw.units[0].arithmetic[0].result = result
+    assert.ok(contentIssues(input, [], parseContentReview(raw, input)).length)
+  }
+  raw.units[0].arithmetic = [{ expression: '3-1', result: 2 }]
+  raw.units[0].arithmetic[0].result = 3
+  assert.ok(contentIssues(input, [], parseContentReview(raw, input)).length)
+  for (const result of [null, Infinity, NaN, {}]) {
+    raw.units[0].arithmetic[0].result = result
+    assert.throws(() => parseContentReview(raw, input))
+  }
+})
+
 it('审查响应不完整和网络错误时关闭准入，保留失败证据和用量', async t => {
   const { gate, store, records } = setup(t, () => ({ units: [] }))
   await assert.rejects(gate.review(input), /未完成，未发布/)
@@ -112,6 +132,17 @@ it('审查响应不完整和网络错误时关闭准入，保留失败证据和�
   const broken = new ContentGate(store, async () => { throw new Error('网络中断') })
   await assert.rejects(broken.review(input), /网络中断/)
   assert.equal(store.approved(input), false)
+})
+
+it('反例检查显式要求算式和结果，裸算式与回显输入仍不能当成有效核查', async t => {
+  const { gate, requests } = setup(t)
+  const content = teachingContent({ reply: '在这个长度为 2 的切片里，只有 2 个可索引元素。', learnerMessage: '解释边界', previousReply: '' }, 'die', profile, map)
+  assert.equal((await gate.review(content)).approved, true)
+  const request = JSON.parse(requests.find(item => item.role === 'facts')!.prompt)
+  assert.match(request.outputContract, /expression.*result/)
+  const claim = request.claims[0]
+  assert.throws(() => parseFactChecks({ claims: [{ id: claim.id, verdict: 'pass', explanation: '3-1=2', arithmetic: ['3-1'] }] }, [claim.id]), /expression 和 result/)
+  assert.throws(() => parseFactChecks({ claims: request.claims }, [claim.id]), /结论非法/)
 })
 
 it('生成后审查中断保留待审草稿，续跑重新校验与审查而不重复生成', async t => {
@@ -169,6 +200,21 @@ it('恢复不会复用缺少必需字段的响应，已拒内容也不能重抽�
   const changed = structuredClone(input)
   changed.context.profile.goal += '；允许复习'
   await assert.rejects(untouched.review(changed), /不应重新请求/)
+})
+
+it('未发布讲授只能从曾完整进入审查、且匹配节点和前一断点的文本恢复', async t => {
+  const { store } = setup(t)
+  const pending = { reply: '本次完整回复', learnerMessage: '我的作答', previousReply: '已批准的上一段' }
+  const content = teachingContent(pending, 'die', profile, map)
+  const broken = new ContentGate(store, async () => { throw new Error('网络中断') })
+  await assert.rejects(broken.review(content), /网络中断/)
+  assert.deepEqual(store.unfinishedTeaching('die', pending.reply, pending.previousReply), pending)
+  assert.equal(store.unfinishedTeaching('die', '未交审的截断日志', pending.previousReply), undefined)
+  assert.equal(store.unfinishedTeaching('other', pending.reply, pending.previousReply), undefined)
+  assert.equal(store.unfinishedTeaching('die', pending.reply, '另一断点'), undefined)
+  const record = store.history(content)[0]
+  record.status = 'rejected'; record.issues = ['错误事实']; store.save(record)
+  assert.equal(store.unfinishedTeaching('die', pending.reply, pending.previousReply), undefined)
 })
 
 it('不能复用出题答案所在的盲解会话作为审查会话', async t => {

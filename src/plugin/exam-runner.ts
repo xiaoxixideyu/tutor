@@ -1,15 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type Schema from '@deepseek-ai/schemastery'
-import { applyExamMastery, computeExamResult, EXAM_PASS_SCORE, gradeObjective, nextMilestone, paperTotalPoints, paperValid, updatePlanExamRecord, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
+import { EXAM_PASS_SCORE, ExamPaperSchema, gradeObjective, nextMilestone, paperTotalPoints, paperValid, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
+import { applyExamAttempt, ExamAttemptStore, newExamAttempt } from '../core/exam-attempt.ts'
 import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
-import { currentNode } from '../core/lesson.ts'
 import { formatChoice } from '../core/assessment.ts'
 import { createAgentChat } from './agent-chat.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
-import { examContent, mapContent, planContent } from '../core/content-quality.ts'
+import { contentKey, examContent, mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
 
@@ -29,25 +28,6 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-const ExamPaperSchema = z.object({
-  milestone: z.string().required(),
-  questions: z
-    .array(
-      z.object({
-        id: z.string().required(),
-        node: z.string().required(),
-        type: z.union([z.const('objective'), z.const('subjective')]).required(),
-        question: z.string().required(),
-        choices: z.array(z.string()),
-        answer: z.string().required(),
-        accept: z.array(z.string()),
-        keywords: z.array(z.string()),
-        points: z.number().required(),
-      })
-    )
-    .required(),
-}) as unknown as Schema<unknown, ExamPaper>
-
 function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap, profile: Profile): string {
   const nodeLines = milestone.nodes.map((id) => {
     const node = map.nodes.find((n) => n.id === id)
@@ -63,7 +43,7 @@ function buildExamPrompt(milestone: { id: string; title: string; nodes: string[]
     `现有基础：${profile.background || '未填写'}`,
     '',
     '要求：',
-    '- 全卷共 4-10 题，覆盖全部里程碑知识点；按范围分配客观题（选择题 4 项、或唯一简短答案），全部围绕核心事实与应用',
+    '- 全卷共 4-10 题，覆盖全部里程碑知识点；客观题只能四选一或单一数值填空（answer 仅整数、小数或分数，题干明确只填数值）。概念解释、代码和多个输出请改为选择题或主观题，不能要求自然语言解释再精确匹配整句。全部围绕核心事实与应用',
     '- 只考上面列出的里程碑知识点及其验收目标；全课程目标中的后续课内容不属于本次考查范围',
     '- 学员明确的范围与排除项优先于知识点摘要和常见扩展；不得为凑题数引入未学或已排除的内容',
     '- 最后 1 道综合性主观题，直接对应里程碑标题的验收目标（如"能写出并发安全的 worker pool"就要求写出/描述完整方案）；主观题给参考答案与 keywords（判分关键词）',
@@ -110,8 +90,12 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   await gate.require(mapContent(map, profile))
   await gate.require(planContent(plan, profile, map))
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
-  const milestone = config.milestoneId
-    ? (plan.milestones.find((m) => m.id === config.milestoneId) ?? null)
+  const attempts = new ExamAttemptStore(store.root, config.courseId)
+  const saved = attempts.read()
+  let attempt = saved?.status !== 'completed' ? saved : undefined
+  const milestoneId = config.milestoneId || attempt?.paper.milestone
+  const milestone = milestoneId
+    ? (plan.milestones.find((m) => m.id === milestoneId) ?? null)
     : nextMilestone(plan, mastery ?? {})
   if (!milestone) {
     process.stderr.write('tutor: 没有可考的里程碑（需全部节点已掌握且未通过过大考）。先完成学习与单元小测。\n')
@@ -123,37 +107,59 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
 
   const chat = await createAgentChat(ctx)
   if (!chat) throw new Error('tutor: 模型会话创建失败')
-  out.write('正在生成试卷…\n')
-  const paper = await generateApproved<ExamPaper>(chat, buildExamPrompt(milestone, map, profile), (text) => {
-    const data = parseJsonBlock(text)
-    if (!data.ok) return data
-    const schemaResult = trySchema(ExamPaperSchema, data.value)
-    if (!schemaResult.ok) return schemaResult
-    if ((schemaResult.value as ExamPaper).milestone !== milestone.id) return { ok: false, error: '试卷里程碑不匹配' }
-    const invalid = paperValid(schemaResult.value as ExamPaper, milestone.nodes)
-    if (invalid) return { ok: false as const, error: invalid }
-    return schemaResult
-  }, gate, value => examContent(value, profile, map, milestone))
+  if (attempt) {
+    if (attempt.paper.milestone !== milestone.id) throw new Error(`已有未完成的 ${attempt.paper.milestone} 考试，请先继续该考试`)
+    const invalid = paperValid(attempt.paper, milestone.nodes)
+    if (invalid) throw new Error(`已保存试卷不再适用，原作答已保留：${invalid}`)
+    const input = examContent(attempt.paper, profile, map, milestone)
+    if (!(await gate.review(input)).approved) throw new Error('已保存试卷未通过当前审查，作答保留，成绩与掌握度未修改')
+    attempt.contentKey = contentKey(input); attempts.save(attempt)
+    out.write(`恢复考试：已保存 ${Object.keys(attempt.answers).length}/${attempt.paper.questions.length} 题作答，继续未完成的作答或阅卷。\n`)
+  } else {
+    out.write('正在生成试卷…\n')
+    const paper = await generateApproved<ExamPaper>(chat, buildExamPrompt(milestone, map, profile), (text) => {
+      const data = parseJsonBlock(text)
+      if (!data.ok) return data
+      const schemaResult = trySchema(ExamPaperSchema, data.value)
+      if (!schemaResult.ok) return schemaResult
+      if ((schemaResult.value as ExamPaper).milestone !== milestone.id) return { ok: false, error: '试卷里程碑不匹配' }
+      const invalid = paperValid(schemaResult.value as ExamPaper, milestone.nodes)
+      if (invalid) return { ok: false as const, error: invalid }
+      return schemaResult
+    }, gate, value => examContent(value, profile, map, milestone))
+    attempt = newExamAttempt(paper, contentKey(examContent(paper, profile, map, milestone)))
+    attempts.save(attempt)
+  }
+  const paper = attempt.paper
 
   const totalPoints = paperTotalPoints(paper)
   out.write(`试卷就绪：${paper.questions.length} 题，满分 ${totalPoints}（客观题规则判分，主观题模型判分）。\n\n`)
-  const gradings: ExamGrading[] = []
+  const gradings: ExamGrading[] = attempt.status === 'graded' ? attempt.gradings! : []
   const subjectiveAnswers = new Map<string, string>()
   let index = 0
   for (const question of paper.questions) {
     index++
+    if (Object.hasOwn(attempt.answers, question.id)) {
+      if (attempt.status !== 'graded') {
+        if (question.type === 'objective') gradings.push(gradeObjective(question, attempt.answers[question.id]))
+        else subjectiveAnswers.set(question.id, attempt.answers[question.id])
+      }
+      continue
+    }
     out.write(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
     for (const [i, choice] of (question.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
     // 与 learn-runner 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
     // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
     out.write('\n> ')
     const answer = await readAnswer()
-    if (!answer || !answer.trim()) {
-      out.write('考试中止，未产生成绩（题卷不保存）。\n')
+    if (!answer || !answer.trim() || answer.trim() === '/exit') {
+      out.write('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
       process.stdin.destroy()
-      exit(1)
+      exit(0)
       return
     }
+    attempt.answers[question.id] = answer.trim()
+    attempts.save(attempt)
     if (question.type === 'objective') {
       const grading = gradeObjective(question, answer)
       gradings.push(grading)
@@ -175,12 +181,13 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
       gradings.push(...validated)
     } catch (error) {
       await chat.flush()
-      throw new Error(`主观题判分失败，成绩与掌握度未修改：${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(`主观题判分失败，作答已保存，成绩与掌握度未修改：${error instanceof Error ? error.message : String(error)}`)
     }
   }
   await chat.flush()
 
-  const { score, passed } = computeExamResult(paper, gradings)
+  attempt.gradings = gradings
+  const { score, passed, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, today())
   out.write(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''
@@ -188,15 +195,8 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
     out.write(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
   }
 
-  const updatedMastery = applyExamMastery(paper, gradings, mastery ?? {}, today())
-  store.write(config.courseId, 'mastery', updatedMastery)
-
-  const updatedPlan = updatePlanExamRecord(plan, milestone.id, { date: today(), score, passed })
-  updatedPlan.current = currentNode(updatedPlan, updatedMastery, map) ?? undefined
-  store.write(config.courseId, 'plan', updatedPlan)
-
   out.write(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
-  out.write(updatedPlan.current ? `计划指针：${updatedPlan.current}\n` : '课程完成。\n')
+  out.write(after.plan.current ? `计划指针：${after.plan.current}\n` : '课程完成。\n')
   printSessionTotal(chat, out)
   process.stdin.destroy()
   exit(passed ? 0 : 1)

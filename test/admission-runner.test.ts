@@ -6,7 +6,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { CourseStore } from '../src/core/store.ts'
-import { lessonContent, mapContent, planContent, teachingContent } from '../src/core/content-quality.ts'
+import { contentKey, examContent, lessonContent, mapContent, planContent, teachingContent } from '../src/core/content-quality.ts'
+import { ExamAttemptStore, newExamAttempt } from '../src/core/exam-attempt.ts'
+import type { ExamPaper } from '../src/core/exam.ts'
 import type { KnowledgeMap, LessonState, Plan, Profile } from '../src/core/schema.ts'
 import { approveFixture } from './fixtures/quality.ts'
 
@@ -22,7 +24,7 @@ function fixture(t: TestContext) {
   const map = store.read('alpha', 'knowledge-map') as KnowledgeMap
   approveFixture(root, 'alpha', mapContent(map, profile))
   approveFixture(root, 'alpha', planContent(store.read('alpha', 'plan') as Plan, profile, map))
-  const run = (mode: string, behavior: 'repair' | 'fail', input = '') => spawnSync(process.execPath,
+  const run = (mode: string, behavior: 'repair' | 'fail' | 'grading-fail' | 'grading-success', input = '') => spawnSync(process.execPath,
     [fileURLToPath(new URL('./fixtures/admission-runner.ts', import.meta.url)), mode, root, behavior],
     { input, encoding: 'utf8', timeout: 10000 })
   return { root, store, profile, map, run }
@@ -33,12 +35,48 @@ it('正式 exam runner 在第四次修复通过后才展示试卷；耗尽修复
     const { store, run } = fixture(t)
     const mastery = store.read('alpha', 'mastery')
     const result = run('exam', behavior)
-    assert.equal(result.status, 1, result.stderr) // repair 后 stdin EOF，按正式逻辑中止考试
+    assert.equal(result.status, behavior === 'repair' ? 0 : 1, result.stderr) // repair 后 stdin EOF，保存试卷后暂停考试
     assert.doesNotMatch(result.stdout, /REJECT_CANDIDATE/)
     if (behavior === 'repair') assert.match(result.stdout, /试卷就绪[\s\S]*APPROVED_CONTENT/)
     else assert.doesNotMatch(result.stdout, /试卷就绪|第 1\/4 题/)
     assert.deepEqual(store.read('alpha', 'mastery'), mastery)
   }
+})
+
+it('正式考试暂停和阅卷失败后恢复同一试卷，跳过已答题并只在阅卷成功后记分', t => {
+  const { root, store, profile, map, run } = fixture(t)
+  const plan = store.read('alpha', 'plan') as Plan
+  const paper: ExamPaper = { milestone: 'm1', questions: [
+    ...Array.from({ length: 3 }, (_, i) => ({ id: `q${i + 1}`, node: 'topic', type: 'objective' as const,
+      question: `已批准第 ${i + 1} 题`, choices: ['2', '3', '4', '5'], answer: 'A', points: 1 })),
+    { id: 'q4', node: 'topic', type: 'subjective', question: '解释 1+1=2', answer: '两个一合起来是二', points: 2 },
+  ] }
+  const input = examContent(paper, profile, map, plan.milestones[0])
+  approveFixture(root, 'alpha', input)
+  const attempts = new ExamAttemptStore(root, 'alpha')
+  const attempt = newExamAttempt(paper, contentKey(input))
+  attempts.save(attempt)
+  const before = store.read('alpha', 'mastery')
+  const paused = run('exam', 'grading-fail', 'A\n/exit\n')
+  assert.equal(paused.status, 0, paused.stdout + paused.stderr)
+  assert.match(paused.stdout, /考试暂停/)
+  assert.deepEqual(attempts.read()!.answers, { q1: 'A' })
+  assert.deepEqual(store.read('alpha', 'mastery'), before)
+  const failed = run('exam', 'grading-fail', 'A\nA\n两个一合起来是二\n')
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr)
+  assert.match(failed.stderr, /主观题判分失败，作答已保存/)
+  assert.doesNotMatch(failed.stdout, /正在生成试卷|【第 1\/4 题/)
+  assert.equal(attempts.read()!.status, 'answering')
+  assert.equal(Object.keys(attempts.read()!.answers).length, 4)
+  assert.deepEqual(store.read('alpha', 'mastery'), before)
+  const resumed = run('exam', 'grading-success')
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
+  assert.match(resumed.stdout, /恢复考试：已保存 4\/4 题作答/)
+  assert.doesNotMatch(resumed.stdout, /正在生成试卷|【第 \d\/4 题/)
+  assert.match(resumed.stdout, /大考成绩：1（通过）/)
+  assert.equal(attempts.read()!.id, attempt.id)
+  assert.equal(attempts.read()!.status, 'completed')
+  assert.equal((store.read('alpha', 'plan') as Plan).milestones[0].exam_passed, true)
 })
 
 it('正式 practice-gen 会审查已有任务，修复通过才替换；失败时保留原任务', t => {

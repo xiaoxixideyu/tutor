@@ -153,6 +153,7 @@ export function buildPracticeGenPrompt(input: PracticeGenInput): string {
     '- starter_files 提供必要初始文件（如 README 说明）；不要提供答案文件',
     '- tests 为规则自动执行的 shell 命令（在工作目录逐条执行）：1-3 条，命令必须确定性、无网络依赖、无交互（不等待 stdin）；首条验证文件/模块存在，末条验证行为正确',
     '- expect_output_contains 只选稳定子串（如程序打印的固定文案），不要依赖编译器本地化提示或时间戳',
+    '- 完整答案和数值必须在命令内完整比较：使用整行匹配（如 grep -qxF）、严格解析或数值比较；不能让错误分母、额外数字或集合多项只因包含正确答案的子串而通过。expect_output_contains 只用于检查成功标记，不单独证明完整数值正确；命令须保留被测程序失败的退出状态',
     '- 除 go 标准库外不引入第三方依赖（测试在 GOPROXY=off 下运行）',
     '- hints 给 1-2 条渐进提示（不直接给完整答案）',
     '',

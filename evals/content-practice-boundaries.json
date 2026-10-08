@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "provenance": "2026-10-08 真实生成任务的已知回归；各错误变体经正式实践执行器验证，非留出集。原始15例冻结集未改动。",
+  "cases": [
+    {
+      "id": "go-slices-practice-prefix-bad",
+      "source": "data/evals/course-mmggXT/go-slices/controls/near-miss-result.json",
+      "input": {
+        "kind": "practice",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "make-copy-independent-copy-verify",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "id": "make-copy-independent-copy-verify",
+              "node": "make-copy-independent-copy",
+              "title": "用 make + copy 造独立副本，并验证改副本不动源切片",
+              "prompt": "第二节练习：用 make + copy 建立与源切片互不影响的独立副本，并用修改实验验证。\n\n步骤：\n1. 新建 main.go：写 src := []int{1, 2, 3}；写 dst := make([]int, len(src))；用 copy(dst, src) 把元素复制过去并把返回值存入 n；打印一行 n=%d len=%d cap=%d（后两个取 len(dst)、cap(dst)）。\n2. 执行 dst[0] = 99；用 %v 分别打印 src= 和 dst= 两行。\n3. 打印 independent= 加一个布尔值，该值表示 src[0] 是否仍等于 1。\n4. 运行前先把你预测的这几行输出写进 predict.txt（至少含 src=… 和 dst=… 两类行），再运行核对。\n\n验收：go run main.go 依次输出 n=3 len=3 cap=3、src=[1 2 3]、dst=[99 2 3]、independent=true 这 4 行。只用你已学的变量、循环、函数和 fmt；本题不用 append、扩容、并发或嵌套切片。",
+              "starter_files": [
+                {
+                  "path": "README.md",
+                  "content": "# 任务：make + copy 的独立副本\n\n## 需要提交\n- `main.go`：按任务描述实现。\n- `predict.txt`：运行前写下的预测输出，至少含 `src=…` 与 `dst=…` 两种行。\n\n## 建议流程\n1. 先读任务描述，把预测输出写进 `predict.txt`（先预测，再运行）。\n2. 写 `main.go`，然后运行：\n\n```\ngo run main.go\n```\n\n3. 把实际输出与 `predict.txt` 对比；若 `src=` 那行不是 `[1 2 3]`，说明副本与源切片仍在共享数据，回去检查第 1 步。\n\n## 范围提醒\n本题只用已学内容：变量、循环、函数、fmt、make、copy。不要使用 append、扩容相关推断、并发或嵌套切片；也不要用课程未讲的第三方库。"
+                }
+              ],
+              "tests": [
+                {
+                  "name": "文件存在",
+                  "command": "test -f main.go && test -f predict.txt",
+                  "expect_exit": 0,
+                  "expect_output_contains": []
+                },
+                {
+                  "name": "用了 make 与 copy",
+                  "command": "grep -q \"make(\" main.go && grep -q \"copy(\" main.go",
+                  "expect_exit": 0,
+                  "expect_output_contains": []
+                },
+                {
+                  "name": "独立副本行为正确",
+                  "command": "GOPROXY=off go run main.go",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "n=3 len=3 cap=3",
+                    "src=[1 2 3]",
+                    "dst=[99 2 3]",
+                    "independent=true"
+                  ]
+                }
+              ],
+              "hints": [
+                "先预测：若写 dst := src 再执行 dst[0] = 99，src[0] 会变吗？再想 make + copy 为什么不同。",
+                "make([]int, len(src)) 的 len 与 cap 都等于 len(src)；copy 的返回值是实际复制的元素个数。"
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "实际运行错误数值前缀对照被子串测试误放行；必须用有边界检查"
+      },
+      "provenance": "2026-10-08 真实生成任务的已知回归；各错误变体经正式实践执行器验证，非留出集。原始15例冻结集未改动。 反例执行证据：data/evals/course-mmggXT/go-slices/controls/near-miss-result.json"
+    },
+    {
+      "id": "probability-practice-prefix-bad",
+      "source": "data/evals/course-mmggXT/probability/controls/near-miss-result.json",
+      "input": {
+        "kind": "practice",
+        "context": {
+          "profile": {
+            "goal": "学会在公平六面骰子单次试验中判断事件概率（等可能样本空间与有利结果计数、补集与 1-P(A)），严格限定两节各 15 分钟微课，不含条件概率、独立性、统计推断与编程",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率",
+            "style": "枚举结果的短例子驱动，先自己动手算再听讲解",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节各 15 分钟微课：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子的一次试验，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "sample-space-and-favorable-counting",
+              "title": "等可能样本空间与有利结果计数（一枚公平六面骰子的一次投掷）",
+              "summary": "一次投掷公平六面骰子的全部可能结果只有 6 个：1、2、3、4、5、6，它们构成样本空间 S；事件则由 S 中一个或多个结果组成（例如「掷出偶数」由结果 2、4、6 组成）。fair（公平）指每个面出现的机会相同，即 6 个结果等可能；正因为等可能，每个单个结果的概率才等于 1/|S|（这里是 1/6）。在这种等可能样本空间里，事件 E 的概率 = E 所包含的结果数 ÷ S 中结果总数（|E|/|S|）：掷出偶数由 2、4、6 三个结果组成，故 3/6 = 1/2；掷出「至少为 5」由 5、6 组成，故 2/6。等可能性是这个「计数相除」方法成立的必要条件——骰子若有偏、各面不等可能，就不能这样算；教学上也应先写明样本空间并论证各结果等可能，再数总数与事件所含结果数，避免把不等可能的样本空间拿来相除。"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1 − P(A) 求概率",
+              "summary": "事件 A 的补集记作 A′ 或 A^C（读作「not A」），由样本空间 S 中所有未被 A 包含的结果组成，即「A 不发生」。因为 A 与 A′ 没有共同结果，且两者合起来正好覆盖 S 中的全部结果（互斥且穷尽），所以 P(A) + P(A′) = 1，由此得 P(A′) = 1 − P(A)（等价地 P(A) = 1 − P(A′)）。用一枚公平六面骰子：S = {1,2,3,4,5,6}，若 A 由 1、2 组成，则 A′ 由 3、4、5、6 组成，P(A) = 2/6 = 1/3，P(A′) = 1 − 1/3 = 2/3；同理「掷出大于 1」的补集是「掷出 1」，P(掷出大于 1) = 1 − 1/6 = 5/6。补集指「其余全部结果」而不是某一个其他结果（掷出 6 的补集是掷出 1、2、3、4、5，不只是掷出 1）。当事件本身包含很多有利结果、逐个计数麻烦时，先算补集再相减通常更省事。"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ]
+        },
+        "units": [
+          {
+            "id": "complement-rule-dice-complement",
+            "node": "complement-rule",
+            "content": {
+              "id": "complement-rule-dice-complement",
+              "node": "complement-rule",
+              "title": "用补集算一枚公平骰子的概率",
+              "prompt": "掷一枚公平六面骰子一次，样本空间 S = {1,2,3,4,5,6}。先自己在纸上枚举每个事件的结果，再算概率；纯文本作答，不需要写代码。\n\n把答案写进工作目录的 answers.txt，每行一条，等号两侧不留空格（文件里可另加草稿行）：\n\nQ1：事件 A =「掷出的点数大于 1」。写出它的补集 A′，把其中全部结果放进花括号，逗号分隔、从小到大，格式 `Q1: complementA={...}`。\nQ2：用 P(A) = 1 − P(A′) 求 P(A)，填最简分数，格式 `Q2: P(A)=...`。\nQ3：事件 B =「掷出的点数是 6」。写出它的补集，格式 `Q3: complementB={...}`。\nQ4：事件 E =「掷出的点数是 1 或 2」。用补集求 E 不发生的概率，填最简分数，格式 `Q4: P(notE)=...`。\n\n验收标准：四行格式正确；补集写全「剩下的所有结果」而不是某一个结果；四个概率值正确，分数约到最简。",
+              "starter_files": [
+                {
+                  "path": "README.md",
+                  "content": "# 任务：用补集求一枚骰子的概率\n\n掷一枚公平六面骰子一次，样本空间 S = {1,2,3,4,5,6}。\n\n## 做前提醒\n1. 先在纸上枚举每个事件含哪些点数，再动手算。\n2. 补集是「S 中剩下的所有结果」，不是一个结果。\n3. 答案写进 `answers.txt`（纯文本，不用写程序），格式见下。\n\n## answers.txt 格式\n每行一条，等号两侧不留空格：\n\n```\nQ1: complementA={...}\nQ2: P(A)=...\nQ3: complementB={...}\nQ4: P(notE)=...\n```\n\n分数写最简形式（例如 3/6 写成 1/2）。\n\n## 自查\n- 每个补集是否把剩下的点数全列上了？\n- 是否先用「补集里结果个数 ÷ 6」再取 1 减去它？\n"
+                }
+              ],
+              "tests": [
+                {
+                  "name": "file-exists",
+                  "command": "[ -f answers.txt ] && echo FILE_FOUND",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "FILE_FOUND"
+                  ]
+                },
+                {
+                  "name": "format",
+                  "command": "grep -qF 'Q1: complementA=' answers.txt && grep -qF 'Q2: P(A)=' answers.txt && grep -qF 'Q3: complementB=' answers.txt && grep -qF 'Q4: P(notE)=' answers.txt && echo FORMAT_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "FORMAT_OK"
+                  ]
+                },
+                {
+                  "name": "answers-correct",
+                  "command": "grep -qF 'Q1: complementA={1}' answers.txt && grep -qF 'Q2: P(A)=5/6' answers.txt && grep -qF 'Q3: complementB={1,2,3,4,5}' answers.txt && grep -qF 'Q4: P(notE)=2/3' answers.txt && echo ANSWERS_OK",
+                  "expect_exit": 0,
+                  "expect_output_contains": [
+                    "ANSWERS_OK"
+                  ]
+                }
+              ],
+              "hints": [
+                "补集是 S 里「剩下的所有」点数：先划掉事件里的点数，看还剩哪些，再按从小到大写全。",
+                "补集的概率 = 其中结果个数 ÷ 6（先写分数再约分），然后 P(A) = 1 − P(A′)。"
+              ]
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "实际运行错误数值前缀对照被子串测试误放行；必须用有边界检查"
+      },
+      "provenance": "2026-10-08 真实生成任务的已知回归；各错误变体经正式实践执行器验证，非留出集。原始15例冻结集未改动。 反例执行证据：data/evals/course-mmggXT/probability/controls/near-miss-result.json"
+    }
+  ]
+}

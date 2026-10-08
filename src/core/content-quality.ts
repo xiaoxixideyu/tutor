@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { ruleAnswerIssue } from './rule-grading.ts'
 import type { ExamPaper } from './exam.ts'
 import type { KnowledgeMap, LessonDraft, Plan, PracticeTask, Profile, QuestionBank } from './schema.ts'
 import { evaluateRational, sameRational } from './rational.ts'
@@ -95,11 +96,13 @@ export function canonicalJson(value: unknown): string {
 
 export function contentKey(input: ContentInput): string {
   return createHash('sha256').update(canonicalJson({ policy: QUALITY_POLICY, solver: SOLVER_PERSONA, reviewer: REVIEWER_PERSONA, facts: FACT_PERSONA,
-    ...(input.kind === 'map' ? { contract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { contract: TEACHING_REVIEW_CONTRACT } : {}), input })).digest('hex')
+    ...(input.kind === 'map' ? { contract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { contract: TEACHING_REVIEW_CONTRACT }
+      : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : {}), input })).digest('hex')
 }
 
 export const MAP_REVIEW_CONTRACT = '本项目每个知识地图节点会启动一节实际课堂，因此一个 node 就是一节课，不是课内讲解要点。outline.nodes 是完整节点清单；明确要求 N 节课时必须恰好 N 个节点，不能把多出来的节点解释成同一节内的小知识点。edges 每对是 [知识点, 前置知识点]。'
 export const TEACHING_REVIEW_CONTRACT = '这是单轮课堂对话，不是整节课的教案。reply 不必在一轮内覆盖当前节点的全部目标；缺少本节其余步骤本身不是越界或知识错误。为回答学员当前问题或澄清本节概念，可简短回顾、比较原课程范围内的必要前置概念；不要求每轮重复当前节点标题中的全部方法。仍禁止提前教授或考查下一课的新方法、扩充学习活动及引入课程明确排除项。'
+export const PRACTICE_REVIEW_CONTRACT = '实践测试必须拒绝常见错误答案。主动构造数值前后多一位、分母错误、集合漏项或多项等反例，逐条推演命令是否误通过。expect_output_contains 和未加 -x 或行边界的 grep 只做子串匹配：例如正确分数的前缀会匹配错误分母，要求的容量也会匹配多一位数字。若末条行为检查仅靠这类子串证明完整答案正确，应 fail 并给出具体反例。验证完整值应在命令内按完整行、严格结构或数值比较，并保留被测程序失败的退出状态；可用 grep -qxF 或等效的有边界检查。源代码关键词查找和无数值的成功标记可用子串，不能把它们当作行为正确的全部证据。验收依据题目明确给出的接口；固定 main 输出任务可以严格比较所要求的完整输出及顺序。当前是练习自检，不是抗作弊系统，不要求证明任意程序的内部实现或抵御有意伪造全部输出，也不能为此要求新增函数接口、活动或未学知识。'
 
 export function requiredAssertions(input: ContentInput, unit: ContentUnit): { id: string; quote: string; path: string }[] {
   const found: { id: string; quote: string; path: string }[] = []
@@ -172,8 +175,20 @@ function covered(value: unknown, ids: string[]): Record<string, unknown>[] {
 function arithmetic(value: unknown): ArithmeticCheck[] {
   if (!Array.isArray(value) || value.length > 100) throw new Error('arithmetic 必须是有界数组（无运算时为 []）')
   return value.map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('arithmetic 每项必须是含 expression 和 result 的对象，不能只给算式字符串')
     const item = object(entry)
-    return { expression: nonempty(item.expression, 'expression'), result: nonempty(item.result, 'result') }
+    const expression = nonempty(item.expression, 'expression')
+    let result = typeof item.result === 'number' && Number.isFinite(item.result) ? String(item.result) : item.result
+    if (typeof item.result === 'number' && Number.isFinite(item.result) && !Number.isInteger(item.result)) {
+      // JSON 数字是 binary64：循环分数只能舍入。仅接受精确结果按同一数值表示
+      // 得到的完全相同数字，不设置误差容忍；字符串结果仍按其声明的精确值复算。
+      try {
+        const exact = evaluateRational(expression)
+        const [numerator, denominator = '1'] = exact.split('/')
+        if (Number(numerator) / Number(denominator) === item.result) result = exact
+      } catch { /* 非法算式仍由后续复算拒绝。 */ }
+    }
+    return { expression, result: nonempty(result, 'result') }
   })
 }
 export function validateContentInput(input: ContentInput): void {
@@ -228,6 +243,14 @@ function choiceLetter(answer: string, choices: string[]): string | undefined {
 }
 export function contentIssues(input: ContentInput, solutions: BlindSolution[], review: ContentReview, facts: FactCheck[] = []): string[] {
   const issues: string[] = []
+  for (const unit of input.units) {
+    const ruleGraded = input.kind === 'bank' || (input.kind === 'lesson' && unit.id.startsWith('quiz:'))
+      || (input.kind === 'exam' && (unit.content as { type?: string }).type === 'objective')
+    if (ruleGraded && unit.question) {
+      const issue = ruleAnswerIssue(unit.question)
+      if (issue) issues.push(`${unit.id}：${issue}`)
+    }
+  }
   for (const fact of facts) {
     if (fact.verdict !== 'pass') issues.push(`${fact.id}（独立反例检查 ${fact.verdict}）：${fact.explanation}`)
     issues.push(...arithmeticIssues(fact.id, fact.arithmetic))

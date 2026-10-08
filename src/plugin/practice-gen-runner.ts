@@ -84,7 +84,7 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
       let result: PracticeTaskFile
       if (issues) {
         const oldTasks = file.tasks.filter(task => task.node === node)
-        const repairChat = await createAgentChat(ctx, { isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 4096, retryOnLength: false })
+        const repairChat = await createAgentChat(ctx, { isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 8192, retryOnLength: false })
         if (!repairChat) throw new Error('tutor: 修复会话创建失败')
         result = await generateApproved<PracticeTaskFile>(repairChat, practiceRepairPrompt(oldTasks, profile, issues), text => {
           const data = parseJsonBlock(text)

@@ -7,7 +7,7 @@ const paper: ExamPaper = {
   milestone: 'm1',
   questions: [
     { id: 'q1', node: 'a', type: 'objective', question: 'x?', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'B', points: 1 },
-    { id: 'q2', node: 'a', type: 'objective', question: 'y?', answer: 'channel', accept: ['chan'], points: 1 },
+    { id: 'q2', node: 'a', type: 'objective', question: 'y?（只填数值）', answer: '1/2', accept: ['0.5'], points: 1 },
     { id: 'q3', node: 'b', type: 'objective', question: 'z?', choices: ['A. 甲', 'B. 乙', 'C. 丙', 'D. 丁'], answer: 'A', points: 1 },
     { id: 'q4', node: 'b', type: 'subjective', question: '综合题', answer: '参考', keywords: ['pool', 'channel'], points: 2 },
   ],
@@ -23,11 +23,11 @@ describe('paperValid', () => {
 })
 
 describe('gradeObjective', () => {
-  it('选择题按字母，简答按归一化', () => {
+  it('选择题按字母，数值填空接受等价表示', () => {
     assert.equal(gradeObjective(paper.questions[0], 'B').correct, true)
     assert.equal(gradeObjective(paper.questions[0], 'a').correct, false)
-    assert.equal(gradeObjective(paper.questions[1], 'Channel').correct, true)
-    assert.equal(gradeObjective(paper.questions[1], 'chan ').correct, true)
+    assert.equal(gradeObjective(paper.questions[1], '2/4').correct, true)
+    assert.equal(gradeObjective(paper.questions[1], '0.5 ').correct, true)
     assert.equal(gradeObjective(paper.questions[1], 'mutex').correct, false)
   })
 })

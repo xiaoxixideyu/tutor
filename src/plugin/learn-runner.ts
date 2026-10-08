@@ -138,6 +138,13 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
           if (adopted && replay !== null) {
             chat = adopted; resumed = true
             await publishTeaching(gate, chat, approvedTurn, node, profile, map, `从上次断点继续本课（${node}）。\n\n${replay}`)
+          } else if (adopted) {
+            const pending = gate.store.unfinishedTeaching(node, adopted.lastReply(), approvedTurn.reply)
+            if (pending && (await gate.review(teachingContent(pending, node, profile, map))).approved) {
+              chat = adopted; resumed = true; approvedTurn = pending
+              store.write(config.courseId, 'lesson', { ...lesson, approved_turn: pending })
+              await publishTeaching(gate, chat, pending, node, profile, map, `上次回复的内容核对已完成，继续本课（${node}）。\n\n${pending.reply}`)
+            }
           }
         }
       }

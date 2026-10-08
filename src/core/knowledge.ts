@@ -1,5 +1,6 @@
 import type { KnowledgeMap, KnowledgeMapResource, QuestionBank } from './schema.ts'
 import { getDomain } from 'tldts'
+import { ruleAnswerIssue } from './rule-grading.ts'
 
 // 注册域名只是来源独立性的保守代理：同站子域、不同页面和重定向别名不能充当两份证据。
 // 数量门槛不能证明事实正确，仍须由教研给出交叉核对结论。
@@ -78,6 +79,8 @@ export function validateBank(bank: QuestionBank, nodeIds: string[]): string | nu
         if ((q.choices?.length ?? 0) !== 4) return `题目 ${q.id} 的选项数不是 4`
         if (!/^[a-d]$/.test(q.answer.trim().toLowerCase())) return `题目 ${q.id} 的答案不是 A-D 字母`
       }
+      const formatIssue = ruleAnswerIssue(q)
+      if (formatIssue) return `题目 ${q.id}：${formatIssue}`
     }
   }
   return null

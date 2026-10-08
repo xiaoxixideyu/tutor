@@ -56,7 +56,7 @@
   <h1 id="title">里程碑大考</h1>
   <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
   <span class="state" id="state">未连接</span>
-  <button id="stopBtn" class="danger">中止大考</button>
+  <button id="stopBtn" class="danger">暂停大考</button>
 </header>
 <div class="banner" id="banner"></div>
 <main id="log"></main>
@@ -124,14 +124,17 @@ let busySeconds = 0
 let chipMulti = false
 let chipSelection = []
 let chipsAnswered = false
+let flowFinished = false
+let examOutcome = null
 
 function setBusy(on, label) {
   busy = on
   const $busy = document.getElementById('busy')
   const $send = document.getElementById('send')
   if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
-  $input.disabled = on
-  if ($send) $send.disabled = on
+  $input.disabled = on || flowFinished
+  if ($send) $send.disabled = on || flowFinished
+  document.getElementById('stopBtn').disabled = flowFinished
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
@@ -214,7 +217,7 @@ function maybeChips(text) {
   for (const opt of options) {
     const chip = el(`<button class="chip">${esc(opt.letter)}. ${esc(opt.label)}</button>`)
     chip.addEventListener('click', () => {
-      if (chipsAnswered) return
+      if (chipsAnswered || busy || flowFinished) return
       if (multi) {
         const idx = chipSelection.indexOf(opt.letter)
         if (idx >= 0) chipSelection.splice(idx, 1)
@@ -232,7 +235,7 @@ function maybeChips(text) {
   if (multi) {
     const submit = el('<button class="chip">提交选择</button>')
     submit.addEventListener('click', () => {
-      if (chipsAnswered || chipSelection.length === 0) return
+      if (chipsAnswered || busy || flowFinished || chipSelection.length === 0) return
       chipsAnswered = true
       for (const c of container.querySelectorAll('.chip')) c.classList.add('disabled')
       submitChips(chipSelection)
@@ -245,6 +248,7 @@ function maybeChips(text) {
 // __APPEND_4__
 
 function submitChips(letters) {
+  if (busy || flowFinished) return
   const line = letters.join('')
   $log.appendChild(el(`<div class="userline">你：${esc(line)}</div>`))
   closeBubble()
@@ -262,6 +266,9 @@ function closeBubble() {
 
 function handleLine(line) {
   const trimmed = line.trim()
+  if (/^大考成绩：.*（通过）/.test(trimmed)) examOutcome = 'passed'
+  else if (/^大考成绩：.*（未过/.test(trimmed)) examOutcome = 'failed'
+  else if (trimmed.startsWith('考试暂停')) examOutcome = 'paused'
   if (trimmed === '>') {
     const closed = closeBubble()
     if (closed) maybeChips(closed)
@@ -303,10 +310,17 @@ function setUserEcho(line) {
 }
 // __APPEND_5__
 
-// 大考以 code 0（通过）/ 1（未过或中止）退出。成绩明细已由 runner 流式打完，这里只做收尾入口：
-// 回课程列表（未过时也回列表——计划指针已被 runner 回退到薄弱节点，去补救课即可）。
-function renderExamDone(code) {
+// 暂停也会正常退出，必须根据实际成绩区分通过与尚未完成。
+function renderExamDone() {
   const row = el('<div class="chips"></div>')
+  if (examOutcome !== 'passed' && examOutcome !== 'failed') {
+    const resume = el('<button class="chip">继续考试</button>')
+    resume.addEventListener('click', async () => {
+      resume.disabled = true
+      if (!await startExam(wantedCourse, wantedMilestone)) resume.disabled = false
+    })
+    row.appendChild(resume)
+  }
   const back = el('<button class="chip">← 课程列表</button>')
   back.addEventListener('click', () => { location.href = '/' })
   row.appendChild(back)
@@ -316,8 +330,18 @@ function renderExamDone(code) {
 
 async function api(path, body) {
   const result = await flowClient.request(path, body)
-  if (path === '/flow/start' && result.ok) startSse()
+  if (path === '/flow/start' && result.ok) {
+    flowFinished = false
+    rememberFlow(result)
+    startSse()
+  }
   return result
+}
+
+function rememberFlow(flow) {
+  const url = new URL(location.href)
+  url.searchParams.set('flowId', flow.flowId)
+  history.replaceState(null, '', url)
 }
 
 function startSse() {
@@ -330,6 +354,7 @@ function startSse() {
       pending = ''
       bubble = null
       bubbleText = ''
+      examOutcome = null
       activeCourse = msg.courseId
       $state.textContent = msg.courseId ? `大考进行中：${msg.courseId}` : '空闲'
       return
@@ -340,10 +365,12 @@ function startSse() {
       feed('')
       const closed = closeBubble()
       if (closed) maybeChips(closed)
+      flowFinished = true
       setBusy(false)
-      $state.textContent = msg.code === 0 ? '大考通过' : '大考结束'
+      $state.textContent = examOutcome === 'passed' ? '大考通过' : examOutcome === 'failed' ? '大考未通过' : '大考暂停，尚未产生成绩'
       $log.appendChild(el(`<div class="sysline">—— 大考进程退出（code ${msg.code}）——</div>`))
-      renderExamDone(msg.code)
+      renderExamDone()
+      es.close()
     }
     scrollToEnd()
   }
@@ -355,7 +382,7 @@ function startSse() {
 // __APPEND_6__
 
 function send() {
-  if (busy) return
+  if (busy || flowFinished) return
   const line = $input.value.trim()
   if (!line) return
   $input.value = ''
@@ -425,7 +452,15 @@ function renderFlowMismatch(running) {
     startSse()
     return
   }
-  const state = await (await fetch('/flow/state')).json()
+  const state = await (await fetch(`/flow/state?flowId=${encodeURIComponent(params.get('flowId') ?? '')}`)).json()
+  if (state.flow && state.flow.kind === 'exam' && state.flow.courseId === wantedCourse
+    && (!wantedMilestone || state.flow.milestoneId === wantedMilestone)) {
+    flowClient.attach(state.flow)
+    rememberFlow(state.flow)
+    setBusy(state.flow.status === 'running', '正在恢复考试')
+    startSse()
+    return
+  }
   const running = state.active
   if (running && !(running.kind === 'exam' && running.courseId === wantedCourse && (!wantedMilestone || running.milestoneId === wantedMilestone))) {
     renderFlowMismatch(running)
@@ -433,8 +468,17 @@ function renderFlowMismatch(running) {
   }
   if (running) {
     flowClient.attach(running)
+    rememberFlow(running)
     $state.textContent = `大考进行中：${running.courseId}`
     startSse()
+    return
+  }
+  if (params.has('flowId')) {
+    flowFinished = true
+    setBusy(false)
+    $state.textContent = '考试回放已过期'
+    $log.appendChild(el('<div class="sysline">可从已保存的试卷和作答继续考试，或返回课程列表查看结果。</div>'))
+    renderExamDone()
     return
   }
   await startExam(wantedCourse, wantedMilestone)

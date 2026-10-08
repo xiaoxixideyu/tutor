@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { COURSE_ID_PATTERN } from './store.ts'
 import type { UsageSample } from './cost.ts'
 import { bankContent, blindQuestions, contentIssues, contentKey, factProbes, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY,
-  validateContentInput, type BlindSolution, type ContentInput, type ContentReview, type FactCheck } from './content-quality.ts'
+  validateContentInput, type ApprovedTeachingTurn, type BlindSolution, type ContentInput, type ContentReview, type FactCheck } from './content-quality.ts'
 import type { DocKind, KnowledgeMap, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
 
 export interface QualityCall {
@@ -84,16 +84,29 @@ export class QualityStore {
       return this.validApproval(record, input)
     } catch { return false }
   }
-  history(input: ContentInput): QualityRecord[] {
+  private records(): QualityRecord[] {
     const dir = path.join(this.directory, 'reviews')
     if (!fs.existsSync(dir)) return []
-    const key = contentKey(input)
     return fs.readdirSync(dir).filter(file => /^[a-f0-9-]{36}\.json$/.test(file)).flatMap(file => {
       try {
         const record = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as QualityRecord
-        return record.policy === QUALITY_POLICY && record.key === key && contentKey(record.input) === key ? [record] : []
+        return record.input && Array.isArray(record.calls) && typeof record.startedAt === 'string' ? [record] : []
       } catch { return [] }
     }).sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+  }
+  history(input: ContentInput): QualityRecord[] {
+    const key = contentKey(input)
+    return this.records().filter(record => record.policy === QUALITY_POLICY && record.key === key && contentKey(record.input) === key)
+  }
+  unfinishedTeaching(node: string, reply: string, previousReply: string): ApprovedTeachingTurn | undefined {
+    for (const record of this.records()) {
+      if (!['pending', 'error', 'approved'].includes(record.status) || record.input.kind !== 'teaching') continue
+      const unit = record.input.units?.[0]
+      const turn = unit?.content as ApprovedTeachingTurn | undefined
+      // 只恢复曾完整生成并交给准入的文本；未知或截断的日志尾部没有这份证据。
+      if (unit?.node === node && turn?.reply === reply && turn.previousReply === previousReply && typeof turn.learnerMessage === 'string') return turn
+    }
+    return undefined
   }
   reusable(call: QualityCall, input: ContentInput): boolean {
     if (!call.reusedFrom) return true

@@ -16,6 +16,7 @@ function agent(resumed: boolean) {
   const events: { type: string; data: unknown }[] = resumed ? [{ type: 'assistant/message', data: {
     message: { content: [{ type: 'text', text: 'REJECT_CANDIDATE 原始历史中未获批准的最后回复' }] } } }] : []
   let generation = 0
+  let grading = false
   return {
     session: { id: `fake-${++serial}`, get seq() { return events.length }, eventAt: (seq: number) => events[seq] },
     whenIdle: async () => {},
@@ -33,6 +34,9 @@ function agent(resumed: boolean) {
         reply = json({ claims: parsed.claims.map((q: { id: string }) => ({ id: q.id, verdict: 'pass', explanation: '固定断言核查', arithmetic: [] })) })
       } else if (parsed?.questions) {
         reply = json({ solutions: parsed.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '固定解答', arithmetic: [] })) })
+      } else if (mode === 'exam' && (grading || prompt.startsWith('任务：判分以下主观题作答。'))) {
+        grading = true
+        reply = json({ gradings: behavior === 'grading-success' ? [{ questionId: 'q4', score: 1, note: '解释正确' }] : [] })
       } else if (mode === 'learn' && prompt.startsWith('任务：为课程《') && prompt.includes('备课。')) {
         fs.appendFileSync(path.join(root, 'prep-count.txt'), 'prepared\n')
         const question = { question: '1+1=?', choices: ['2', '3', '4', '5'], answer: 'A' }
@@ -60,7 +64,7 @@ const services: Record<string, unknown> = {
   sessions: { flush: async () => {} },
 }
 const ctx = { get: (name: string) => services[name] } as unknown as Context
-if (mode === 'exam') exam(ctx, { courseId: 'alpha', milestoneId: 'm1' })
+if (mode === 'exam') exam(ctx, { courseId: 'alpha', milestoneId: behavior.startsWith('grading-') ? '' : 'm1' })
 else if (mode === 'practice-gen') practice(ctx, { courseId: 'alpha', batchSize: 1, nodeId: 'topic' })
 else if (mode === 'learn') learn(ctx, { courseId: 'alpha' })
 else throw new Error('未知测试 runner')

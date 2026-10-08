@@ -1,6 +1,7 @@
 import { LessonDraftSchema, type KnowledgeMapResource, type KnowledgeMap, type LessonDraft, type Mastery, type Plan, type Profile } from './schema.ts'
 import { courseNodeOrder } from './plan.ts'
 import { profileScope } from './interview.ts'
+import { ruleAnswerIssue } from './rule-grading.ts'
 
 export interface LessonResourceView {
   index: number
@@ -64,6 +65,8 @@ export function validateLessonDraft(
     } else if (item.answer.trim() === '') {
       return { ok: false, error: `小测题"${item.question}"缺少答案` }
     }
+    const formatIssue = ruleAnswerIssue(item)
+    if (formatIssue) return { ok: false, error: `小测题"${item.question}"：${formatIssue}` }
   }
   return { ok: true, value }
 }
@@ -157,11 +160,11 @@ export function buildPrepPrompt(input: PrepInput): string {
     '- 严格遵守学习目的中的范围与排除项，资料中的超范围例子不进入本课；区分必要条件与推荐做法，不把一种示例写成唯一合法做法',
     '- example 给一个核心例子（如涉及代码给出完整可读的代码块）',
     '- practice 为 1-3 道课中练习（随讲授穿插），每题给出参考答案',
-    '- quiz 为 2-3 道课后单元小测题，全部为客观题：要么选择题（choices 恰好 4 项、answer 为 A-D 字母），要么唯一简短答案（answer 必填、accept 列出等价表述）；不得与课中练习重复',
+    '- quiz 为 2-3 道课后单元小测题，全部为客观题：四选一（choices 恰好 4 项、answer 为 A-D 字母），或单一数值填空（answer 仅整数、小数或分数，题干明确只填数值）；概念解释、代码、多项输出必须改成四选一，不得要求一句话说明再用整句精确匹配；不得与课中练习重复',
     '- misconceptions 列出该知识点常见误区（1-3 条）',
     '',
     '请输出备课 JSON（```json 代码块）：',
-    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句）", "structure": ["要点1", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "quiz": [{"question": "…", "choices": ["A. …","B. …","C. …","D. …"], "answer": "B"}, {"question": "…", "answer": "…", "accept": ["…"]}], "misconceptions": ["…"]}',
+    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句）", "structure": ["要点1", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "quiz": [{"question": "…", "choices": ["A. …","B. …","C. …","D. …"], "answer": "B"}, {"question": "…（只填数值）", "answer": "2"}], "misconceptions": ["…"]}',
     '除该 JSON 外不要输出其他内容。',
   ]
   return lines.join('\n')

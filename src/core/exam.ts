@@ -1,5 +1,8 @@
 import type { Mastery, Plan } from './schema.ts'
 import { updateMasteryForNode } from './assessment.ts'
+import { matchesRuleAnswer, ruleAnswerIssue } from './rule-grading.ts'
+import z from '@deepseek-ai/schemastery'
+import type Schema from '@deepseek-ai/schemastery'
 
 export const EXAM_PASS_SCORE = 0.7
 
@@ -19,6 +22,16 @@ export interface ExamPaper {
   milestone: string
   questions: ExamQuestion[]
 }
+
+export const ExamPaperSchema = z.object({
+  milestone: z.string().required(),
+  questions: z.array(z.object({
+    id: z.string().required(), node: z.string().required(),
+    type: z.union([z.const('objective'), z.const('subjective')]).required(),
+    question: z.string().required(), choices: z.array(z.string()), answer: z.string().required(),
+    accept: z.array(z.string()), keywords: z.array(z.string()), points: z.number().required(),
+  })).required(),
+}) as unknown as Schema<unknown, ExamPaper>
 
 export interface ExamGrading {
   questionId: string
@@ -41,6 +54,8 @@ export function paperValid(paper: ExamPaper, milestoneNodes: string[]): string |
       if ((q.choices?.length ?? 0) > 0 && q.choices!.length !== 4) return `题目 ${q.id} 的选项数不是 4`
       if (!q.answer.trim()) return `题目 ${q.id} 缺参考答案`
       if (q.choices?.length && !/^[a-d]$/i.test(q.answer.trim())) return `题目 ${q.id} 的答案不是 A-D 字母`
+      const formatIssue = ruleAnswerIssue(q)
+      if (formatIssue) return `题目 ${q.id}：${formatIssue}`
     } else if (!q.answer.trim() && (q.keywords?.length ?? 0) === 0) {
       return `主观题 ${q.id} 缺参考答案与关键词`
     }
@@ -60,14 +75,7 @@ export function gradeObjective(q: ExamQuestion, raw: string): ExamGrading {
     const correct = /^[a-d]$/.test(normalized) ? normalized === letter : false
     return { questionId: q.id, correct, score: correct ? 1 : 0 }
   }
-  const normalize = (s: string) =>
-    s
-      .trim()
-      .toLowerCase()
-      .replace(/[\s，。,.;；:：!！?？"'“”‘’（）()[\]【】]+/g, '')
-  const answer = normalize(raw)
-  const candidates = [q.answer, ...(q.accept ?? [])].map(normalize)
-  const correct = answer !== '' && candidates.includes(answer)
+  const correct = matchesRuleAnswer(raw, [q.answer, ...(q.accept ?? [])])
   return { questionId: q.id, correct, score: correct ? 1 : 0 }
 }
 

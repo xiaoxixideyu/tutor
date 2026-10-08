@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, TEACHING_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
+import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
   requiredAssertions, teachingContent, validateContentInput, type ApprovedTeachingTurn, type ContentInput } from '../core/content-quality.ts'
 import type { KnowledgeMap, Profile } from '../core/schema.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
@@ -131,7 +131,8 @@ export class ContentGate {
       record.review = { units: [] }
       const reviewPart = async (units: ContentInput['units']) => {
         const reviewed = await checkPart('reviewer', units, partUnits => JSON.stringify({
-          ...(input.kind === 'map' ? { dataContract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { dataContract: TEACHING_REVIEW_CONTRACT } : {}), content: { ...input, units: partUnits },
+          ...(input.kind === 'map' ? { dataContract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { dataContract: TEACHING_REVIEW_CONTRACT }
+            : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : {}), content: { ...input, units: partUnits },
           independentSolutions: record.solutions!.filter(s => partUnits.some(u => u.id === s.id)),
           independentFactChecks: record.facts!.filter(f => partUnits.some(u => requiredAssertions(input, u).some(a => f.id === `${u.id}/${a.id}`))),
           requiredAssertions: partUnits.map(unit => ({ unitId: unit.id, assertions: requiredAssertions(input, unit) })) }),
@@ -145,7 +146,10 @@ export class ContentGate {
       if (!earlyIssues.length) {
         const contradicted = () => contentIssues(input, [], { units: [] }, record.facts).length > 0
         await parallelParts(batches(factProbes(input), 2), async claims => {
-          record.facts!.push(...await checkPart('facts', claims, items => JSON.stringify({ claims: items }), (value, items) => parseFactChecks(value, items.map(c => c.id)), contradicted))
+          record.facts!.push(...await checkPart('facts', claims, items => JSON.stringify({
+            outputContract: '返回核查结果，不要回显输入 claims。每项必须含 id、verdict（pass/fail/uncertain）、explanation 和 arithmetic。arithmetic 无运算时为 []；有运算时每项必须同时写 expression 与 result，例如 [{"expression":"3-1","result":"2"}]，不能只给算式字符串。',
+            claims: items,
+          }), (value, items) => parseFactChecks(value, items.map(c => c.id)), contradicted))
         }, contradicted)
         // 独立反例已经推翻内容时可直接拒绝；批准始终要求完整盲解、事实与范围审查。
         if (!contradicted()) {
