@@ -70,7 +70,7 @@
     <button data-cmd="看不懂，换个讲法">换个讲法</button>
     <button data-cmd="给个提示">提示</button>
     <button data-cmd="/quiz">单元小测 /quiz</button>
-    <button data-cmd="/check">事实核对 /check</button>
+    <button data-cmd="/check">内容核对 /check</button>
   </div>
   <div class="inputrow" style="margin-top:8px">
     <input id="input" placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
@@ -126,6 +126,7 @@ let pending = ''
 let bubble = null
 let bubbleText = ''
 let busy = false
+let flowFinished = true
 let busyTimer = null
 let busySeconds = 0
 let chips = null
@@ -138,8 +139,10 @@ function setBusy(on, label) {
   const $busy = document.getElementById('busy')
   const $send = document.getElementById('send')
   if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
-  $input.disabled = on
-  if ($send) $send.disabled = on
+  $input.disabled = on || flowFinished
+  if ($send) $send.disabled = on || flowFinished
+  for (const button of document.querySelectorAll('.quick button')) button.disabled = on || flowFinished
+  document.getElementById('stopBtn').disabled = flowFinished
   if (on) {
     busySeconds = 0
     document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
@@ -311,17 +314,17 @@ function feed(text) {
 // 上课以 code 0 退出（讲完一节或主动暂停）后的续接：给「继续上课 / 返回课程列表」两个入口，
 // 而不是显示死板的「已结束」。继续＝对同一门课重新起 learn，runner 会从 plan.current 续到下一节
 // （若是暂停则续回本节草稿）。
-function renderLearnContinue() {
+function renderLearnContinue(failed = false) {
   const courseId = activeCourse || new URLSearchParams(location.search).get('course')
   const row = el('<div class="chips"></div>')
   const back = el('<button class="chip">← 课程列表</button>')
   back.addEventListener('click', () => { location.href = '/' })
   if (courseId) {
-    const cont = el('<button class="chip">继续上课 →</button>')
+    const cont = el(`<button class="chip">${failed ? '从已保存进度重试 →' : '继续上课 →'}</button>`)
     cont.addEventListener('click', async () => {
       if (busy) return
       row.remove()
-      setBusy(true, '备课中（可能需要 1-3 分钟）')
+      setBusy(true, '正在准备本课并核对内容')
       const result = await api('/flow/start', { kind: 'learn', courseId })
       if (!result.ok) {
         setBusy(false)
@@ -355,6 +358,8 @@ async function startSse() {
       bubble = null
       bubbleText = ''
       activeCourse = msg.courseId
+      flowFinished = msg.status !== 'running' && msg.status !== 'stopping'
+      setBusy(!flowFinished, '正在恢复课堂')
       $state.textContent = msg.courseId ? `课堂进行中：${msg.courseId}` : '空闲'
       if (!msg.courseId) $banner.style.display = 'block'
       return
@@ -365,6 +370,7 @@ async function startSse() {
       feed('')
       const closed = closeBubble()
       if (closed) maybeChips(closed)
+      flowFinished = true
       setBusy(false)
       if (msg.kind === 'learn' && msg.code === 0) {
         // learn 每讲完一节 / 暂停都以 0 退出——给「继续上课 / 返回」入口，别让用户以为课程结束了
@@ -373,6 +379,7 @@ async function startSse() {
       } else {
         $state.textContent = '已结束'
         $log.appendChild(el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
+        if (msg.kind === 'learn') renderLearnContinue(true)
       }
     }
     scrollToEnd()
@@ -385,7 +392,7 @@ async function startSse() {
 
 async function api(path, body) {
   const result = await flowClient.request(path, body)
-  if (path === '/flow/start' && result.ok) startSse()
+  if (path === '/flow/start' && result.ok) { flowFinished = false; startSse() }
   return result
 }
 
@@ -397,7 +404,7 @@ async function ensureLesson() {
 }
 
 function send() {
-  if (busy) return
+  if (busy || flowFinished) return
   const line = $input.value.trim()
   if (!line) return
   $input.value = ''
@@ -414,7 +421,7 @@ $input.addEventListener('keydown', (event) => {
 })
 for (const button of document.querySelectorAll('.quick button')) {
   button.addEventListener('click', () => {
-    if (busy) return
+    if (busy || flowFinished) return
     setUserEcho(button.dataset.cmd)
     setBusy(true)
     api('/flow/input', { line: button.dataset.cmd })
@@ -450,7 +457,7 @@ function renderCourseMismatch(runningFlow, wanted) {
     if (!result.ok) { $banner.textContent = result.error || '切换失败'; btn.disabled = false; return }
     $banner.style.display = 'none'
     $state.textContent = `课堂进行中：${wanted}`
-    setBusy(true, '备课中（搜索与生成，可能需要 1-3 分钟）')
+    setBusy(true, '正在准备本课并核对内容')
     startSse()
   })
   $banner.appendChild(document.createElement('br'))
@@ -477,7 +484,7 @@ ensureLesson().then(async (running) => {
     if (result.ok) {
       $state.textContent = `课堂进行中：${wanted}`
       $banner.style.display = 'none'
-      setBusy(true, '备课中（搜索与生成，可能需要 1-3 分钟）')
+      setBusy(true, '正在准备本课并核对内容')
     } else {
       $banner.textContent = result.error
       $banner.style.display = 'block'

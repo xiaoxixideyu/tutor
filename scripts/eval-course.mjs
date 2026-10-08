@@ -10,22 +10,26 @@ import { createHash } from 'node:crypto'
 import yaml from 'yaml'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { estimateCost, loadCostConfig, ratesForModel } from '../src/core/cost.ts'
+import { renderModelSettings } from '../src/core/model-settings.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   live: { type: 'boolean' }, run: { type: 'string' }, node: { type: 'string' }, milestone: { type: 'string' },
+  'timeout-ms': { type: 'string', default: '480000' },
 } })
 const [mode, courseId] = positionals
 const modes = { new: ['interview', 'interview'], research: ['research', 'research'], assess: ['assess', 'assess'],
   plan: ['plan', 'plan'], learn: ['learn', 'teach'], 'practice-gen': ['practice-gen', 'practice-gen'], exam: ['exam', 'exam-grade'], 'audit-content': ['audit-content', 'exam-grade'] }
 if (!values.live) {
-  console.log('用法：node scripts/eval-course.mjs <new|research|assess|plan|learn|practice-gen|exam|practice|review|status|audit-content> <course> --live [--run data/evals/course-...] [--node id] [--milestone m1]')
-  console.log('仅 --live 调用模型。每阶段上限 8 分钟、24 次业务请求、单次输出 8192 token；真实账单需另行核对。')
+  console.log('用法：node scripts/eval-course.mjs <new|research|assess|plan|learn|practice-gen|exam|practice|review|status|audit-content> <course> --live [--run data/evals/course-...] [--node id] [--milestone m1] [--timeout-ms 480000]')
+  console.log('仅 --live 调用模型。每阶段默认 8 分钟（含等待输入，可设 1–20 分钟）、24 次业务请求、单次输出 8192 token；真实账单需另行核对。')
   process.exit(0)
 }
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
 if (nodeMajor !== 24 && nodeMajor !== 26 && !(nodeMajor === 22 && nodeMinor >= 19)) throw new Error('真实课程验收请使用 Node 24 LTS（或受支持的 22.19+/26）')
 if (!COURSE_ID_PATTERN.test(courseId ?? '') || (!modes[mode] && !['practice', 'review', 'status'].includes(mode))) throw new Error('课程名或阶段非法')
+const timeoutMs = Number(values['timeout-ms'])
+if (!Number.isInteger(timeoutMs) || timeoutMs < 60_000 || timeoutMs > 1_200_000) throw new Error('timeout-ms 必须为 60000–1200000 的整数')
 if (values.node && !/^[a-z0-9][a-z0-9-]*$/.test(values.node)) throw new Error('node 非法')
 const evalRoot = path.join(root, 'data/evals')
 fs.mkdirSync(evalRoot, { recursive: true })
@@ -53,7 +57,7 @@ if (modes[mode]) {
     if (!env[key]) throw new Error(`缺少 ${key}`)
     return key === 'TUTOR_LLM_BASE_URL' ? env[key].replace(/\/+$/, '') : env[key]
   })
-  fs.writeFileSync(path.join(dshHome, 'settings.yaml'), settings)
+  fs.writeFileSync(path.join(dshHome, 'settings.yaml'), renderModelSettings(settings, env))
   const [runner, persona] = modes[mode]
   const insert = [
     { id: 'course-state', name: path.join(root, 'src/plugin/course-state.ts'), config: { root: courses } },
@@ -84,8 +88,8 @@ if (modes[mode]) {
   args = [path.join(root, `scripts/${mode === 'status' ? 'view' : mode}.mjs`), mode, courseId, ...(values.node ? ['--node', values.node] : [])]
 }
 const report = { version: 1, courseId, stage: mode, model: env.TUTOR_LLM_MODEL, startedAt: new Date().toISOString(),
-  run, status: 'running', runtime: { node: process.versions.node, platform: process.platform }, limits: { timeoutMs: 480000, maxRequests: 24, maxTokens: 8192 },
-  settings: { officialRunner: true, titleGeneration: false, tools: mode === 'research' ? 'search-and-fetch' : 'none' } }
+  run, status: 'running', runtime: { node: process.versions.node, platform: process.platform }, limits: { timeoutMs, maxRequests: 24, maxTokens: 8192 },
+  settings: { officialRunner: true, titleGeneration: false, thinking: env.TUTOR_LLM_THINKING ?? 'provider-default', tools: mode === 'research' ? 'search-and-fetch' : 'none' } }
 report.sourceHashes = Object.fromEntries([
   'scripts/eval-course.mjs', 'src/eval/course-observer.ts', 'src/plugin/agent-chat.ts', 'src/plugin/generation.ts', 'config/cost.yaml',
   'src/plugin/content-gate.ts',
@@ -100,7 +104,7 @@ console.log(`验收目录：${run}\n阶段记录：${stageDir}`)
 const log = fs.createWriteStream(path.join(stageDir, 'runner.log'))
 const inputLog = fs.createWriteStream(path.join(stageDir, 'input.txt'))
 const child = spawn(process.execPath, args, { cwd: workspace, detached: true,
-  env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1', TUTOR_COURSES_ROOT: courses, TUTOR_LLM_TIMEOUT_MS: '90000' }, stdio: ['pipe', 'pipe', 'pipe'] })
+  env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1', TUTOR_COURSES_ROOT: courses }, stdio: ['pipe', 'pipe', 'pipe'] })
 process.stdin.on('data', chunk => { inputLog.write(chunk); child.stdin.write(chunk) })
 process.stdin.on('end', () => child.stdin.end())
 child.stdin.on('error', () => {})
@@ -112,7 +116,7 @@ const stop = reason => {
   try { process.kill(-child.pid, 'SIGTERM') } catch {}
   forceTimer ??= setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch {} }, 3000)
 }
-const timer = setTimeout(() => stop('阶段超过 8 分钟'), 480000)
+const timer = setTimeout(() => stop(`阶段超过 ${timeoutMs / 60000} 分钟`), timeoutMs)
 process.once('SIGINT', () => stop('收到 SIGINT 中断'))
 process.once('SIGTERM', () => stop('进程终止'))
 child.once('error', error => { report.error = error.message })

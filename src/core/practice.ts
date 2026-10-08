@@ -2,6 +2,17 @@ import { updateMasteryForNode } from './assessment.ts'
 import { PracticeTaskFileSchema, type KnowledgeMap, type Mastery, type Plan, type PracticeTask, type PracticeTaskFile, type PracticeTaskState, type PracticeTest } from './schema.ts'
 import { courseNodeOrder } from './plan.ts'
 import { currentNode } from './lesson.ts'
+import { createHash } from 'node:crypto'
+
+export function practiceTaskKey(task: PracticeTask): string {
+  return createHash('sha256').update(JSON.stringify(task)).digest('hex')
+}
+
+export function safeStarterPath(file: string): boolean {
+  return !!file && !file.includes('\\') && !file.includes('\0') && !/^[A-Za-z]:/.test(file)
+    && !file.split('/')[0].startsWith('.tutor-')
+    && file.split('/').every(part => part !== '' && part !== '.' && part !== '..')
+}
 
 // 实践任务（三期）：学员在 workdir 写代码 → 跑规则化测试 → 判分联动掌握度。
 // 判分与 prompt 构建是纯核心；执行在壳/执行器（见 src/plugin/practice-executor.ts）。
@@ -42,6 +53,7 @@ export function validatePracticeTasks(file: unknown, expectedNode?: string): { o
     return { ok: false, error: error instanceof Error ? error.message.replace(/\n+/g, ' ') : String(error) }
   }
   if (value.tasks.length < 1) return { ok: false, error: 'tasks 不能为空' }
+  if (new Set(value.tasks.map(task => task.id)).size !== value.tasks.length) return { ok: false, error: '任务 id 不能重复' }
   const nodeCounts = new Map<string, number>()
   for (const [index, task] of value.tasks.entries()) {
     if (expectedNode && task.node !== expectedNode) {
@@ -54,6 +66,9 @@ export function validatePracticeTasks(file: unknown, expectedNode?: string): { o
     if (task.tests.length < 1 || task.tests.length > 5) {
       return { ok: false, error: `任务 "${task.id}" 的 tests 需 1-5 条，当前 ${task.tests.length}` }
     }
+    if (new Set(task.tests.map(test => test.name)).size !== task.tests.length) return { ok: false, error: `任务 "${task.id}" 的测试名不能重复` }
+    if ((task.starter_files ?? []).some(file => !safeStarterPath(file.path))) return { ok: false, error: `任务 "${task.id}" 的初始文件必须使用任务目录内的相对路径` }
+    if (new Set(task.starter_files?.map(file => file.path)).size !== (task.starter_files?.length ?? 0)) return { ok: false, error: `任务 "${task.id}" 的初始文件路径不能重复` }
     for (const test of task.tests) {
       if (test.command.trim() === '') return { ok: false, error: `任务 "${task.id}" 存在空测试命令` }
     }
@@ -134,6 +149,7 @@ export function buildPracticeGenPrompt(input: PracticeGenInput): string {
     '- 非编程课程允许学员填写纯文本答案，不要求写代码；编程课程才要求实现程序',
     '- 区分某种解法的实现要求与通用必要条件，不把示例限制写成知识定律',
     '- 单个任务：学员 10-20 分钟能完成；贴合学员基础与讲解偏好',
+    '- 内容紧凑：任务说明不超过 400 汉字，提示每条不超过 80 汉字；README 只保留必要操作，不重复整份题干；本次只出 1 个任务',
     '- starter_files 提供必要初始文件（如 README 说明）；不要提供答案文件',
     '- tests 为规则自动执行的 shell 命令（在工作目录逐条执行）：1-3 条，命令必须确定性、无网络依赖、无交互（不等待 stdin）；首条验证文件/模块存在，末条验证行为正确',
     '- expect_output_contains 只选稳定子串（如程序打印的固定文案），不要依赖编译器本地化提示或时间戳',

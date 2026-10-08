@@ -244,7 +244,7 @@ export const LessonDraftSchema = z.object({
 }) as unknown as Schema<any, LessonDraft>
 
 export interface LessonState {
-  session_id: string
+  session_id?: string
   node: string
   started_at: string
   draft: LessonDraft
@@ -252,7 +252,7 @@ export interface LessonState {
 }
 
 export const LessonStateSchema = z.object({
-  session_id: z.string().required(),
+  session_id: z.string(),
   node: z.string().required(),
   started_at: z.string().required(),
   draft: LessonDraftSchema.required(),
@@ -290,6 +290,7 @@ export interface PracticeTaskState {
   done_tests: string[]
   done: boolean
   attempts: number
+  content_key?: string
 }
 
 const starterFileSchema = z.object({ path: z.string().required(), content: z.string().required() })
@@ -324,6 +325,7 @@ export const PracticeTaskStateSchema = z.object({
   done_tests: z.array(z.string()).default([]),
   done: z.boolean().required(),
   attempts: z.number().min(0).default(0),
+  content_key: z.string(),
 }) as unknown as Schema<any, PracticeTaskState>
 
 export const DocumentSchemas = {

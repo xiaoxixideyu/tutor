@@ -1,12 +1,12 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Context } from '@deepseek-ai/cordis'
-import { createAgentChat } from '../src/plugin/agent-chat.ts'
+import { createAgentChat, OutputLimitError } from '../src/plugin/agent-chat.ts'
 import { normalizeUsage, type ReportedUsage } from '../src/core/cost.ts'
 
 interface Event {
   type: string
-  data?: { usage?: ReportedUsage; message?: { content: { type: string; text: string }[] }; reason?: { kind: string } }
+  data?: { usage?: ReportedUsage; message?: { content: { type: string; text: string }[] }; reason?: { kind: string; error?: { code: string; message: string } } }
 }
 const output = (usage: ReportedUsage, text = '', type = 'assistant/message'): Event => ({ type,
   data: { usage, message: { content: [{ type: 'text', text }] } } })
@@ -71,4 +71,59 @@ it('主动中止不会自动重启模型回合，已产生的用量仍被保留'
   const chat = (await createAgentChat(ctx))!
   await assert.rejects(chat.ask('中途取消'), { name: 'AbortError' })
   assert.deepEqual(chat.totalUsage(), { inputTokens: 30, outputTokens: 8 })
+})
+
+it('空正文属于失败回合，仅重试一次并保留两次用量', async () => {
+  const chat = (await createAgentChat(fixture([], [
+    [output({ inputTokens: 10, outputTokens: 20 }), end('completed')],
+    [output({ inputTokens: 15, outputTokens: 25 }, '有效正文'), end('completed')],
+  ])))!
+  assert.equal(await chat.ask('请求'), '有效正文')
+  assert.deepEqual(chat.totalUsage(), { inputTokens: 25, outputTokens: 45 })
+})
+
+it('审查截断不重复原请求，404 等永久错误不重试，失败用量仍可读', async () => {
+  const length = (await createAgentChat(fixture([], [[output({ inputTokens: 10, outputTokens: 4096 }), end('max-tokens')]]), { retryOnLength: false }))!
+  await assert.rejects(length.ask('审查'), OutputLimitError)
+  assert.equal(length.totalUsage().outputTokens, 4096)
+  const unavailable = (await createAgentChat(fixture([], [[{ type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: '404 model is not found' } } } }]])))!
+  await assert.rejects(unavailable.ask('请求'), /404 model is not found/)
+  for (const code of [401, 403, 404]) {
+    const denied = (await createAgentChat(fixture([], [[{ type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: `${code}: unavailable` } } } }]])))!
+    await assert.rejects(denied.ask('请求'), new RegExp(String(code)))
+  }
+})
+
+it('已观察到的网关路由 404 只重试一次，仍记录失败尝试费用', async () => {
+  const route: Event = { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'PI_AI_ERROR',
+    message: '404: {"message":"404 Route Not Found","type":"bad_response_status_code"}' } } } }
+  const chat = (await createAgentChat(fixture([], [
+    [output({ inputTokens: 2, outputTokens: 0 }, '', 'assistant/attempt'), route],
+    [output({ inputTokens: 3, outputTokens: 4 }, '恢复'), end('completed')],
+  ])))!
+  assert.equal(await chat.ask('请求'), '恢复')
+  assert.deepEqual(chat.totalUsage(), { inputTokens: 5, outputTokens: 4 })
+  const failed = (await createAgentChat(fixture([], [[route], [route]])))!
+  await assert.rejects(failed.ask('持续失败'), /模型回合失败/)
+})
+
+it('请求总时限触发后取消 agent 并收敛，下一请求不会叠加旧回合', async () => {
+  let running = false
+  let cancelled = 0
+  let resolveIdle: (() => void) | undefined
+  const agent = {
+    session: { id: 'bounded', seq: 0, eventAt: () => undefined },
+    followup: () => { assert.equal(running, false); running = true },
+    whenIdle: () => running ? new Promise<void>(resolve => { resolveIdle = resolve }) : Promise.resolve(),
+    cancel: () => { cancelled++; running = false; resolveIdle?.() },
+  }
+  const services: Record<string, unknown> = {
+    agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
+    agents: { create: async () => ({ agent }) }, sessions: { flush: async () => {} },
+  }
+  const chat = (await createAgentChat({ get: (name: string) => services[name] } as unknown as Context, { deadlineMs: 20 }))!
+  await assert.rejects(chat.ask('第一次'), /总时限/)
+  await assert.rejects(chat.ask('第二次'), /总时限/)
+  assert.equal(cancelled, 2)
+  assert.equal(running, false)
 })

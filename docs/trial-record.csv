@@ -1,0 +1,1 @@
+learner_id,course_id,measurement,scheduled_at,actual_at,hours_since_course,extra_study_minutes,q1_score,q2_score,q3_score,q4_score,total_of_8,critical_concept_error,hints,independent_work_minutes,model_wait_minutes,workflow_help,errors,estimated_model_cost,actual_bill,raw_answer_path,participant_feedback,notes

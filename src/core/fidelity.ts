@@ -1,8 +1,9 @@
 // 忠实度抽查（四期评测第一块）：从课堂会话日志事实中量化——计划覆盖率/引用纪律/超纲/成本
-// 输入全部来自会话日志（唯一事实来源），规则层零模型成本
+// 内容依据发布回执与原日志精确匹配；成本包含原日志中的失败与拒绝尝试，规则层零模型成本。
 import { normalizeUsage, type ReportedUsage } from './cost.ts'
 
 export interface LessonIntroView {
+  courseId?: string
   node: string
   title: string
   structure: string[]
@@ -11,6 +12,7 @@ export interface LessonIntroView {
 
 export interface SessionEventView {
   type: string
+  seq?: number
   data?: {
     usage?: ReportedUsage
     message?: { content: { type: string; text?: string }[]; role?: string; usage?: ReportedUsage }
@@ -23,7 +25,10 @@ export interface SessionLogView {
   assistantTexts: string[]
   userTexts: string[]
   usage: { inputTokens: number; outputTokens: number }[]
+  publication: PublicationSummary
 }
+
+export interface PublicationSummary { source: 'published' | 'raw-unverified'; rawTurns: number; publishedTurns: number; excludedTurns: number }
 
 function textOf(blocks: { type: string; text?: string }[] | undefined): string {
   return (blocks ?? [])
@@ -32,11 +37,13 @@ function textOf(blocks: { type: string; text?: string }[] | undefined): string {
     .join('')
 }
 
-export function parseSessionLog(events: SessionEventView[]): SessionLogView {
+export function parseSessionLog(events: SessionEventView[], published?: { seq: number; reply: string }[]): SessionLogView {
   let intro = ''
   const assistantTexts: string[] = []
   const userTexts: string[] = []
   const usage: { inputTokens: number; outputTokens: number }[] = []
+  let rawTurns = 0
+  const allowed = new Map(published?.map(turn => [turn.seq, turn.reply]) ?? [])
   const considerIntro = (text: string) => {
     if (text.includes('【本课计划】') && intro === '') intro = text
   }
@@ -58,14 +65,18 @@ export function parseSessionLog(events: SessionEventView[]): SessionLogView {
     }
     if (event.type === 'assistant/message') {
       const text = textOf(event.data?.message?.content)
-      if (text !== '') assistantTexts.push(text)
+      if (text !== '') {
+        rawTurns++
+        if (published === undefined || (event.seq !== undefined && allowed.get(event.seq) === text)) assistantTexts.push(text)
+      }
     }
     if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
       const sample = normalizeUsage(event.data?.usage ?? event.data?.message?.usage)
       if (sample) usage.push(sample)
     }
   }
-  return { intro, assistantTexts, userTexts, usage }
+  return { intro, assistantTexts, userTexts, usage, publication: { source: published === undefined ? 'raw-unverified' : 'published',
+    rawTurns, publishedTurns: published === undefined ? 0 : assistantTexts.length, excludedTurns: published === undefined ? 0 : rawTurns - assistantTexts.length } }
 }
 
 export function parseLessonIntro(intro: string): LessonIntroView | null {
@@ -88,7 +99,8 @@ export function parseLessonIntro(intro: string): LessonIntroView | null {
     else if (structure.length > 0 && !/^\s*核心例子/.test(line)) continue
     if (/^\s*核心例子/.test(line) && structure.length > 0) break
   }
-  return { node: nodeMatch[1], title: nodeMatch[2], structure, resourceCount }
+  const courseId = intro.match(/(?:^|\n)【课程】([a-z0-9][a-z0-9-]{0,63})(?:\n|$)/)?.[1]
+  return { ...(courseId ? { courseId } : {}), node: nodeMatch[1], title: nodeMatch[2], structure, resourceCount }
 }
 
 export function shingles(text: string): Set<string> {
@@ -196,7 +208,7 @@ export interface FidelityReport {
   node: string
   title: string
   structure: CoverageItem[]
-  coverageRate: number // 忠实度：本课讲到的要点里被覆盖的比例（暂停无关，见 coverageFrontier）
+  coverageRate: number | null // 没有可验证的发布内容时不计算忠实度。
   plannedPoints: number // 计划要点总数
   reachedPoints: number // 本课实际讲到的要点数（覆盖前沿）
   partial: boolean // 本课是否在讲完全部计划要点前暂停
@@ -204,6 +216,7 @@ export interface FidelityReport {
   drift: DriftItem[]
   cost: { inputTokens: number; outputTokens: number; turns: number }
   generatedAt: string
+  publication?: PublicationSummary
 }
 
 export function assembleReport(input: {
@@ -213,6 +226,7 @@ export function assembleReport(input: {
   usage: { inputTokens: number; outputTokens: number }[]
   otherNodes: { id: string; title?: string }[]
   generatedAt: string
+  publication?: PublicationSummary
 }): FidelityReport {
   const corpus = input.assistantTexts.join('\n')
   const structure = planCoverage(input.introView.structure, corpus)
@@ -228,7 +242,7 @@ export function assembleReport(input: {
     node: input.introView.node,
     title: input.introView.title,
     structure,
-    coverageRate,
+    coverageRate: input.publication?.source === 'published' && !input.publication.publishedTurns ? null : coverageRate,
     plannedPoints: structure.length,
     reachedPoints: reachedCount,
     partial: reachedCount < structure.length,
@@ -236,5 +250,6 @@ export function assembleReport(input: {
     drift: scopeDrift(corpus, input.introView.node, input.otherNodes),
     cost: { ...sumUsage(input.usage), turns: input.assistantTexts.length },
     generatedAt: input.generatedAt,
+    ...(input.publication ? { publication: input.publication } : {}),
   }
 }

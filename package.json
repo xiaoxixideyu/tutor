@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "eval:grading": "node scripts/eval-grading.mjs",
     "eval:content": "node scripts/eval-content.mjs",
-    "serve": "node scripts/agent.mjs serve"
+    "eval:content:all": "node scripts/eval-content-suite.mjs",
+    "serve": "node scripts/agent.mjs serve",
+    "trial": "node scripts/trial.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.5-rc.2",

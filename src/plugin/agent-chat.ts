@@ -29,6 +29,7 @@ export interface AgentChat {
   lastTurnUsage(): UsageSample
   totalUsage(): UsageSample
   lastReply(): string
+  lastReplySeq?(): number | null
   flush(): Promise<void>
 }
 
@@ -36,6 +37,7 @@ interface AgentLike {
   session: SessionView & { id?: unknown }
   whenIdle(): Promise<void>
   followup(message: unknown): void
+  cancel?(cause: { kind: 'hook'; reason: string }): void
 }
 
 interface AgentsRegistry {
@@ -51,6 +53,26 @@ export interface CreateAgentChatOptions {
   resumeSessionId?: string
   isolatedSystemPrompt?: string
   tools?: 'none' | 'research'
+  deadlineMs?: number
+  maxTokens?: number
+  retryOnLength?: boolean
+}
+
+export class OutputLimitError extends Error {
+  constructor() { super('模型输出达到 token 上限，请缩小本次任务后重试'); this.name = 'OutputLimitError' }
+}
+
+function requestDeadline(options: CreateAgentChatOptions): number {
+  const value = options.deadlineMs ?? Number(process.env.TUTOR_LLM_DEADLINE_MS)
+  return Number.isFinite(value) && value > 0 ? value : options.tools === 'research' ? 480_000 : 300_000
+}
+
+function permanentModelError(error: unknown): boolean {
+  // 实测同一可用模型偶发返回网关路由 404；只为这个具体响应保留一次重试。
+  // 模型不存在、认证失败与权限错误仍立即结束。
+  if (error instanceof Error && /404:\s*\{\s*"message"\s*:\s*"404 Route Not Found"/i.test(error.message)
+    && /"type"\s*:\s*"bad_response_status_code"/i.test(error.message)) return false
+  return error instanceof Error && /\b(400|401|403|404|422)\b|model is not found|not_found_error|UNSUPPORTED_REASONING_EFFORT/i.test(error.message)
 }
 
 export async function createAgentChat(ctx: Context, options: CreateAgentChatOptions = {}): Promise<AgentChat | null> {
@@ -73,6 +95,10 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
+      agentCtx.on('agent/request', async (_payload, next) => {
+        const request = await next()
+        return { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, options.maxTokens ?? 8192) }
+      })
       const allowed = (name: string) => !options.isolatedSystemPrompt && options.tools === 'research'
         && (name.startsWith('mcp__searchix__') || name === 'web_fetch')
       agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
@@ -146,6 +172,13 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
       }
       return text
     },
+    lastReplySeq(): number | null {
+      for (let seq = agent.session.seq - 1; seq >= 0; seq--) {
+        const event = agent.session.eventAt(SessionSeq(seq))
+        if (event?.type === 'assistant/message' && event.data?.message?.content.some(block => block.type === 'text' && block.text)) return seq
+      }
+      return null
+    },
     async ask(prompt: string): Promise<string> {
       accountUsage()
       turnUsage = { inputTokens: 0, outputTokens: 0 }
@@ -159,7 +192,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
               source: { kind: 'user' },
             })
           )
-          await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs())
+          await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs(), 1000, requestDeadline(options))
           let text = ''
           let turnError: string | null = null
           let aborted = false
@@ -181,16 +214,23 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
             }
           }
           if (turnError !== null) {
+            if (turnError === 'max-tokens') throw new OutputLimitError()
             const error = new Error(turnError)
             if (aborted) error.name = 'AbortError'
             throw error
           }
+          if (!text.trim()) throw new Error('模型回合结束但没有返回正文')
           return text
         } catch (error) {
           lastError = error
-          // 停滞超时（连续无新事件）无法 abort：底层回合可能仍在后台跑，重试会在同一 session 叠加 followup。
-          // 直接抛出，交给 runner 的 catch 保存进度并退出（重跑可从 session 断点续上）。
-          if (error instanceof TurnTimeoutError || (error instanceof Error && error.name === 'AbortError')) throw error
+          if (error instanceof TurnTimeoutError) {
+            // Harness 支持按 agent 取消；先收敛旧请求，禁止在仍运行的会话叠加 followup。
+            agent.cancel?.({ kind: 'hook', reason: error.message })
+            if (agent.cancel) try { await whenIdleWithin(() => agent.whenIdle(), 5000) } catch {}
+            throw error
+          }
+          if ((error instanceof Error && error.name === 'AbortError') || permanentModelError(error)
+            || (error instanceof OutputLimitError && options.retryOnLength === false)) throw error
           if (attempt === 0) {
             process.stderr.write(`tutor: 模型回合异常（${error instanceof Error ? error.message : String(error)}），重试一次…\n`)
             await new Promise((resolve) => setTimeout(resolve, 1500))

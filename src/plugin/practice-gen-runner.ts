@@ -8,6 +8,7 @@ import { printSessionTotal } from './cost-line.ts'
 import { mapContent, planContent, practiceContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
+import { applyPracticeEdits, PRACTICE_REPAIR_PERSONA, practiceRepairPrompt } from '../core/content-edit.ts'
 
 const name = 'tutor-practice-gen-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -54,10 +55,15 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
   if (store.has(config.courseId, 'practice')) out.write(`已有实践任务（${file.tasks.length} 个），继续补齐。\n`)
 
   const queue = practiceGenerationNodes(plan, map, file, config.nodeId)
+  const repairs = new Map<string, string[]>()
   // 老任务不因文件存在而跳过；逐节点审查，通过后才可复用，修复通过后才替换。
   for (const node of new Set(file.tasks.map(task => task.node))) {
     if (config.nodeId && config.nodeId !== node) continue
-    if (!(await gate.review(practiceContent(file.tasks.filter(task => task.node === node), node, profile, map))).approved && !queue.includes(node)) queue.push(node)
+    const verdict = await gate.review(practiceContent(file.tasks.filter(task => task.node === node), node, profile, map))
+    if (!verdict.approved) {
+      repairs.set(node, verdict.issues)
+      if (!queue.includes(node)) queue.push(node)
+    }
   }
   if (queue.length === 0) {
     out.write('所选知识点均已有实践任务，无需生成。\n')
@@ -73,8 +79,19 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number; 
   for (let i = 0; i < queue.length; i += config.batchSize) {
     const batch = queue.slice(i, i + config.batchSize)
     for (const node of batch) {
-      out.write(`\n正在出题：${node}（${titles.get(node)?.title ?? node}）…\n`)
-      const result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
+      const issues = repairs.get(node)
+      out.write(`\n正在${issues ? '修复旧任务' : '出题'}：${node}（${titles.get(node)?.title ?? node}）…\n`)
+      let result: PracticeTaskFile
+      if (issues) {
+        const oldTasks = file.tasks.filter(task => task.node === node)
+        const repairChat = await createAgentChat(ctx, { isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 4096, retryOnLength: false })
+        if (!repairChat) throw new Error('tutor: 修复会话创建失败')
+        result = await generateApproved<PracticeTaskFile>(repairChat, practiceRepairPrompt(oldTasks, profile, issues), text => {
+          const data = parseJsonBlock(text)
+          return data.ok ? applyPracticeEdits(oldTasks, data.value, node, today()) : data
+        }, gate, value => practiceContent(value.tasks, node, profile, map))
+        printSessionTotal(repairChat, out)
+      } else result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
         courseId: config.courseId,
         node,
         title: titles.get(node)?.title,

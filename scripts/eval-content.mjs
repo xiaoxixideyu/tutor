@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import yaml from 'yaml'
 import { validateContentFixtures } from '../src/eval/content.ts'
+import { renderModelSettings } from '../src/core/model-settings.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { values } = parseArgs({ options: { live: { type: 'boolean' }, help: { type: 'boolean' }, fixtures: { type: 'string' },
@@ -43,7 +44,7 @@ const settings = fs.readFileSync(path.join(root, 'config/settings.yaml'), 'utf8'
   if (!env[key]) throw new Error(`缺少配置变量 ${key}`)
   return key === 'TUTOR_LLM_BASE_URL' ? env[key].replace(/\/+$/, '') : env[key]
 })
-fs.writeFileSync(path.join(dshHome, 'settings.yaml'), settings)
+fs.writeFileSync(path.join(dshHome, 'settings.yaml'), renderModelSettings(settings, env))
 const patch = [
   ...['headless-runner', 'headless-startup', 'session-title-llm', 'agent-instructions', 'skill-filesystem'].map(id => ({ id, disabled: true })),
   { id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: '', personaSuffix: '' } },
@@ -58,7 +59,7 @@ fs.writeFileSync(outputFile, JSON.stringify({ status: 'starting', startedAt: new
 console.log(`评测目录：${outputDir}`)
 const require = createRequire(import.meta.url)
 const child = spawn(process.execPath, [require.resolve('@deepseek-ai/dsh/lib/bin.js'), '--profile', 'headless', '--patch', patchFile], {
-  cwd: workspace, env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1', TUTOR_LLM_TIMEOUT_MS: '90000' },
+  cwd: workspace, env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
   stdio: ['ignore', 'pipe', 'pipe'], detached: true,
 })
 const log = fs.createWriteStream(path.join(outputDir, 'runner.log'))

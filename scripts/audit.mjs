@@ -11,11 +11,13 @@ import {
   parseSessionLog,
 } from '../src/core/fidelity.ts'
 import { CourseStore } from '../src/core/store.ts'
+import { QualityStore } from '../src/core/quality-store.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = process.stdout
-const sessionsRoot = path.join(root, 'data', 'dsh-home', 'sessions')
-const WORKSPACE_DIR = `-${root.replaceAll('/', '-')}--`
+const sessionsRoot = path.join(process.env.DSH_HOME ?? path.join(root, 'data', 'dsh-home'), 'sessions')
+const workspace = path.resolve(process.env.TUTOR_AUDIT_WORKSPACE ?? process.cwd())
+const WORKSPACE_DIR = `-${workspace.replaceAll('/', '-')}--`
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 
 function decodeZstdMultiFrame(buf) {
@@ -62,7 +64,8 @@ function loadEvents(file) {
 
 const args = process.argv.slice(2)
 const asJson = args.includes('--json')
-const positional = args.filter((a) => a !== '--json')
+const rawMode = args.includes('--raw')
+const positional = args.filter((a) => a !== '--json' && a !== '--raw')
 const target = positional[1] ?? 'latest'
 
 const sessions = findSessions(target)
@@ -74,16 +77,20 @@ if (sessions.length === 0) {
 // audit latest 需跳过它们（否则可能选中一个非课堂会话而报"无法审计"）。sessions 已按 mtime 倒序。
 let session = null
 let log = null
+let events = null
 for (const candidate of sessions) {
   let parsed
+  let loaded
   try {
-    parsed = parseSessionLog(loadEvents(candidate.file))
+    loaded = loadEvents(candidate.file)
+    parsed = parseSessionLog(loaded)
   } catch {
     continue
   }
   if (parsed.intro) {
     session = candidate
     log = parsed
+    events = loaded
     break
   }
 }
@@ -101,10 +108,14 @@ if (!introView) {
 
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
 let otherNodes = []
-const courseId = store.list()[0]
-if (courseId && store.has(courseId, 'knowledge-map')) {
+const courseId = introView.courseId
+if (courseId && store.exists(courseId) && store.has(courseId, 'knowledge-map')) {
   const knowledgeMap = store.read(courseId, 'knowledge-map')
   otherNodes = knowledgeMap.nodes.map((n) => ({ id: n.id, title: n.title }))
+}
+if (!rawMode) {
+  const receipts = courseId && store.exists(courseId) ? new QualityStore(store.root, courseId).published(`session-${session.id}`) : []
+  log = parseSessionLog(events, receipts)
 }
 
 const report = assembleReport({
@@ -114,6 +125,7 @@ const report = assembleReport({
   usage: log.usage,
   otherNodes,
   generatedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+  publication: log.publication,
 })
 
 if (asJson) {
@@ -121,7 +133,11 @@ if (asJson) {
 } else {
   out.write(`课堂忠实度报告  会话 ${report.sessionId.slice(0, 8)}  ${report.generatedAt}\n`)
   out.write(`知识点：${report.node}（${report.title}）  回合 ${report.cost.turns}  成本 输入 ${report.cost.inputTokens} / 输出 ${report.cost.outputTokens} tokens\n`)
-  if (report.reachedPoints === 0) {
+  out.write(rawMode ? '原始日志模式：这些回复不代表已向学员展示的内容。\n'
+    : `原始回复 ${log.publication.rawTurns} 段，核实发布 ${log.publication.publishedTurns} 段，排除 ${log.publication.excludedTurns} 段。\n`)
+  if (report.coverageRate === null) {
+    out.write('\n没有可验证的讲授发布记录；保留请求成本，不评价课堂忠实度。\n')
+  } else if (report.reachedPoints === 0) {
     out.write(`\n忠实度 — 本课几乎未展开（讲到 0/${report.plannedPoints} 个计划要点）\n`)
   } else {
     const mark = report.coverageRate >= 0.99 ? '✓' : report.coverageRate >= 0.5 ? '△' : '✗'
@@ -138,7 +154,7 @@ if (asJson) {
   out.write(report.drift.length > 0 ? `\n超纲嫌疑：${report.drift.map((d) => `${d.id}(${Math.round(d.overlap * 100)}%)`).join('、')}\n` : '\n超纲嫌疑：无\n')
 }
 
-const auditsDir = path.join(root, 'audits')
+const auditsDir = process.env.TUTOR_AUDITS_ROOT ?? path.join(root, 'audits')
 fs.mkdirSync(auditsDir, { recursive: true })
 fs.writeFileSync(path.join(auditsDir, `${report.sessionId}.json`), `${JSON.stringify(report, null, 2)}\n`)
 process.exit(0)

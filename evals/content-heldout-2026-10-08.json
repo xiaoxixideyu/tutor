@@ -1,0 +1,556 @@
+{
+  "version": 1,
+  "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+  "cases": [
+    {
+      "id": "heldout-go-zero-length-good",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "make-copy-independent",
+            "content": {
+              "id": "q1",
+              "node": "make-copy-independent",
+              "type": "subjective",
+              "question": "Go 中 src := []int{4, 7, 9}; dst := make([]int, 0, 3); n := copy(dst, src)。n 等于多少？只答整数。",
+              "answer": "0",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "Go 中 src := []int{4, 7, 9}; dst := make([]int, 0, 3); n := copy(dst, src)。n 等于多少？只答整数。",
+              "answer": "0"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "copy 按 len 而非 cap；目标长度为 0，拷贝数量为 0。"
+      }
+    },
+    {
+      "id": "heldout-go-zero-length-bad",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "make-copy-independent",
+            "content": {
+              "id": "q1",
+              "node": "make-copy-independent",
+              "type": "subjective",
+              "question": "Go 中 src := []int{4, 7, 9}; dst := make([]int, 0, 3); n := copy(dst, src)。n 等于多少？只答整数。",
+              "answer": "3",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "Go 中 src := []int{4, 7, 9}; dst := make([]int, 0, 3); n := copy(dst, src)。n 等于多少？只答整数。",
+              "answer": "3"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "容量为 3 不增加长度；错误参考答案必须被拦截。"
+      }
+    },
+    {
+      "id": "heldout-go-disjoint-good",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "s := []int{4, 7, 9, 2}; a := s[:2]; b := s[2:]。a 和 b 的元素位置不重叠，因此 a[0] = 8 不会改变 b[0]，但它们仍属于同一个底层数组。",
+              "previousReply": "",
+              "learnerMessage": "请解释这个例子。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "同数组的两段可以不重叠，写入不互相可见不能单独证明存储独立。"
+      }
+    },
+    {
+      "id": "heldout-go-disjoint-bad",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent",
+            "content": {
+              "reply": "s := []int{4, 7, 9, 2}; a := s[:2]; b := s[2:]。a[0] = 8 后 b[0] 不变，这就证明 a 和 b 使用独立的底层数组。",
+              "previousReply": "",
+              "learnerMessage": "请解释这个例子。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "不重叠索引的写入不互相影响，不能证明数组独立。"
+      }
+    },
+    {
+      "id": "heldout-dice-boundary-good",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能列出等可能试验的样本空间，并数出指定事件包含的有利结果数",
+            "nodes": [
+              "dice-sample-space"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "q1",
+              "node": "dice-sample-space",
+              "type": "subjective",
+              "question": "掷一枚公平六面骰子一次。事件为“点数不大于 4 且不是偶数”。该事件有多少个有利结果？只答整数。",
+              "answer": "2",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "掷一枚公平六面骰子一次。事件为“点数不大于 4 且不是偶数”。该事件有多少个有利结果？只答整数。",
+              "answer": "2"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "满足条件的结果为 1 和 3，共两个。枚举可以求解，不需要补集公式。"
+      }
+    },
+    {
+      "id": "heldout-dice-boundary-bad",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "dice-sample-space"
+          ],
+          "milestone": {
+            "id": "m1",
+            "title": "能列出等可能试验的样本空间，并数出指定事件包含的有利结果数",
+            "nodes": [
+              "dice-sample-space"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "dice-sample-space",
+            "content": {
+              "id": "q1",
+              "node": "dice-sample-space",
+              "type": "subjective",
+              "question": "掷一枚公平六面骰子一次。事件为“点数不大于 4 且不是偶数”。该事件有多少个有利结果？只答整数。",
+              "answer": "3",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "掷一枚公平六面骰子一次。事件为“点数不大于 4 且不是偶数”。该事件有多少个有利结果？只答整数。",
+              "answer": "3"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "误把偶数 4 或超界的 5 算入将错误计数。"
+      }
+    },
+    {
+      "id": "heldout-dice-complement-good",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "complement-rule",
+            "content": {
+              "id": "q1",
+              "node": "complement-rule",
+              "type": "subjective",
+              "question": "掷一枚公平六面骰子一次，A 为“点数大于 2”。A 的补集发生的概率是多少？只答一个分数。",
+              "answer": "1/3",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "掷一枚公平六面骰子一次，A 为“点数大于 2”。A 的补集发生的概率是多少？只答一个分数。",
+              "answer": "1/3"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "补集为 1、2，概率 2/6=1/3。"
+      }
+    },
+    {
+      "id": "heldout-dice-complement-bad",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "exam",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "q1",
+            "node": "complement-rule",
+            "content": {
+              "id": "q1",
+              "node": "complement-rule",
+              "type": "subjective",
+              "question": "掷一枚公平六面骰子一次，A 为“点数大于 2”。A 的补集发生的概率是多少？只答一个分数。",
+              "answer": "1/2",
+              "points": 1
+            },
+            "question": {
+              "id": "q1",
+              "question": "掷一枚公平六面骰子一次，A 为“点数大于 2”。A 的补集发生的概率是多少？只答一个分数。",
+              "answer": "1/2"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "把点数 3 包含在补集将违反“大于 2”的边界。"
+      }
+    },
+    {
+      "id": "heldout-scope-single-good",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "complement-rule",
+            "content": {
+              "reply": "今天只看一枚骰子的一次结果。若 A 是“点数至少为 5”，请先列出 A 的补集，再用 1-P(A) 核对补集的概率。",
+              "previousReply": "",
+              "learnerMessage": "请解释这个例子。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "单次公平骰子的补集练习位于第二节范围内。"
+      }
+    },
+    {
+      "id": "heldout-scope-repetition-bad",
+      "provenance": "2026-10-08 新编的独立迁移样本；编写时未调用待测模型，没有使用于提示调试；执行后冻结保留全部结果。",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课（第一节：等可能样本空间与有利结果计数；第二节：补集与用1-P(A)求概率），学会判断掷一枚公平六面骰子时事件的概率，并能读懂生活中的概率说法；不涉及条件概率、独立性、统计推断与编程。",
+            "daily_minutes": 15,
+            "background": "会整数和分数，未系统学过概率。",
+            "style": "枚举结果的短例子驱动，先自己算再由导师解释，不写程序。",
+            "requests": [
+              "我想能判断掷一枚公平六面骰子时事件的概率，用来读懂生活中的概率说法。只安排两节 15 分钟的微课程：第一节等可能样本空间与有利结果计数，第二节补集与用 1-P(A) 求概率。只讨论一枚公平骰子，暂不学条件概率、独立性、统计推断或编程。我会整数和分数，但未系统学过概率。每天 15 分钟，没有截止日期。喜欢用枚举结果的短例子，先自己算再解释，不写程序。请把严格两节范围保留到目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "dice-sample-space",
+              "title": "等可能样本空间与有利结果计数"
+            },
+            {
+              "id": "complement-rule",
+              "title": "补集与用 1−P(A) 求概率"
+            }
+          ],
+          "activeNodes": [
+            "complement-rule"
+          ],
+          "milestone": {
+            "id": "m2",
+            "title": "能用补集把「至少……」类问题转化为 1−P(A) 并算出概率",
+            "nodes": [
+              "complement-rule"
+            ]
+          }
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "complement-rule",
+            "content": {
+              "reply": "今天先练习补集。选做：连续掷同一枚骰子 20 次，记录出现 6 的次数，并把实验频率和 1/6 比较，写出差异原因。",
+              "previousReply": "",
+              "learnerMessage": "请解释这个例子。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "即使用同一枚骰子，重复试验和频率比较也超出限定微课活动。"
+      }
+    }
+  ]
+}

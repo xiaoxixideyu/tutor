@@ -6,7 +6,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { CourseStore } from '../src/core/store.ts'
-import { judgePracticeTask, buildPracticeIntro, applyPracticeResult, selectPracticeNode } from '../src/core/practice.ts'
+import { judgePracticeTask, buildPracticeIntro, applyPracticeResult, selectPracticeNode, practiceTaskKey, validatePracticeTasks } from '../src/core/practice.ts'
 import { runTests, ensureStarterFiles } from '../src/plugin/practice-executor.ts'
 import { createLineReader } from '../src/plugin/line-reader.ts'
 import { requireReviewedPractice } from '../src/core/quality-store.ts'
@@ -69,6 +69,8 @@ if (!node) {
 }
 
 const practiceFile = store.read(courseId, 'practice')
+const validPractice = validatePracticeTasks(practiceFile)
+if (!validPractice.ok) throw new Error(validPractice.error)
 const tasks = practiceFile.tasks.filter((t) => t.node === node)
 if (tasks.length === 0) {
   out.write(`知识点 ${node} 还没有实践任务（当前 practice.yaml 只覆盖其他知识点）。请重新运行 practice-gen ${courseId}。\n`)
@@ -99,13 +101,20 @@ if (missingTools.length > 0) {
 }
 
 const workdir = path.join(store.root, courseId, 'sandbox', task.id)
-ensureStarterFiles(task, workdir)
+const materials = ensureStarterFiles(task, workdir)
 out.write(`\n${buildPracticeIntro(task, workdir)}\n`)
-if (prevState && prevState.task_id === task.id && !prevState.done && prevState.done_tests.length > 0) {
-  out.write(`（续做：上次已通过 ${prevState.done_tests.join('、')}）\n`)
+for (const file of materials.preserved) out.write(`已保留你修改的 ${file.path}；当前任务提供的初始版本见 ${file.currentMaterial}。\n`)
+const taskKey = practiceTaskKey(task)
+const matchingState = prevState?.task_id === task.id && prevState.content_key === taskKey ? prevState : undefined
+if (prevState?.task_id === task.id && !matchingState) out.write('任务内容已更新，本次重新验收；工作目录中的作答保留。\n')
+if (!matchingState) store.write(courseId, 'practice-state', {
+  node, task_id: task.id, updated_at: today(), done_tests: [], done: false, attempts: 0, content_key: taskKey,
+})
+if (matchingState && !matchingState.done && matchingState.done_tests.length > 0) {
+  out.write(`（续做：上次已通过 ${matchingState.done_tests.join('、')}）\n`)
 }
 
-let attempts = prevState?.task_id === task.id ? prevState.attempts : 0
+let attempts = matchingState?.attempts ?? 0
 while (true) {
   out.write('\n回车运行测试（r 重跑，q 中止保存进度）> ')
   const line = await readLine()
@@ -134,6 +143,7 @@ while (true) {
     done_tests: judge.perTest.filter((i) => i.passed).map((i) => i.name),
     done: judge.done,
     attempts,
+    content_key: taskKey,
   })
   if (!judge.done) {
     out.write(`未全部通过（${judge.perTest.filter((i) => i.passed).length}/${task.tests.length}）。修改代码后再按回车。\n`)

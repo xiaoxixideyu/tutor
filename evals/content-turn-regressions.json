@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "provenance": "2026-10-08 单轮课堂范围回归：局部讲解应放行，提前教授下一课应拒绝。",
+  "cases": [
+    {
+      "id": "turn-partial-current-good",
+      "provenance": "单轮范围规则修复后新增的已知回归对照；不是未见留出集",
+      "expected": {
+        "approved": true,
+        "rationale": "一轮可以只讲本课中的赋值，不必同时覆盖所有目标"
+      },
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "slice-shared-backing-array"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "slice-shared-backing-array",
+            "content": {
+              "reply": "先看这一句赋值：a := []int{1, 2}; b := a。随后 b[0] = 9，a[0] 也会变成 9，因为两者访问同一底层数组的同一元素。",
+              "previousReply": "",
+              "learnerMessage": "请继续本节课。"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "turn-next-method-bad",
+      "provenance": "单轮范围规则修复后新增的已知回归对照；不是未见留出集",
+      "expected": {
+        "approved": false,
+        "rationale": "第一节提前教授并要求使用第二节 make+copy 方法，不能借单轮回顾规则放行"
+      },
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用两节 15 分钟微课解决 Go 切片相互修改问题：第一节理解 []int 共享底层数组及元素修改的影响，第二节用 make 与 copy 创建独立副本并验证修改不串联；范围严格限定为 []int，不含 append、扩容、并发与嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、for 和函数，能运行 go test，但未学过切片",
+            "style": "短代码例子驱动，先预测输出再解释",
+            "requests": [
+              "我想修复工作中 Go 切片相互修改的问题。只安排两节 15 分钟的微课程：第一节切片共享底层数组与修改元素，第二节用 make 和 copy 创建独立副本并验证修改不串联。只研究 []int，暂不学 append、扩容、并发和嵌套切片。我会 Go 变量、for 和函数，能运行 go test，但没学过切片。每天 15 分钟，没有明确截止日期。偏好短代码例子、先预测输出再解释。请把严格的两节范围也保留到学习目标里。信息足够可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-shared-backing-array",
+              "title": "[]int 与底层数组：共享与元素修改的可见性"
+            },
+            {
+              "id": "make-copy-independent",
+              "title": "用 make 与 copy 创建独立副本并用 go test 验证不串联"
+            }
+          ],
+          "activeNodes": [
+            "slice-shared-backing-array"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "slice-shared-backing-array",
+            "content": {
+              "reply": "现在第一节直接学习如何创建独立副本。请写 dst := make([]int, len(src)); copy(dst, src)，再修改 dst[0] 并验证 src[0] 不变。下面按这套方法完成独立复制练习。",
+              "previousReply": "",
+              "learnerMessage": "请继续本节课。"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

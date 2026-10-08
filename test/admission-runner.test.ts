@@ -74,3 +74,20 @@ it('正式 learn 恢复时舍弃未批准的日志尾部，重新审查后才更
     else assert.deepEqual(store.read('alpha', 'lesson'), original)
   }
 })
+
+it('首次讲授失败仍保存已批准备课，再次开课复用教案且不发布失败回复', t => {
+  const { root, store, run } = fixture(t)
+  const mastery = store.read('alpha', 'mastery')
+  const failed = run('learn', 'fail')
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr)
+  const prepared = store.read('alpha', 'lesson') as LessonState
+  assert.equal(prepared.draft.node, 'topic')
+  assert.equal(prepared.session_id, undefined)
+  assert.equal(prepared.approved_turn, undefined)
+  assert.deepEqual(store.read('alpha', 'mastery'), mastery)
+  const resumed = run('learn', 'repair', '/exit\n')
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
+  assert.equal(fs.readFileSync(path.join(root, 'prep-count.txt'), 'utf8'), 'prepared\n')
+  assert.doesNotMatch(failed.stdout + resumed.stdout, /REJECT_CANDIDATE/)
+  assert.equal((store.read('alpha', 'lesson') as LessonState).approved_turn?.reply, 'APPROVED_CONTENT')
+})

@@ -52,6 +52,16 @@ describe('parseSessionLog', () => {
     assert.deepEqual(sumUsage(log.usage), { inputTokens: 100, outputTokens: 15 })
     assert.deepEqual(log.assistantTexts, ['已讲内容'])
   })
+  it('发布回执按事件序号和完整文本匹配，拒绝稿、未发布稿及同文其他事件不进入课堂统计', () => {
+    const log = parseSessionLog([
+      { seq: 1, type: 'assistant/message', data: { usage: { inputTokens: 10, outputTokens: 20 }, message: { content: [{ type: 'text', text: '同一段话' }] } } },
+      { seq: 2, type: 'assistant/message', data: { usage: { inputTokens: 20, outputTokens: 30 }, message: { content: [{ type: 'text', text: '被拒绝的内容' }] } } },
+      { seq: 3, type: 'assistant/message', data: { usage: { inputTokens: 30, outputTokens: 40 }, message: { content: [{ type: 'text', text: '同一段话' }] } } },
+    ], [{ seq: 3, reply: '同一段话' }, { seq: 2, reply: '无法匹配的文本' }])
+    assert.deepEqual(log.assistantTexts, ['同一段话'])
+    assert.deepEqual(log.publication, { source: 'published', rawTurns: 3, publishedTurns: 1, excludedTurns: 2 })
+    assert.deepEqual(sumUsage(log.usage), { inputTokens: 60, outputTokens: 90 })
+  })
 })
 
 describe('parseLessonIntro', () => {
@@ -59,6 +69,7 @@ describe('parseLessonIntro', () => {
     const view = parseLessonIntro(INTRO)
     assert.ok(view)
     assert.equal(view.node, 'goroutines')
+    assert.equal(view.courseId, 'golang')
     assert.deepEqual(view.structure, ['什么是 goroutine', 'go 关键字的用法', '与线程的差异'])
     assert.equal(view.resourceCount, 2)
   })
@@ -145,7 +156,7 @@ describe('assembleReport', () => {
     assert.equal(report.cost.turns, 2)
     assert.equal(report.citations.totalCitations, 1)
     assert.equal(report.citations.uncitedAssertions, 1)
-    assert.ok(report.coverageRate > 0)
+    assert.ok(report.coverageRate !== null && report.coverageRate > 0)
     assert.ok(report.structure.length === 3)
   })
 
@@ -179,6 +190,6 @@ describe('assembleReport', () => {
     })
     assert.equal(report.reachedPoints, 3) // 讲到了第 3 点
     assert.equal(report.partial, false)
-    assert.ok(report.coverageRate < 1) // 第 2 点漏讲，忠实度失分
+    assert.ok(report.coverageRate !== null && report.coverageRate < 1) // 第 2 点漏讲，忠实度失分
   })
 })

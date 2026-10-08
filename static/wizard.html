@@ -371,6 +371,8 @@ async function startSse() {
       renderBubble()
       closeBubble()
       setBusy(false)
+      $footer.style.display = 'none'
+      document.getElementById('stopBtn').disabled = true
       if (msg.kind === 'new' && msg.code === 0) {
         markStep('new', 'done')
         $log.appendChild(el('<div class="sysline">—— 访谈完成。可先联网教研（官方来源、讲授可溯源），或直接进入摸底 ——</div>'))
@@ -383,14 +385,15 @@ async function startSse() {
       } else if (msg.kind === 'research' && msg.code === 0) {
         markStep('research', 'done')
         document.getElementById('researchBtn').style.display = 'none'
-        $log.appendChild(el('<div class="sysline">—— 教研完成，开始摸底 ——</div>'))
-        startFlow('assess')
+        $log.appendChild(el('<div class="sysline">—— 教研完成 ——</div>'))
+        nextStepChip('assess', '开始摸底 →')
       } else if (msg.kind === 'plan' && msg.code === 0) {
         markStep('plan', 'done')
         $log.appendChild(el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
         document.getElementById('gotoBtn').style.display = 'inline-block'
       } else {
         $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
+        if (msg.code !== 0) nextStepChip(msg.kind, '从已保存进度重试 →')
       }
       scrollToEnd()
     }
@@ -400,8 +403,16 @@ async function startSse() {
 
 async function api(path, body) {
   const result = await flowClient.request(path, body)
-  if (path === '/flow/start' && result.ok) startSse()
+  if (path === '/flow/start' && result.ok) { rememberFlow(result); startSse() }
   return result
+}
+
+function rememberFlow(flow) {
+  const url = new URL(location.href)
+  url.searchParams.set('course', flow.courseId)
+  url.searchParams.set('resume', flow.kind)
+  url.searchParams.set('flowId', flow.flowId)
+  history.replaceState(null, '', url)
 }
 
 async function startFlow(kind) {
@@ -410,7 +421,8 @@ async function startFlow(kind) {
   $title.textContent = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
   $footer.style.display = 'block'
   $setup.style.display = 'none'
-  setBusy(true, kind === 'assess' ? '生成知识地图与题库（2-4 分钟）' : kind === 'plan' ? '设计里程碑' : '模型思考中')
+  document.getElementById('stopBtn').disabled = false
+  setBusy(true, kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : '模型思考中')
   await api('/flow/start', { kind, courseId: courseName })
 }
 
@@ -484,26 +496,36 @@ function resumeFrom(kind, course) {
 }
 
 // 页面加载：附加进行中的流程（刷新不丢）；否则若带 ?course=&resume= 则续起；再否则停在 setup
-fetch('/flow/state').then((r) => r.json()).then((state) => {
-  if (state.active) {
-    if (!['new', 'assess', 'plan', 'research'].includes(state.active.kind)) {
-      document.getElementById('err').textContent = `已有进行中的流程（${state.active.kind} ${state.active.courseId}），请先返回课程列表。`
+const entryParams = new URLSearchParams(location.search)
+fetch(`/flow/state?flowId=${encodeURIComponent(entryParams.get('flowId') ?? '')}`).then((r) => r.json()).then((state) => {
+  const requestedCourse = entryParams.get('course')
+  const available = state.flow ?? state.active
+  if (available) {
+    if (!['new', 'assess', 'plan', 'research'].includes(available.kind)
+      || (requestedCourse && available.courseId !== requestedCourse)) {
+      document.getElementById('err').textContent = `当前流程属于 ${available.kind} ${available.courseId}，请先返回课程列表。`
       return
     }
-    flowClient.attach(state.active)
-    currentKind = state.active.kind
-    courseName = state.active.courseId
+    flowClient.attach(available)
+    rememberFlow(available)
+    currentKind = available.kind
+    courseName = available.courseId
     showConsole()
     markStep(currentKind, 'active')
-    setBusy(true)
+    setBusy(available.status === 'running')
     startSse()
     return
   }
-  const params = new URLSearchParams(location.search)
-  const course = params.get('course')
-  const resume = params.get('resume')
+  const course = entryParams.get('course')
+  const resume = entryParams.get('resume')
   if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && ['assess', 'plan', 'research', 'new'].includes(resume)) {
-    resumeFrom(resume, course)
+    if (entryParams.has('flowId')) {
+      currentKind = resume; courseName = course; showConsole()
+      $footer.style.display = 'none'
+      document.getElementById('stopBtn').disabled = true
+      $log.appendChild(el('<div class="sysline">流程回放已过期。可从课程已保存的进度继续。</div>'))
+      nextStepChip(resume, '从已保存进度继续 →')
+    } else resumeFrom(resume, course)
   }
   startSse()
 })

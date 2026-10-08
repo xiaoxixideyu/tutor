@@ -20,7 +20,8 @@ export function apply(ctx: Context, config: { outputFile: string; research: bool
   let requests = 0
   ctx.on('agent/request', async (_payload, next) => {
     if (++requests > 24) throw new Error('单阶段超过 24 次模型请求，停止验收并检查原因')
-    return { ...await next(), maxTokens: 8192 }
+    const request = await next()
+    return { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, 8192) }
   })
   const pending = new Map<string, { startedAt: number; firstChunkMs?: number; firstTextMs?: number }>()
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {

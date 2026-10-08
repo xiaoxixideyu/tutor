@@ -8,7 +8,7 @@ import { bankContent, blindQuestions, contentIssues, contentKey, lessonContent, 
   planContent, practiceContent, replayApprovedReply, requiredAssertions, teachingContent, type ContentInput, type ContentReview } from '../src/core/content-quality.ts'
 import { QualityStore, type QualityRecord } from '../src/core/quality-store.ts'
 import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/plugin/content-gate.ts'
-import type { AgentChat } from '../src/plugin/agent-chat.ts'
+import { OutputLimitError, type AgentChat } from '../src/plugin/agent-chat.ts'
 import type { KnowledgeMap, LessonDraft, Profile, QuestionBank } from '../src/core/schema.ts'
 import { parseJsonBlock } from '../src/plugin/generation.ts'
 
@@ -85,6 +85,23 @@ it('独立答案不一致、模型不确定、模型误判通过的算式都会�
   assert.match(contentIssues(input, solutions, review).join(''), /uncertain/)
 })
 
+it('盲解返回完整选项或等价分数时按选项唯一映射，错误或歧义答案仍拒绝', () => {
+  const solution = { id: 'q1', status: 'solved' as const, answer: '2/12', reasoning: '六个结果中一个', arithmetic: [] }
+  assert.deepEqual(contentIssues(input, [solution], reviewFor(input)), [])
+  solution.answer = '1/2'
+  assert.ok(contentIssues(input, [solution], reviewFor(input)).length)
+  const duplicate = structuredClone(input)
+  duplicate.units[0].question!.choices![1] = '2/12'
+  solution.answer = '1/6'
+  assert.ok(contentIssues(duplicate, [solution], reviewFor(duplicate)).length)
+  const words = structuredClone(input)
+  words.units[0].question!.choices![0] = '掷出的点数是 1、2、3、5、6'
+  solution.answer = '掷出的点数是 1、2、3、5、6'
+  assert.deepEqual(contentIssues(words, [solution], reviewFor(words)), [])
+  solution.answer = 'A 或 B'
+  assert.ok(contentIssues(words, [solution], reviewFor(words)).length)
+})
+
 it('审查响应不完整和网络错误时关闭准入，保留失败证据和用量', async t => {
   const { gate, store, records } = setup(t, () => ({ units: [] }))
   await assert.rejects(gate.review(input), /未完成，未发布/)
@@ -95,6 +112,63 @@ it('审查响应不完整和网络错误时关闭准入，保留失败证据和�
   const broken = new ContentGate(store, async () => { throw new Error('网络中断') })
   await assert.rejects(broken.review(input), /网络中断/)
   assert.equal(store.approved(input), false)
+})
+
+it('生成后审查中断保留待审草稿，续跑重新校验与审查而不重复生成', async t => {
+  const { gate, store, requests } = setup(t)
+  const broken = new ContentGate(store, async () => { throw new Error('测试断网') })
+  let generations = 0
+  const generator = { ask: async () => { generations++; return json(bank) } }
+  const content = (value: QuestionBank) => bankContent(value, 'die', profile, map)
+  await assert.rejects(generateApproved(generator, '生成该节点题库', parseJsonBlock, broken, content), /测试断网/)
+  assert.equal(store.approved(input), false)
+  assert.equal(store.candidate('生成该节点题库')?.status, 'pending')
+  assert.deepEqual(await generateApproved(generator, '生成该节点题库', parseJsonBlock, gate, content), bank)
+  assert.equal(generations, 1)
+  assert.equal(requests.filter(request => request.role === 'solver').length, 1)
+  assert.equal(store.approved(input), true)
+  assert.equal(store.candidate('生成该节点题库'), undefined)
+})
+
+it('中断后复用逐字匹配且结构完整的检查，保留原失败并只计算新增请求', async t => {
+  const { gate, store, records } = setup(t, () => { throw new Error('网关中断') })
+  await assert.rejects(gate.review(input), /网关中断/)
+  const original = records()[0]
+  const requests: string[] = []
+  const resumed = new ContentGate(store, async role => {
+    requests.push(role)
+    return mockChat(() => json(reviewFor(input)), 'new-reviewer')
+  })
+  assert.equal((await resumed.review(input)).approved, true)
+  assert.deepEqual(requests, ['reviewer'])
+  const approved = records().find(record => record.status === 'approved')!
+  assert.equal(approved.resumedFrom, original.id)
+  assert.equal(approved.calls[0].reusedFrom, original.id)
+  assert.equal(approved.calls[0].usage.outputTokens, 0)
+  assert.equal(approved.calls[1].usage.outputTokens, 10)
+  assert.equal(records().find(record => record.id === original.id)?.status, 'error')
+  assert.equal(store.approved(input), true)
+  fs.rmSync(store.evidenceFile(original.id))
+  assert.equal(store.approved(input), false, '复用的原始证据缺失时不能批准')
+})
+
+it('恢复不会复用缺少必需字段的响应，已拒内容也不能重抽审查变成通过', async t => {
+  const { gate, store } = setup(t, () => ({ units: [] }))
+  await assert.rejects(gate.review(input), /未完成/)
+  let requests = 0
+  const resumed = new ContentGate(store, async () => mockChat(() => {
+    requests++
+    const review = reviewFor(input)
+    review.units[0].scope = 'fail'
+    return json(review)
+  }, 'valid-rejection'))
+  assert.equal((await resumed.review(input)).approved, false)
+  assert.equal(requests, 1)
+  const untouched = new ContentGate(store, async () => { throw new Error('不应重新请求') })
+  assert.equal((await untouched.review(input)).approved, false)
+  const changed = structuredClone(input)
+  changed.context.profile.goal += '；允许复习'
+  await assert.rejects(untouched.review(changed), /不应重新请求/)
 })
 
 it('不能复用出题答案所在的盲解会话作为审查会话', async t => {
@@ -152,9 +226,34 @@ it('长内容分批审查仍需全量覆盖，后续批次失败不会留下有�
   const { gate, store, records } = setup(t, content => ++reviews === 2 ? { units: [] } : reviewFor(content))
   const large = mapContent({ ...map, nodes: Array.from({ length: 7 }, (_, i) => ({ id: `n${i}`, title: `知识点${i}` })) }, profile)
   await assert.rejects(gate.review(large), /未完成/)
-  assert.equal(reviews, 2)
+  assert.ok(reviews >= 2)
   assert.equal(store.approved(large), false)
-  assert.equal(records()[0].review?.units.length, 3)
+  assert.ok((records()[0].review?.units.length ?? 0) < large.units.length)
+})
+
+it('输出截断后拆小盲解批次并保留失败；完整复核后才批准，调用并发不超过二', async t => {
+  const { store } = setup(t)
+  let serial = 0
+  let active = 0
+  let maxActive = 0
+  const gate = new ContentGate(store, async role => ({ ...mockChat(() => '', `split-${++serial}`), ask: async prompt => {
+    active++; maxActive = Math.max(maxActive, active)
+    try {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      const data = JSON.parse(prompt)
+      if (role === 'solver' && data.questions.length > 1) throw new OutputLimitError()
+      return json(role === 'solver' ? { solutions: data.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '独立解答', arithmetic: [] })) }
+        : reviewFor(data.content))
+    } finally { active-- }
+  } }))
+  const largeBank = bankContent({ die: Array.from({ length: 5 }, (_, i) => ({ ...bank.die[0], id: `q${i}` })) }, 'die', profile, map)
+  assert.equal((await gate.review(largeBank)).approved, true)
+  assert.equal(store.approved(largeBank), true)
+  assert.equal(maxActive, 2)
+  const record = JSON.parse(fs.readFileSync(path.join(store.directory, 'approved', `${contentKey(largeBank)}.json`), 'utf8')) as QualityRecord
+  assert.equal(record.solutions?.length, 5)
+  assert.ok(record.calls.some(call => call.error && call.splitAfterError))
+  assert.ok(record.calls.every(call => typeof call.elapsedMs === 'number'))
 })
 
 it('课程地图明确每节点一课，骨架越界即可提前拒绝但不能提前批准', async t => {

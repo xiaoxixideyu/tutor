@@ -241,7 +241,7 @@ function renderGenPrompt() {
   $log.innerHTML = ''; term = null
   const card = el('<div class="intro"></div>')
   card.appendChild(el('<div>这个知识点还没有实践任务。</div>'))
-  card.appendChild(el('<div style="color:var(--muted);margin-top:6px">生成实践任务需要调用模型，通常 1–2 分钟；生成后即可开始动手练习。</div>'))
+  card.appendChild(el('<div style="color:var(--muted);margin-top:6px">实践任务通过内容核对后即可开始练习。准备期间会显示进度，失败后可重试。</div>'))
   const btn = el('<button class="big">生成实践任务</button>')
   btn.addEventListener('click', async () => { btn.disabled = true; if (await startPracticeGen()) startSse(); else btn.disabled = false })
   card.appendChild(btn); $log.appendChild(card)
@@ -255,7 +255,7 @@ async function startPractice() {
 async function startPracticeGen() {
   const result = await api('/flow/start', { kind: 'practice-gen', courseId: wantedCourse, nodeId: wantedNode })
   if (!result.ok) { showBanner(result.error || '生成实践任务失败'); return false }
-  $state.textContent = `生成实践任务中：${wantedCourse}`; hideBanner(); setRunning(true, '生成任务中（可能 1–2 分钟）'); return true
+  $state.textContent = `生成实践任务中：${wantedCourse}`; hideBanner(); setRunning(true, '正在生成并核对任务'); return true
 }
 // 全局流程桥同一时间只跑一个子进程。想练习却撞上别的进行中流程（另一门课、或本课的课堂/大考等）时，
 // 如实说明并给「结束并开始实践」入口，而不是把别的流程的输出灌进本页。

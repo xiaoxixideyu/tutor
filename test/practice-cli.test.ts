@@ -9,6 +9,7 @@ import { CourseStore } from '../src/core/store.ts'
 import type { KnowledgeMap, Mastery, PracticeTaskFile, PracticeTaskState, Profile } from '../src/core/schema.ts'
 import { practiceContent } from '../src/core/content-quality.ts'
 import { approveFixture } from './fixtures/quality.ts'
+import { practiceTaskKey } from '../src/core/practice.ts'
 
 it('真实实践 CLI 能在课程全部掌握后练习指定节点，执行测试且不推进复习阶梯', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-practice-cli-'))
@@ -48,4 +49,26 @@ it('真实实践 CLI 能在课程全部掌握后练习指定节点，执行测�
   })
   assert.equal(invalid.status, 1)
   assert.match(invalid.stderr, /知识地图/)
+
+  const revised = store.read('alpha', 'practice') as PracticeTaskFile
+  revised.tasks[0].tests.push({ name: 'correct-content', command: 'test "$(cat answer.txt)" = "correct"' })
+  store.write('alpha', 'practice', revised)
+  approveFixture(root, 'alpha', practiceContent((store.read('alpha', 'practice') as PracticeTaskFile).tasks, 'basics', store.read('alpha', 'profile') as Profile,
+    store.read('alpha', 'knowledge-map') as KnowledgeMap))
+  const run = (input: string) => spawnSync(process.execPath, [script, 'practice', 'alpha', '--node', 'basics'], {
+    env: { ...process.env, TUTOR_COURSES_ROOT: root }, input, encoding: 'utf8', timeout: 5000,
+  })
+  const paused = run('q\n')
+  assert.equal(paused.status, 0, paused.stdout + paused.stderr)
+  assert.match(paused.stdout, /任务内容已更新/)
+  let state = store.read('alpha', 'practice-state') as PracticeTaskState
+  assert.equal(state.done, false)
+  assert.equal(state.attempts, 0)
+  assert.equal(state.content_key, practiceTaskKey((store.read('alpha', 'practice') as PracticeTaskFile).tasks[0]))
+  assert.equal(fs.readFileSync(path.join(dir, 'answer.txt'), 'utf8'), '学员已有作答')
+  assert.match(run('r\nq\n').stdout, /未全部通过/)
+  state = store.read('alpha', 'practice-state') as PracticeTaskState
+  assert.equal(state.done, false)
+  assert.deepEqual(state.done_tests, ['file-exists'])
+  assert.deepEqual(store.read('alpha', 'mastery'), mastery)
 })

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { COURSE_ID_PATTERN } from './store.ts'
 import type { UsageSample } from './cost.ts'
 import { bankContent, blindQuestions, contentIssues, contentKey, factProbes, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY,
@@ -15,6 +15,10 @@ export interface QualityCall {
   reply?: string
   error?: string
   usage: UsageSample
+  startedAt?: string
+  elapsedMs?: number
+  splitAfterError?: boolean
+  reusedFrom?: string
 }
 export interface QualityRecord {
   id: string
@@ -30,6 +34,23 @@ export interface QualityRecord {
   facts?: FactCheck[]
   issues?: string[]
   error?: string
+  resumedFrom?: string
+}
+
+export interface PublishedTurn {
+  sessionId: string
+  seq: number
+  node: string
+  reply: string
+  qualityKey: string
+  publishedAt: string
+}
+
+export interface GeneratedCandidate {
+  reply: string
+  inputKey: string
+  status: 'pending' | 'rejected'
+  issues?: string[]
 }
 
 function atomicJson(file: string, value: unknown): void {
@@ -63,13 +84,78 @@ export class QualityStore {
       return this.validApproval(record, input)
     } catch { return false }
   }
+  history(input: ContentInput): QualityRecord[] {
+    const dir = path.join(this.directory, 'reviews')
+    if (!fs.existsSync(dir)) return []
+    const key = contentKey(input)
+    return fs.readdirSync(dir).filter(file => /^[a-f0-9-]{36}\.json$/.test(file)).flatMap(file => {
+      try {
+        const record = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as QualityRecord
+        return record.policy === QUALITY_POLICY && record.key === key && contentKey(record.input) === key ? [record] : []
+      } catch { return [] }
+    }).sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+  }
+  reusable(call: QualityCall, input: ContentInput): boolean {
+    if (!call.reusedFrom) return true
+    try {
+      const original = JSON.parse(fs.readFileSync(this.evidenceFile(call.reusedFrom), 'utf8')) as QualityRecord
+      return original.policy === QUALITY_POLICY && original.key === contentKey(input) && contentKey(original.input) === original.key
+        && original.calls.some(saved => !saved.error && !saved.reusedFrom && saved.sessionId === call.sessionId
+          && saved.role === call.role && saved.prompt === call.prompt && saved.reply === call.reply)
+    } catch { return false }
+  }
+  private candidateFile(prompt: string): string {
+    const key = createHash('sha256').update(`${QUALITY_POLICY}\n${prompt}`).digest('hex')
+    return path.join(this.directory, 'generation', `${key}.json`)
+  }
+  candidate(prompt: string): GeneratedCandidate | undefined {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.candidateFile(prompt), 'utf8')) as GeneratedCandidate
+      if (typeof value.reply !== 'string' || !/^[a-f0-9]{64}$/.test(value.inputKey) || !['pending', 'rejected'].includes(value.status)
+        || (value.status === 'rejected' && (!Array.isArray(value.issues) || !value.issues.length || value.issues.some(issue => typeof issue !== 'string')))) return undefined
+      return value
+    } catch { return undefined }
+  }
+  saveCandidate(prompt: string, value: GeneratedCandidate): void { atomicJson(this.candidateFile(prompt), value) }
+  clearCandidate(prompt: string): void { fs.rmSync(this.candidateFile(prompt), { force: true }) }
+  private publicationDirectory(sessionId: string): string {
+    return path.join(this.directory, 'published', createHash('sha256').update(sessionId).digest('hex'))
+  }
+  publish(input: ContentInput, sessionId: string, seq: number): void {
+    if (input.kind !== 'teaching' || !sessionId || !Number.isSafeInteger(seq) || seq < 0 || !this.approved(input)) throw new Error('不能记录未通过准入或缺少事件编号的讲授发布')
+    const reply = (input.units[0].content as { reply: string }).reply
+    const receipt: PublishedTurn = { sessionId, seq, node: input.units[0].node!, reply, qualityKey: contentKey(input), publishedAt: new Date().toISOString() }
+    const file = path.join(this.publicationDirectory(sessionId), `${seq}.json`)
+    if (fs.existsSync(file)) {
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as PublishedTurn
+      if (saved.reply !== reply) throw new Error('相同课堂事件不能对应不同发布内容')
+      return // 恢复时回放同一事件不重复计作新讲授。
+    }
+    atomicJson(file, receipt)
+  }
+  published(sessionId: string): PublishedTurn[] {
+    const dir = this.publicationDirectory(sessionId)
+    if (!fs.existsSync(dir)) return []
+    return fs.readdirSync(dir).filter(name => /^\d+\.json$/.test(name)).flatMap(name => {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')) as PublishedTurn
+        if (receipt.sessionId !== sessionId || !Number.isSafeInteger(receipt.seq) || receipt.seq < 0 || !/^[a-f0-9]{64}$/.test(receipt.qualityKey)) return []
+        const admission = JSON.parse(fs.readFileSync(path.join(this.directory, 'approved', `${receipt.qualityKey}.json`), 'utf8')) as QualityRecord
+        // 审计历史发布依据当时的批准记录，不能因当前策略升级将已发布历史抹掉。
+        if (admission.status !== 'approved' || admission.key !== receipt.qualityKey || admission.input.kind !== 'teaching'
+          || (admission.input.units[0].content as { reply?: string }).reply !== receipt.reply || admission.input.units[0].node !== receipt.node) return []
+        return [receipt]
+      } catch { return [] }
+    }).sort((a, b) => a.seq - b.seq)
+  }
   private validApproval(record: QualityRecord, input: ContentInput): boolean {
     try {
       validateContentInput(input)
       if (record.status !== 'approved' || record.policy !== QUALITY_POLICY || record.key !== contentKey(input) || contentKey(record.input) !== record.key) return false
       const solver = record.calls.filter(c => c.role === 'solver')
       const reviewers = record.calls.filter(c => c.role === 'reviewer')
-      if (!reviewers.length || record.calls.some(call => !call.sessionId || call.error) || new Set(record.calls.map(call => call.sessionId)).size !== record.calls.length) return false
+      if (!reviewers.length || record.calls.some(call => !call.sessionId || (call.error && !call.splitAfterError)) || new Set(record.calls.map(call => call.sessionId)).size !== record.calls.length) return false
+      if (record.calls.some(call => !this.reusable(call, input))) return false
       if (blindQuestions(input).length && !solver.length) return false
       if (factProbes(input).length && !record.calls.some(call => call.role === 'facts')) return false
       const solutions = parseBlindSolutions({ solutions: record.solutions }, input)

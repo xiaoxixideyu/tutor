@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { ContentGate } from '../plugin/content-gate.ts'
+import { CONTENT_REVIEW_LIMITS, ContentGate } from '../plugin/content-gate.ts'
 import { createAgentChat } from '../plugin/agent-chat.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
 import { FACT_PERSONA, REVIEWER_PERSONA, SOLVER_PERSONA } from '../core/content-quality.ts'
@@ -38,11 +38,12 @@ async function run(ctx: Context, config: Options): Promise<number> {
   let requests = 0
   ctx.on('agent/request', async (_payload, next) => {
     if (++requests > 72) throw new Error('内容评测超过 72 次请求上限')
-    return { ...await next(), maxTokens: config.maxTokens }
+    const request = await next()
+    return { ...request, maxTokens: Math.min(request.maxTokens ?? config.maxTokens, config.maxTokens) }
   })
   let status = 'running'
   const startedAt = new Date().toISOString()
-  const sourceHashes = Object.fromEntries(['../core/content-quality.ts', '../core/quality-store.ts', '../core/rational.ts', '../plugin/content-gate.ts', '../plugin/agent-chat.ts', './content.ts', './content-runner.ts']
+  const sourceHashes = Object.fromEntries(['../core/content-quality.ts', '../core/quality-store.ts', '../core/rational.ts', '../core/model-settings.ts', '../plugin/content-gate.ts', '../plugin/agent-chat.ts', './content.ts', './content-runner.ts']
     .map(file => [file, createHash('sha256').update(fs.readFileSync(new URL(file, import.meta.url))).digest('hex')]))
   function save() {
     const calls = records.flatMap(record => record.calls)
@@ -52,7 +53,7 @@ async function run(ctx: Context, config: Options): Promise<number> {
       .reduce((total, call) => addUsage(total, call.usage), { inputTokens: 0, outputTokens: 0 }), ratesForModel(costs, model)), 0)
     const report = { version: 1, status, startedAt, updatedAt: new Date().toISOString(), fixtures,
       fixtureHash: createHash('sha256').update(fixtureText).digest('hex'), sourceHashes,
-      settings: { repeats: config.repeats, maxTokens: config.maxTokens, independentSessions: true, tools: false, cached: false },
+      settings: { repeats: config.repeats, maxTokens: config.maxTokens, reviewLimits: CONTENT_REVIEW_LIMITS, thinking: process.env.TUTOR_LLM_THINKING ?? 'provider-default', independentSessions: true, tools: false, cached: false },
       summary: summarizeContent(fixtures, runs, config.repeats), models, assemblies, usage,
       cost: { currency: costs.currency, estimated, actualBill: null, basis: '含失败尝试的 Harness 已报告用量，按配置估算；非账单。运行中未落盘的请求用量可能缺失。' }, runs }
     const file = path.join(config.outputDir, 'report.json')
@@ -69,11 +70,15 @@ async function run(ctx: Context, config: Options): Promise<number> {
       const start = Date.now()
       // 每轮每样本使用不同目录；不能通过上轮准入缓存冒充独立重复验证。
       const store = new QualityStore(path.join(config.outputDir, 'cases'), `case-${repeat}-${index}`)
+      const recordProgress = (record: QualityRecord) => {
+        if (!records.some(previous => previous.id === record.id)) records.push(record)
+        entry.review = record.review; entry.evidenceFile = store.evidenceFile(record.id); save()
+      }
       const gate = new ContentGate(store, async (_role, isolatedSystemPrompt) => {
-        const chat = await createAgentChat(ctx, { isolatedSystemPrompt })
+        const chat = await createAgentChat(ctx, { isolatedSystemPrompt, ...CONTENT_REVIEW_LIMITS })
         if (!chat) throw new Error('不能创建审查会话')
         return chat
-      }, record => { records.push(record); entry.review = record.review; entry.evidenceFile = store.evidenceFile(record.id); save() })
+      }, recordProgress, { onProgress: recordProgress })
       try { const result = await gate.review(item.input); entry.approved = result.approved; entry.cached = result.cached }
       catch (error) { entry.error = error instanceof Error ? error.message : String(error) }
       entry.elapsedMs = Date.now() - start; save()

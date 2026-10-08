@@ -32,6 +32,14 @@ describe('whenIdleWithin', () => {
 describe('whenIdleOrStalled', () => {
   const noProgress = () => 0
 
+  it('持续输出也受总时限约束', async () => {
+    let progress = 0
+    const tick = setInterval(() => progress++, 2)
+    try {
+      await assert.rejects(whenIdleOrStalled(() => new Promise<void>(() => {}), () => progress, 1000, 5, 25), /总时限/)
+    } finally { clearInterval(tick) }
+  })
+
   it('idle 先落地则正常返回', async () => {
     await whenIdleOrStalled(() => new Promise<void>((resolve) => setTimeout(resolve, 10)), noProgress, 1000, 50)
   })

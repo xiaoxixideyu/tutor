@@ -1,5 +1,7 @@
 // 在独立进程中运行正式 runner，模型边界用确定性响应替代；测试展示/落盘的位置。
 import type { Context } from '@deepseek-ai/cordis'
+import fs from 'node:fs'
+import path from 'node:path'
 import { CourseStore } from '../../src/core/store.ts'
 import { requiredAssertions, type ContentInput } from '../../src/core/content-quality.ts'
 import { apply as exam } from '../../src/plugin/exam-runner.ts'
@@ -31,6 +33,11 @@ function agent(resumed: boolean) {
         reply = json({ claims: parsed.claims.map((q: { id: string }) => ({ id: q.id, verdict: 'pass', explanation: '固定断言核查', arithmetic: [] })) })
       } else if (parsed?.questions) {
         reply = json({ solutions: parsed.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '固定解答', arithmetic: [] })) })
+      } else if (mode === 'learn' && prompt.startsWith('任务：为课程《') && prompt.includes('备课。')) {
+        fs.appendFileSync(path.join(root, 'prep-count.txt'), 'prepared\n')
+        const question = { question: '1+1=?', choices: ['2', '3', '4', '5'], answer: 'A' }
+        reply = json({ node: 'topic', title: '加法', hook: '开始', structure: ['加法'], example: '1+1=2',
+          practice: [question], quiz: [question, { ...question, question: '1+1 的结果？' }] })
       } else {
         generation++
         const approved = behavior !== 'fail' && generation === (mode === 'learn' ? 3 : 4)
@@ -38,7 +45,7 @@ function agent(resumed: boolean) {
         if (mode === 'exam') reply = json({ milestone: 'm1', questions: Array.from({ length: 4 }, (_, i) => ({
           id: `q${i}`, node: 'topic', type: 'objective', question: `${text} 第${i}题`, choices: ['2', '3', '4', '5'], answer: 'A', points: 1,
         })) })
-        else if (mode === 'practice-gen') reply = json({ tasks: [{ id: 'topic-task', node: 'topic', title: text, prompt: text, tests: [{ name: 'test', command: 'true' }] }] })
+        else if (mode === 'practice-gen') reply = json({ edits: [{ path: '/0/prompt', before: 'REJECT_CANDIDATE 旧内容', after: text }] })
         else reply = text
       }
       events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: reply }] } } },

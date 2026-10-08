@@ -14,6 +14,13 @@ import { createContentGate, generateApproved, generateApprovedTeaching, type Con
 
 const name = 'tutor-learn-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
+
+async function publishTeaching(gate: ContentGate, chat: AgentChat, turn: ApprovedTeachingTurn, node: string, profile: Profile, map: KnowledgeMap, text: string): Promise<void> {
+  const seq = chat.lastReplySeq?.()
+  if (seq === undefined || seq === null) throw new Error('缺少课堂事件编号，无法记录发布')
+  await new Promise<void>((resolve, reject) => process.stdout.write(text, error => error ? reject(error) : resolve()))
+  gate.store.publish(teachingContent(turn, node, profile, map), chat.sessionId, seq)
+}
 const Config = z.object({ courseId: z.string().required() })
 
 interface StoreView {
@@ -55,6 +62,9 @@ async function startFreshLesson(
       if (!data.ok) return data
       return validateLessonDraft(data.value, node, cap)
     }, gate, value => lessonContent(value, profile, map))
+    // 首次开课先保存已批准的备课；讲授调用失败后无需重新出题与审查。
+    // 已有课堂断点由后续批准的新讲授替换，不能在尝试恢复时提前覆盖。
+    if (!store.has(config.courseId, 'lesson')) store.write(config.courseId, 'lesson', { node, started_at: today(), draft })
     out.write('备课完成并通过审查，准备开课。\n')
   }
 
@@ -71,7 +81,7 @@ async function startFreshLesson(
     draft,
     approved_turn: turn,
   })
-  out.write(`\n${turn.reply}`)
+  await publishTeaching(gate, teachChat, turn, node, profile, map, `\n${turn.reply}`)
   return { chat: teachChat, draft, turn }
 }
 
@@ -117,17 +127,17 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   if (store.has(config.courseId, 'lesson')) {
     const lesson = store.read(config.courseId, 'lesson') as LessonState
     const draftValid = validateLessonDraft(lesson.draft, lesson.node, lessonStructureCap(profile.daily_minutes)).ok
-    if (draftValid && lesson.node === node && lesson.session_id) {
+    if (draftValid && lesson.node === node) {
       const admitted = await gate.review(lessonContent(lesson.draft, profile, map))
       if (admitted.approved) {
         draft = lesson.draft
-        if (lesson.approved_turn && (await gate.review(teachingContent(lesson.approved_turn, node, profile, map))).approved) {
+        if (lesson.approved_turn && lesson.session_id && (await gate.review(teachingContent(lesson.approved_turn, node, profile, map))).approved) {
           approvedTurn = lesson.approved_turn
           const adopted = await createAgentChat(ctx, { resumeSessionId: lesson.session_id })
           const replay = adopted ? replayApprovedReply(adopted.lastReply(), approvedTurn) : null
           if (adopted && replay !== null) {
             chat = adopted; resumed = true
-            out.write(`从上次断点继续本课（${node}）。\n\n${replay}`)
+            await publishTeaching(gate, chat, approvedTurn, node, profile, map, `从上次断点继续本课（${node}）。\n\n${replay}`)
           }
         }
       }
@@ -214,7 +224,8 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     approvedTurn = await generateApprovedTeaching(chat, command, gate, { node, profile, map, learnerMessage: command, previousReply: approvedTurn.reply })
     store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: today(), draft, approved_turn: approvedTurn })
     approvedTurns.push(approvedTurn)
-    out.write(`\n${approvedTurn.reply}\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
+    await publishTeaching(gate, chat, approvedTurn, node, profile, map, `\n${approvedTurn.reply}`)
+    out.write(`\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
   }
 }
 

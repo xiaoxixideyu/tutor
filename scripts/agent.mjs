@@ -24,10 +24,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'yaml'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
+import { renderModelSettings } from '../src/core/model-settings.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const dshHome = path.join(root, 'data', 'dsh-home')
+const dshHome = path.resolve(process.env.DSH_HOME ?? path.join(root, 'data', 'dsh-home'))
+const workspace = path.resolve(process.env.TUTOR_WORKSPACE ?? root)
 fs.mkdirSync(dshHome, { recursive: true })
+fs.mkdirSync(workspace, { recursive: true })
 
 // .env：模型接入三要素（base_url/api_key/model）的单一来源；不覆盖已有环境变量
 const env = { ...process.env, DSH_HOME: dshHome }
@@ -54,7 +57,7 @@ function renderTemplate(name, output) {
       return varName === 'TUTOR_LLM_BASE_URL' ? value.replace(/\/+$/, '') : value
     })
   const dst = path.join(dshHome, output)
-  fs.writeFileSync(dst, rendered)
+  fs.writeFileSync(dst, name === 'settings.yaml' ? renderModelSettings(rendered, env) : rendered)
   return dst
 }
 
@@ -114,7 +117,7 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0
   const viewResult = spawnSync(resolveRuntimeNode(), [script, ...argv], {
     env: { ...env, TUTOR_COURSES_ROOT: env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses') },
     stdio: 'inherit',
-    cwd: root,
+    cwd: workspace,
   })
   process.exit(viewResult.status ?? 1)
 }
@@ -190,6 +193,6 @@ const innerArgs = runnerMode ? [] : argv
 const result = spawnSync(resolveRuntimeNode(), [bin, '--profile', 'headless', ...patchArgs, ...runnerArgs, ...innerArgs], {
   env,
   stdio: 'inherit',
-  cwd: root,
+  cwd: workspace,
 })
 process.exit(result.status ?? 1)
