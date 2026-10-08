@@ -267,6 +267,27 @@ it('强断言定位到具体分句，缺漏反例核查时不能批准；干扰�
   assert.deepEqual(requiredAssertions(copy, copy.units[0]), [])
 })
 
+it('“才能”等必要条件也先交给独立反例检查，不能被一般审查漏过', async t => {
+  const { store } = setup(t)
+  const turn = teachingContent({ reply: '副本长度要和源切片一致，copy 才能把元素全部搬过去。', learnerMessage: '请继续', previousReply: '' }, 'die', profile, map)
+  assert.deepEqual(requiredAssertions(turn, turn.units[0]).map(a => a.quote), ['副本长度要和源切片一致，copy 才能把元素全部搬过去'])
+  const gate = new ContentGate(store, async role => {
+    assert.equal(role, 'facts', '已有反例时不应继续尝试一般审查')
+    return mockChat(prompt => {
+      const { claims } = JSON.parse(prompt)
+      assert.match(claims[0].quote, /副本长度要和源切片一致，copy 才能/)
+      assert.match(claims[0].conditionCheck, /A 不成立但 B 仍成立/)
+      assert.match(claims[0].surrounding, /副本长度要和源切片一致/)
+      return json({ claims: claims.map((claim: { id: string }) => ({ id: claim.id, verdict: 'fail',
+        explanation: '源长度3、目标长度4也能复制全部源元素，等长不是必要条件', arithmetic: [] })) })
+    }, 'necessary-condition-check')
+  })
+  assert.equal((await gate.review(turn)).approved, false)
+  assert.equal(store.approved(turn), false)
+  const other = teachingContent({ reply: '等长才可复制；等长才会复制；等长才算完整复制。', learnerMessage: '', previousReply: '' }, 'die', profile, map)
+  assert.equal(requiredAssertions(other, other.units[0]).length, 3)
+})
+
 it('长内容分批审查仍需全量覆盖，后续批次失败不会留下有效准入', async t => {
   let reviews = 0
   const { gate, store, records } = setup(t, content => ++reviews === 2 ? { units: [] } : reviewFor(content))

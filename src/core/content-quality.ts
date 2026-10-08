@@ -97,23 +97,34 @@ export function canonicalJson(value: unknown): string {
 export function contentKey(input: ContentInput): string {
   return createHash('sha256').update(canonicalJson({ policy: QUALITY_POLICY, solver: SOLVER_PERSONA, reviewer: REVIEWER_PERSONA, facts: FACT_PERSONA,
     ...(input.kind === 'map' ? { contract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { contract: TEACHING_REVIEW_CONTRACT }
-      : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : {}), input })).digest('hex')
+      : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : {}),
+    ...(factProbes(input).some(claim => claim.conditionCheck) ? { conditionCheck: NECESSARY_CONDITION_CONTRACT } : {}), input })).digest('hex')
 }
 
 export const MAP_REVIEW_CONTRACT = '本项目每个知识地图节点会启动一节实际课堂，因此一个 node 就是一节课，不是课内讲解要点。outline.nodes 是完整节点清单；明确要求 N 节课时必须恰好 N 个节点，不能把多出来的节点解释成同一节内的小知识点。edges 每对是 [知识点, 前置知识点]。'
 export const TEACHING_REVIEW_CONTRACT = '这是单轮课堂对话，不是整节课的教案。reply 不必在一轮内覆盖当前节点的全部目标；缺少本节其余步骤本身不是越界或知识错误。为回答学员当前问题或澄清本节概念，可简短回顾、比较原课程范围内的必要前置概念；不要求每轮重复当前节点标题中的全部方法。仍禁止提前教授或考查下一课的新方法、扩充学习活动及引入课程明确排除项。'
 export const PRACTICE_REVIEW_CONTRACT = '实践测试必须拒绝常见错误答案。主动构造数值前后多一位、分母错误、集合漏项或多项等反例，逐条推演命令是否误通过。expect_output_contains 和未加 -x 或行边界的 grep 只做子串匹配：例如正确分数的前缀会匹配错误分母，要求的容量也会匹配多一位数字。若末条行为检查仅靠这类子串证明完整答案正确，应 fail 并给出具体反例。验证完整值应在命令内按完整行、严格结构或数值比较，并保留被测程序失败的退出状态；可用 grep -qxF 或等效的有边界检查。源代码关键词查找和无数值的成功标记可用子串，不能把它们当作行为正确的全部证据。验收依据题目明确给出的接口；固定 main 输出任务可以严格比较所要求的完整输出及顺序。当前是练习自检，不是抗作弊系统，不要求证明任意程序的内部实现或抵御有意伪造全部输出，也不能为此要求新增函数接口、活动或未学知识。'
 
-export function requiredAssertions(input: ContentInput, unit: ContentUnit): { id: string; quote: string; path: string }[] {
-  const found: { id: string; quote: string; path: string }[] = []
+const NECESSARY_CONDITION = /才能|才可|才会|才算/
+export const NECESSARY_CONDITION_CONTRACT = '按完整条件句核查逻辑方向：“A，才 B”声称 A 是 B 的必要条件，即 B 成立要求 A 成立。主动寻找 A 不成立但 B 仍成立的反例；仅证明 A 成立时 B 也成立，不能支持必要条件。不能把“才”删掉改读成“此时可以”，也不能将限定前置条件的“才”误读成限定后面动作的唯一性。若属于被明确否定的误区或任务要求，按上下文辨别；若实际声称必要性，就在 explanation 写明所检查的条件及反例或理由。'
+interface RequiredAssertion { id: string; quote: string; path: string; conditionCheck?: string }
+export function requiredAssertions(input: ContentInput, unit: ContentUnit): RequiredAssertion[] {
+  const found: RequiredAssertion[] = []
   const content = unit.content as Record<string, unknown>
   // 选择题干扰项、历史发言不作为教师认可的事实；题干本身另由盲解检查。
   const source = unit.question ? { answer: content.answer, accept: content.accept, keywords: content.keywords }
     : input.kind === 'teaching' ? { reply: content.reply } : unit.content
   function visit(value: unknown, trail: string): void {
     if (typeof value === 'string') {
-      for (const quote of value.split(/[，；。！？\n]/).map(s => s.trim()).filter(Boolean)) {
-        if (/必须|只要|只有|唯一|一定|必然|证明|总是|绝不|\b(always|must|only|prove)\b/i.test(quote)) found.push({ id: `a${found.length}`, quote, path: trail })
+      for (const sentence of value.split(/[；。！？\n]/).map(s => s.trim()).filter(Boolean)) {
+        // “A，才 B”的前提与结论不能按逗号切开，否则容易只核查 B 或倒置逻辑方向。
+        if (NECESSARY_CONDITION.test(sentence)) {
+          found.push({ id: `a${found.length}`, quote: sentence, path: trail, conditionCheck: NECESSARY_CONDITION_CONTRACT })
+          continue
+        }
+        for (const quote of sentence.split('，').map(s => s.trim()).filter(Boolean)) {
+          if (/必须|只要|只有|唯一|一定|必然|证明|总是|绝不|\b(always|must|only|prove)\b/i.test(quote)) found.push({ id: `a${found.length}`, quote, path: trail })
+        }
       }
     } else if (Array.isArray(value)) value.forEach((entry, i) => visit(entry, `${trail}[${i}]`))
     else if (value && typeof value === 'object') for (const [key, entry] of Object.entries(value)) visit(entry, trail ? `${trail}.${key}` : key)
@@ -122,7 +133,7 @@ export function requiredAssertions(input: ContentInput, unit: ContentUnit): { id
   return found
 }
 
-export function factProbes(input: ContentInput): { id: string; quote: string; path: string; surrounding: unknown }[] {
+export function factProbes(input: ContentInput): (RequiredAssertion & { surrounding: unknown })[] {
   return input.units.flatMap(unit => requiredAssertions(input, unit).map(claim => ({ ...claim, id: `${unit.id}/${claim.id}`,
     surrounding: input.kind === 'teaching' ? (unit.content as ApprovedTeachingTurn).reply : unit.content })))
 }

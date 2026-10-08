@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "provenance": "必要条件修复后的正向对照：真实必要条件和明确撤回错误的讲授；已知回归，不是留出集。",
+  "cases": [
+    {
+      "id": "go-copy-necessary-length-good",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "reply": "目标切片的长度至少达到源切片的长度，copy 才能复制源切片的全部元素。这是因为复制数量等于两者长度的较小值。长度相同是本课推荐做法，目标更长也能复制全部源元素。",
+              "learnerMessage": "请说明完整复制的长度条件。",
+              "previousReply": "正在学习用 make + copy 创建 []int 副本。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "真正的必要条件允许等长和更长，不能因包含“才能”而拒绝"
+      },
+      "provenance": "从实际误放行修复提炼的正确必要条件，同样使用“才能”"
+    },
+    {
+      "id": "go-copy-correction-good",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "reply": "我之前说“副本长度要和源切片一致，copy 才能把元素全部搬过去”，这句话不准确。等长不是必要条件：源长度为3、目标长度为4时，copy 也能复制全部3个源元素。正确条件是目标长度至少达到源长度；本课采用等长的新切片，再用 copy 搬入元素值。",
+              "learnerMessage": "请说明完整复制的长度条件。",
+              "previousReply": "正在学习用 make + copy 创建 []int 副本。"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "明确撤回被引用的错误，并给出反例和正确条件，不能把待纠正的引文当作教师仍认可的事实"
+      },
+      "provenance": "课堂应明确撤回原错误；此正向对照包含被否定的原句、反例与正确规则"
+    }
+  ]
+}

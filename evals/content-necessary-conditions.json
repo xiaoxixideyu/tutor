@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "provenance": "Go 第二节真实讲授中发现的必要条件措辞误放行；原始批准记录 09ee79da-0480-4284-8325-b4706879e891 保留。属于已知回归，非留出集。",
+  "cases": [
+    {
+      "id": "go-copy-only-if-live-bad",
+      "provenance": "逐字保留实际发布的整段错误讲授及上下文",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "reply": "答得准，关键是抓住了\"make 只分配、不搬运\"这一点：make 负责造出一块新数组并把元素置为零值，`[0 0 0]` 正是\"还没搬数据\"的直接证据。你把初始化和赋值这两步分开了，这正是上一节最容易混的地方。\n\n**要点2：copy 的规则**\n\n```go\nn := copy(dst, src)\n```\n\ncopy 把元素**值**从 src 搬到 dst，实际复制 `min(len(dst), len(src))` 个元素，返回值 `n` 就是这次真正复制的个数。所以做完整副本的常见写法是：\n\n```go\ndst := make([]int, len(src))\nn := copy(dst, src)\n```\n\n此时 `n` 等于 `len(src)`。把返回值接住打印出来，是核对\"确实搬够了\"的好习惯。另外留意：`make([]int, n)` 里的 n 是**长度**，不是容量——副本长度要和源切片一致，copy 才能把元素全部搬过去。\n\n接着预测，别急着跑：\n\n```go\nsrc := []int{1, 2, 3, 4}\ndst := make([]int, 2)\nn := copy(dst, src)\nfmt.Println(n, dst)\n```\n\n问题：这两行分别打印什么？`n` 为什么不是 4？",
+              "learnerMessage": "我预测输出 [0 0 0]，实际运行也得到 [0 0 0]。make 创建了长度为3的新切片和底层数组，int 元素先初始化为0；现在还没有调用 copy，所以 a 的 5、6、7 没有复制到 b。",
+              "previousReply": "上一节我们确认了 `dst := src` 只是让两个切片指向同一个底层数组，改一个另一个也变。今天解决一个具体需求：我要一份真正独立的副本，改副本时源切片纹丝不动。\n\n**要点1：独立的关键在于位置不重叠**\n\n`dst := src` 和 `dst := src[:]` 都只是新建了一个切片头（记录起点和长度），两个切片指向同一块数组的同一段，改谁都一起变。\n\n推荐做法是：\n\n```go\ndst := make([]int, len(src))\n```\n\n它分配一块**全新的**底层数组，长度等于 `len(src)`，元素先被置为零值。所以刚 make 完，`dst` 还是全 0，数据要等 copy 搬过来。这里要分清：用 make 新分配数组是推荐做法，不是唯一合法做法——只要目标位置与源不重叠，改副本同样不影响源。\n\n先预测再跑，看看这一步：\n\n```go\na := []int{5, 6, 7}\nb := make([]int, len(a))\nfmt.Println(b)\n```\n\n问题：这行打印什么？为什么不是 `[5 6 7]`？"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "目标长度大于源长度也能完整复制；原文用“才能”错误地把等长说成必要条件"
+      }
+    },
+    {
+      "id": "go-copy-only-if-minimal-bad",
+      "provenance": "从实际错误讲授提取必要条件错误，移除其他内容",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "reply": "副本长度要和源切片一致，copy 才能把元素全部搬过去。",
+              "previousReply": "正在讲解用 make + copy 创建 []int 的独立副本。",
+              "learnerMessage": "怎样才能完整复制？"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": false,
+        "rationale": "不能因没有“必须”一词就漏掉“才能”声明的必要条件"
+      }
+    },
+    {
+      "id": "go-copy-sufficient-length-good",
+      "provenance": "明确至少等长及新分配副本的正确对照",
+      "input": {
+        "kind": "teaching",
+        "context": {
+          "profile": {
+            "goal": "用严格两节各15分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组，第二节只讲用 make + copy 创建独立副本和修改验证；不学 append、扩容、并发或嵌套切片",
+            "daily_minutes": 15,
+            "background": "会 Go 变量、循环和函数，但容易把切片赋值误认为复制",
+            "style": "先预测短代码输出，再运行核对",
+            "requests": [
+              "我想用严格两节各 15 分钟的微课理解 Go 的 []int 切片：第一节只讲赋值、切片表达式与共享底层数组；第二节只讲用 make + copy 创建独立副本和修改验证。暂不学 append、扩容、并发或嵌套切片。我会 Go 变量、循环和函数，但容易把切片赋值误认为复制。每天 15 分钟，没有截止日期，喜欢先预测短代码输出再运行核对。请把严格两节范围和排除项保留到目标里。信息足够，可直接生成档案。"
+            ]
+          },
+          "nodes": [
+            {
+              "id": "slice-assignment-sharing",
+              "title": "第一节：切片赋值、切片表达式与共享底层数组",
+              "summary": "用短代码预测-运行的方式讲清 []int 变量赋值只复制切片头（指针、长度、容量）而非底层数组，切片表达式 s[low:high] 同样指向原数组的同一段存储，因此通过任一切片修改元素会被另一变量看到，并对照数组赋值做区分、用 &s[0] 或元素写读验证共享关系。"
+            },
+            {
+              "id": "make-copy-independent-copy",
+              "title": "第二节：用 make + copy 创建独立副本并做修改验证",
+              "summary": "讲清用 make([]int, len(s)) 分配新底层数组、copy(dst, src) 只复制 min(len) 个元素，从而得到与源切片互不影响的副本，并设计修改副本元素后核对源切片不变的验证实验，同时说明容量/长度与 copy 返回值等易错点。"
+            }
+          ],
+          "activeNodes": [
+            "make-copy-independent-copy"
+          ]
+        },
+        "units": [
+          {
+            "id": "reply",
+            "node": "make-copy-independent-copy",
+            "content": {
+              "reply": "copy 按两个切片长度的较小值复制。复制源切片的全部元素只要求目标长度至少达到源长度，长度相同是常见写法，目标更长也可以。本课采用 dst := make([]int, len(src)); copy(dst, src)，然后修改 dst[0]，检查 src[0] 保持原值，验证这个新分配的副本不与源共享元素存储。",
+              "previousReply": "正在讲解用 make + copy 创建 []int 的独立副本。",
+              "learnerMessage": "怎样创建副本？"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "approved": true,
+        "rationale": "至少等长是完整复制的条件，等长是常见写法；修改验证不扩大微课范围"
+      }
+    }
+  ]
+}
