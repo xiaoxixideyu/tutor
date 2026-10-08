@@ -129,3 +129,25 @@ it('首次讲授失败仍保存已批准备课，再次开课复用教案且不�
   assert.doesNotMatch(failed.stdout + resumed.stdout, /REJECT_CANDIDATE/)
   assert.equal((store.read('alpha', 'lesson') as LessonState).approved_turn?.reply, 'APPROVED_CONTENT')
 })
+
+it('替换已拒绝旧教案后，首段讲授失败仍保留新教案，恢复不重复备课', t => {
+  const { root, store, run } = fixture(t)
+  const question = { question: '1+1=?', choices: ['2', '3', '4', '5'], answer: 'A' }
+  store.write('alpha', 'lesson', { node: 'topic', session_id: 'old', started_at: '2026-10-08',
+    draft: { node: 'topic', title: 'REJECT_CANDIDATE 旧教案', hook: '旧开场', structure: ['加法'], example: '1+1=2',
+      practice: [question], quiz: [question, { ...question, question: '1+1 的结果？' }] },
+    approved_turn: { reply: '旧教案的历史回复', learnerMessage: '开始', previousReply: '' } })
+  const mastery = store.read('alpha', 'mastery')
+  const failed = run('learn', 'fail')
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr)
+  const prepared = store.read('alpha', 'lesson') as LessonState
+  assert.equal(prepared.draft.title, '加法')
+  assert.equal(prepared.session_id, undefined)
+  assert.equal(prepared.approved_turn, undefined)
+  assert.deepEqual(store.read('alpha', 'mastery'), mastery)
+  const resumed = run('learn', 'repair', '/exit\n')
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
+  assert.equal(fs.readFileSync(path.join(root, 'prep-count.txt'), 'utf8'), 'prepared\n')
+  assert.deepEqual((store.read('alpha', 'lesson') as LessonState).draft, prepared.draft)
+  assert.doesNotMatch(failed.stdout + resumed.stdout, /REJECT_CANDIDATE|旧教案的历史回复/)
+})

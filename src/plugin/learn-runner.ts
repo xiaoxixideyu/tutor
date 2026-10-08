@@ -62,9 +62,9 @@ async function startFreshLesson(
       if (!data.ok) return data
       return validateLessonDraft(data.value, node, cap)
     }, gate, value => lessonContent(value, profile, map))
-    // 首次开课先保存已批准的备课；讲授调用失败后无需重新出题与审查。
-    // 已有课堂断点由后续批准的新讲授替换，不能在尝试恢复时提前覆盖。
-    if (!store.has(config.courseId, 'lesson')) store.write(config.courseId, 'lesson', { node, started_at: today(), draft })
+    // 没有可恢复的已批准讲授时，先保存新教案；被拒旧教案不能阻止落盘。
+    // 可用的已批准课堂断点仍由后续新讲授替换，不能在尝试恢复时提前覆盖。
+    if (!previousTurn) store.write(config.courseId, 'lesson', { node, started_at: today(), draft })
     out.write('备课完成并通过审查，准备开课。\n')
   }
 
