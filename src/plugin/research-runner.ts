@@ -204,7 +204,7 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
   const pending = config.nodeId ? [config.nodeId] : pendingResearchNodes(map, profile, progress)
   if (pending.length === 0) {
     const unverified = map.nodes.filter(node => !node.verified).length
-    out.write(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个来源不足，仍保持待验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
+    out.write(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个仍待来源交叉验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
     await chat.flush()
     process.stdin.destroy()
   exit(0)
@@ -247,7 +247,7 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
       else if (event.type === 'failed') out.write(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
       else {
         const verified = map.nodes.find(node => node.id === event.node)?.verified
-        out.write(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源不足，保持待验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
+        out.write(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源待交叉验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
       }
     },
   })

@@ -122,7 +122,7 @@ async function renderStatus(id) {
       <td>${esc(n.status)}</td><td>${esc(n.id)}</td><td>${esc(n.title ?? '')}</td>
       <td>${n.score !== undefined ? esc(n.score) : ''}</td>
       <td>${n.review_due !== undefined ? `复习→${esc(n.review_due)}` : ''}</td>
-      <td>${n.researchStatus ? `${{ pending: '待教研', saved: '已保存 · 来源待补', verified: '来源已验证' }[n.researchStatus]} <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research&node=${encodeURIComponent(n.id)}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
+      <td>${n.researchStatus ? `${{ pending: '待教研', saved: '已保存 · 待交叉验证', verified: '来源已验证' }[n.researchStatus]} <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research&node=${encodeURIComponent(n.id)}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
       <td>${p.hasPlan ? `<button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}&node=${encodeURIComponent(n.id)}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
     </tr>`
   }).join('')
