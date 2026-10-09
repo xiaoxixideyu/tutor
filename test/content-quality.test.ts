@@ -83,6 +83,109 @@ it('地图内容或范围变化不能借用旧通过结论；旧证据被篡改�
   assert.equal(store.approved(extended), false)
 })
 
+it('局部修复被拒地图复用其他完整检查，原拒绝证据不改写且新批准覆盖全图', async t => {
+  const { gate, store, requests, records } = setup(t, content => {
+    const review = reviewFor(content)
+    for (const unit of review.units) if (JSON.stringify(content.units.find(item => item.id === unit.id)).includes('待修复摘要')) unit.correctness = 'uncertain'
+    return review
+  })
+  const course: KnowledgeMap = { verified: false, nodes: Array.from({ length: 6 }, (_, i) => ({ id: `n${i}`, title: `节点${i}`, summary: i ? '稳定摘要' : '待修复摘要' })), edges: [] }
+  const initial = mapContent(course, profile)
+  assert.equal((await gate.review(initial)).approved, false)
+  const original = records()[0]
+  const evidence = fs.readFileSync(store.evidenceFile(original.id), 'utf8')
+  const baseline = requests.length
+  course.nodes[0].summary = '有据修复摘要'
+  const repaired = mapContent(course, profile)
+  assert.equal((await gate.review(repaired)).approved, true)
+  assert.equal(requests.length - baseline, 1, '只重新核查内容改变的批次')
+  const approved = records().find(record => record.key === contentKey(repaired))!
+  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 3)
+  assert.equal(approved.review!.units.length, repaired.units.length)
+  assert.equal(store.approved(initial), false)
+  assert.equal(store.approved(repaired), true)
+  assert.equal(fs.readFileSync(store.evidenceFile(original.id), 'utf8'), evidence)
+  fs.rmSync(store.evidenceFile(original.id))
+  assert.equal(store.approved(repaired), false, '来自拒绝稿的原检查丢失后也不能继续批准')
+})
+
+it('只修改其他批次不能重抽未变的拒绝或存疑结论', async t => {
+  for (const verdict of ['fail', 'uncertain'] as const) await t.test(verdict, async t => {
+    const { gate, store, requests, records } = setup(t, content => {
+      const review = reviewFor(content)
+      for (const unit of review.units) if (unit.id === 'node:n0') { unit.correctness = verdict; unit.explanation = '尚未修正的内容问题' }
+      return review
+    })
+    const course: KnowledgeMap = { verified: false, nodes: Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, title: `节点${i}` })), edges: [] }
+    assert.equal((await gate.review(mapContent(course, profile))).approved, false)
+    const original = records()[0]
+    const before = requests.length
+    course.nodes[2].summary = '另一节点新增摘要'
+    const changed = mapContent(course, profile)
+    const result = await gate.review(changed)
+    assert.equal(result.approved, false)
+    assert.match(result.issues.join(''), /node:n0.*尚未修正/)
+    assert.equal(requests.length - before, 1)
+    assert.ok(records().find(record => record.key === contentKey(changed))!.calls.some(call => call.reusedFrom === original.id && call.prompt.includes('node:n0')))
+    assert.equal(store.approved(changed), false)
+  })
+})
+
+it('中断地图改稿后可复用已落盘回复；未完整解析的批次仍须补查', async t => {
+  const { gate, store, records } = setup(t, content => content.units.some(unit => unit.id === 'node:n2') ? { units: [] } : reviewFor(content))
+  const course: KnowledgeMap = { verified: false, nodes: Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, title: `节点${i}` })), edges: [] }
+  await assert.rejects(gate.review(mapContent(course, profile)), /未完成/)
+  const original = records()[0]
+  assert.equal(original.status, 'error')
+  // 模拟成功回复已保存、汇总尚未保存的进程中断。
+  original.review!.units = original.review!.units.filter(unit => unit.id === 'outline')
+  store.save(original)
+  course.resources = [{ node: 'n0', title: '新增资料', url: 'https://example.org/a' }]
+  const changed = mapContent(course, profile)
+  const requested: string[][] = []
+  let serial = 0
+  const resumed = new ContentGate(store, async () => mockChat(prompt => {
+    const content = JSON.parse(prompt).content as ContentInput
+    requested.push(content.units.map(unit => unit.id))
+    return json(reviewFor(content))
+  }, `resumed-${++serial}`))
+  assert.equal((await resumed.review(changed)).approved, true)
+  assert.deepEqual(requested, [['node:n2', 'node:n3'], ['resource:0']])
+  assert.equal(store.approved(changed), true)
+  const approved = records().find(record => record.status === 'approved')!
+  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 2)
+  assert.equal(approved.review!.units.length, changed.units.length)
+})
+
+it('跨拒绝稿复用重新核对原回复、事实汇总和审查汇总，不借用损坏证据', async t => {
+  const { gate, store, records } = setup(t, content => {
+    const review = reviewFor(content)
+    for (const unit of review.units) if (JSON.stringify(content.units.find(item => item.id === unit.id)).includes('待修复')) unit.correctness = 'fail'
+    return review
+  })
+  const course: KnowledgeMap = { verified: false, nodes: Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, title: `节点${i}`, summary: i === 0 ? '练习要求必须投掷一枚公平骰子' : i === 2 ? '待修复' : '稳定摘要' })), edges: [] }
+  assert.equal((await gate.review(mapContent(course, profile))).approved, false)
+  const original = records()[0]
+  course.nodes[2].summary = '修复摘要'
+  const repaired = mapContent(course, profile)
+  assert.equal((await gate.review(repaired)).approved, true)
+  assert.equal(store.approved(repaired), true)
+  for (const damage of [
+    (record: QualityRecord) => { record.facts![0].verdict = 'fail' },
+    (record: QualityRecord) => { record.review!.units.find(unit => unit.id === 'node:n0')!.scope = 'fail' },
+    (record: QualityRecord) => { record.calls.find(call => call.role === 'facts')!.reply = json({ claims: [] }) },
+    (record: QualityRecord) => { record.review!.units = record.review!.units.filter(unit => unit.id !== 'outline') },
+    (record: QualityRecord) => { record.key = '0'.repeat(64) },
+  ]) {
+    const damaged = structuredClone(original)
+    damage(damaged)
+    fs.writeFileSync(store.evidenceFile(original.id), JSON.stringify(damaged))
+    assert.equal(store.approved(repaired), false)
+    fs.writeFileSync(store.evidenceFile(original.id), JSON.stringify(original))
+    assert.equal(store.approved(repaired), true)
+  }
+})
+
 it('分批审查资料时提供完整课程节点和当前资料归属，避免把片段当成空地图', async t => {
   const { gate, requests } = setup(t, content => {
     const review = reviewFor(content)
