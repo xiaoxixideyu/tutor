@@ -86,13 +86,17 @@ function answerText(q: Question): string {
   return text ? formatChoice(text, idx) : letter
 }
 
-async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEngine, map: KnowledgeMap): Promise<void> {
+async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEngine, map: KnowledgeMap,
+  prepareNode: (node: string) => Promise<void>): Promise<void> {
   const out = process.stdout
   const readAnswer = createLineReader(process.stdin)
   const titles = new Map(map.nodes.map((n) => [n.id, n.title]))
-  while (true) {
-    if (!engine.advanceNode()) break
-    const node = engine.state.current_node
+  for (const node of engine.state.node_order) {
+    if (node in engine.state.scores) continue
+    // 缺题不能被当作已完成跳过。先准备当前节点，首题无需等待整门课出题。
+    await prepareNode(node)
+    engine.state.current_node = node
+    store.write(courseId, 'assessment', engine.state)
     out.write(`\n【知识点：${node} · ${titles.get(node) ?? ''}】\n`)
     while (true) {
       const current = engine.nextQuestion()
@@ -122,6 +126,7 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
       store.write(courseId, 'assessment', engine.state)
     }
     engine.finalizeNode()
+    store.write(courseId, 'assessment', engine.state)
   }
 }
 
@@ -157,11 +162,13 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   await gate.require(mapContent(map, profile))
   out.write(`知识地图就绪：${map.nodes.length} 个知识点。\n`)
 
-  // 按节点独立出题并保存：一次要求整门课程容易耗尽输出预算，中断后也不应重做已完成的题目。
+  // 按作答进度准备题目；只有当前节点通过准入后才提问，保留已完成的题库和作答。
   const bank: QuestionBank = store.has(config.courseId, 'question-bank')
     ? (store.read(config.courseId, 'question-bank') as QuestionBank) : {}
-  for (const node of map.nodes) {
-    if (!validateBank(bank, [node.id]) && (await gate.review(bankContent(bank, node.id, profile, map))).approved) continue
+  const prepareNode = async (nodeId: string): Promise<void> => {
+    const node = map.nodes.find(item => item.id === nodeId)
+    if (!node) throw new Error(`摸底进度中的知识点 "${nodeId}" 不在当前课程地图中，原作答已保留`)
+    if (!validateBank(bank, [node.id]) && (await gate.review(bankContent(bank, node.id, profile, map))).approved) return
     out.write(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
     const bankChat = await createAgentChat(ctx)
     if (!bankChat) throw new Error('tutor: 出题会话创建失败')
@@ -186,7 +193,7 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const state = resumed ? (store.read(config.courseId, 'assessment') as AssessmentState) : AssessmentEngine.create(topoOrder(map))
   const engine = new AssessmentEngine(bank, state)
   out.write(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；随时 Ctrl-C 中断，进度已保存）。\n')
-  await runQuiz(store, config.courseId, engine, map)
+  await runQuiz(store, config.courseId, engine, map, prepareNode)
 
   const learner = engine.buildLearnerProfile(today())
   store.write(config.courseId, 'learner-profile', learner)

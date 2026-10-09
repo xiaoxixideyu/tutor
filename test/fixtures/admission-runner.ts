@@ -7,6 +7,7 @@ import { requiredAssertions, type ContentInput } from '../../src/core/content-qu
 import { apply as exam } from '../../src/plugin/exam-runner.ts'
 import { apply as practice } from '../../src/plugin/practice-gen-runner.ts'
 import { apply as learn } from '../../src/plugin/learn-runner.ts'
+import { apply as assess } from '../../src/plugin/assess-runner.ts'
 
 const [mode, root, behavior] = process.argv.slice(2)
 const store = new CourseStore(root)
@@ -17,6 +18,7 @@ function agent(resumed: boolean) {
     message: { content: [{ type: 'text', text: 'REJECT_CANDIDATE 原始历史中未获批准的最后回复' }] } } }] : []
   let generation = 0
   let grading = false
+  let assessmentNode = ''
   return {
     session: { id: `fake-${++serial}`, get seq() { return events.length }, eventAt: (seq: number) => events[seq] },
     whenIdle: async () => {},
@@ -42,6 +44,14 @@ function agent(resumed: boolean) {
         const question = { question: '1+1=?', choices: ['2', '3', '4', '5'], answer: 'A' }
         reply = json({ node: 'topic', title: '加法', hook: '开始', structure: ['加法'], example: '1+1=2',
           practice: [question], quiz: [question, { ...question, question: '1+1 的结果？' }] })
+      } else if (mode === 'assess') {
+        assessmentNode = prompt.match(/需覆盖以下知识点：\n([a-z0-9-]+)（/)?.[1] ?? assessmentNode
+        if (!assessmentNode) throw new Error('测试未收到单知识点出题任务')
+        fs.appendFileSync(path.join(root, 'bank-count.txt'), `${assessmentNode}\n`)
+        const approved = behavior !== 'fail' && !(behavior === 'assessment-second-fail' && assessmentNode === 'later')
+        const text = approved ? 'APPROVED_CONTENT' : 'REJECT_CANDIDATE'
+        reply = json({ [assessmentNode]: [1, 2, 3].map(difficulty => ({ id: `${assessmentNode}-d${difficulty}`,
+          difficulty, type: 'choice', question: `${text} ${assessmentNode} d${difficulty}：1+1=?`, choices: ['2', '3', '4', '5'], answer: 'A' })) })
       } else {
         generation++
         const approved = behavior !== 'fail' && generation === (mode === 'learn' ? 3 : 4)
@@ -67,4 +77,5 @@ const ctx = { get: (name: string) => services[name] } as unknown as Context
 if (mode === 'exam') exam(ctx, { courseId: 'alpha', milestoneId: behavior.startsWith('grading-') ? '' : 'm1' })
 else if (mode === 'practice-gen') practice(ctx, { courseId: 'alpha', batchSize: 1, nodeId: 'topic' })
 else if (mode === 'learn') learn(ctx, { courseId: 'alpha' })
+else if (mode === 'assess') assess(ctx, { courseId: 'alpha' })
 else throw new Error('未知测试 runner')

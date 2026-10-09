@@ -9,7 +9,7 @@ import { CourseStore } from '../src/core/store.ts'
 import { contentKey, examContent, lessonContent, mapContent, planContent, teachingContent } from '../src/core/content-quality.ts'
 import { ExamAttemptStore, newExamAttempt } from '../src/core/exam-attempt.ts'
 import type { ExamPaper } from '../src/core/exam.ts'
-import type { KnowledgeMap, LessonState, Plan, Profile } from '../src/core/schema.ts'
+import type { AssessmentState, KnowledgeMap, LessonState, Plan, Profile, QuestionBank } from '../src/core/schema.ts'
 import { approveFixture } from './fixtures/quality.ts'
 
 function fixture(t: TestContext) {
@@ -24,11 +24,77 @@ function fixture(t: TestContext) {
   const map = store.read('alpha', 'knowledge-map') as KnowledgeMap
   approveFixture(root, 'alpha', mapContent(map, profile))
   approveFixture(root, 'alpha', planContent(store.read('alpha', 'plan') as Plan, profile, map))
-  const run = (mode: string, behavior: 'repair' | 'fail' | 'grading-fail' | 'grading-success', input = '') => spawnSync(process.execPath,
+  const run = (mode: string, behavior: 'repair' | 'fail' | 'grading-fail' | 'grading-success' | 'assessment-ready' | 'assessment-second-fail', input = '') => spawnSync(process.execPath,
     [fileURLToPath(new URL('./fixtures/admission-runner.ts', import.meta.url)), mode, root, behavior],
     { input, encoding: 'utf8', timeout: 10000 })
   return { root, store, profile, map, run }
 }
+
+it('39 节课程只准备当前摸底节点就显示首题；未作答时不生成后续题库、不更新掌握度', t => {
+  const { root, store, profile, run } = fixture(t)
+  const later = Array.from({ length: 38 }, (_, i) => ({ id: `later-${i}`, title: `后续加法 ${i}` }))
+  const map: KnowledgeMap = { verified: false, nodes: [...later, { id: 'topic', title: '基础加法' }],
+    edges: later.map(node => [node.id, 'topic']) }
+  store.write('alpha', 'knowledge-map', map)
+  approveFixture(root, 'alpha', mapContent(map, profile))
+  const mastery = store.read('alpha', 'mastery')
+  for (let i = 0; i < 2; i++) {
+    const paused = run('assess', 'assessment-ready')
+    assert.equal(paused.status, 1, paused.stdout + paused.stderr)
+    assert.match(paused.stdout, /【知识点：topic[\s\S]*APPROVED_CONTENT topic d2/)
+    assert.match(paused.stderr, /未收到作答——进度已保存/)
+    assert.doesNotMatch(paused.stdout, /REJECT_CANDIDATE|正在生成摸底题库：later/)
+    assert.deepEqual(Object.keys(store.read('alpha', 'question-bank') as QuestionBank), ['topic'])
+    const state = store.read('alpha', 'assessment') as AssessmentState
+    assert.equal(state.current_node, 'topic')
+    assert.equal(state.node_order[0], 'topic')
+    assert.equal(state.node_order.length, 39)
+    assert.deepEqual(state.asked, [])
+    assert.deepEqual(state.scores, {})
+    assert.deepEqual(store.read('alpha', 'mastery'), mastery)
+    assert.equal(store.has('alpha', 'learner-profile'), false)
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'bank-count.txt'), 'utf8'), 'topic\n')
+})
+
+it('后续摸底出题失败保留此前作答，恢复跳过已答节点且全数完成后才更新画像', t => {
+  const { root, store, profile, run } = fixture(t)
+  const map: KnowledgeMap = { verified: false, nodes: [
+    { id: 'last', title: '综合加法' }, { id: 'later', title: '加法应用' }, { id: 'topic', title: '基础加法' },
+  ], edges: [['last', 'later'], ['later', 'topic']] }
+  store.write('alpha', 'knowledge-map', map)
+  approveFixture(root, 'alpha', mapContent(map, profile))
+  const mastery = store.read('alpha', 'mastery')
+  const failed = run('assess', 'assessment-second-fail', 'A\nA\n')
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr)
+  assert.match(failed.stdout, /【知识点：topic/)
+  assert.doesNotMatch(failed.stdout, /REJECT_CANDIDATE|【知识点：later|【知识点：last|摸底完成/)
+  const saved = store.read('alpha', 'assessment') as AssessmentState
+  assert.deepEqual(saved.scores, { topic: 1 })
+  assert.equal(saved.asked.length, 2)
+  assert.deepEqual(Object.keys(store.read('alpha', 'question-bank') as QuestionBank), ['topic'])
+  assert.deepEqual(store.read('alpha', 'mastery'), mastery)
+  assert.equal(store.has('alpha', 'learner-profile'), false)
+
+  const resumed = run('assess', 'assessment-ready')
+  assert.equal(resumed.status, 1, resumed.stdout + resumed.stderr)
+  assert.match(resumed.stdout, /检测到未完成的摸底[\s\S]*【知识点：later/)
+  assert.doesNotMatch(resumed.stdout, /【知识点：topic|【知识点：last|正在生成摸底题库：last|REJECT_CANDIDATE/)
+  assert.deepEqual((store.read('alpha', 'assessment') as AssessmentState).asked, saved.asked)
+  assert.deepEqual(store.read('alpha', 'mastery'), mastery)
+  assert.deepEqual(Object.keys(store.read('alpha', 'question-bank') as QuestionBank), ['topic', 'later'])
+
+  const completed = run('assess', 'assessment-ready', 'A\nA\nA\nA\n')
+  assert.equal(completed.status, 0, completed.stdout + completed.stderr)
+  assert.match(completed.stdout, /摸底完成。共评估 3 个知识点/)
+  assert.doesNotMatch(completed.stdout, /【知识点：topic|正在生成摸底题库：later/)
+  assert.equal(store.has('alpha', 'assessment'), false)
+  assert.equal(store.has('alpha', 'learner-profile'), true)
+  const generated = fs.readFileSync(path.join(root, 'bank-count.txt'), 'utf8').trim().split('\n')
+  assert.equal(generated.filter(node => node === 'topic').length, 1)
+  assert.equal(generated.filter(node => node === 'last').length, 1)
+  assert.deepEqual(Object.keys(store.read('alpha', 'mastery') as object).sort(), ['last', 'later', 'topic'])
+})
 
 it('正式 exam runner 在第四次修复通过后才展示试卷；耗尽修复不展示、不记分', t => {
   for (const behavior of ['repair', 'fail'] as const) {
