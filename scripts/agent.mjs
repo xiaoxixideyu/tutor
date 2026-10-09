@@ -24,7 +24,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'yaml'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
-import { renderModelSettings } from '../src/core/model-settings.ts'
+import { renderModelTemplate } from '../src/core/model-settings.ts'
+import { ModelConfigStore, readModelEnvironment } from '../src/core/model-config.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dshHome = path.resolve(process.env.DSH_HOME ?? path.join(root, 'data', 'dsh-home'))
@@ -32,15 +33,8 @@ const workspace = path.resolve(process.env.TUTOR_WORKSPACE ?? root)
 fs.mkdirSync(dshHome, { recursive: true })
 fs.mkdirSync(workspace, { recursive: true })
 
-// .env：模型接入三要素（base_url/api_key/model）的单一来源；不覆盖已有环境变量
-const env = { ...process.env, DSH_HOME: dshHome }
-const envFile = path.join(root, '.env')
-if (fs.existsSync(envFile)) {
-  for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
-    if (m && !(m[1] in process.env)) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
-  }
-}
+// .env / 环境变量提供初始配置；网页保存的配置在模型流程启动时覆盖这些默认值。
+let env = readModelEnvironment(root, { ...process.env, DSH_HOME: dshHome })
 
 // 渲染 config/ 下的模板（替换 ${VAR} 占位符）到运行时目录
 env.TUTOR_PLUGIN_PATH ??= path.join(root, 'src', 'plugin', 'course-state.ts')
@@ -49,24 +43,17 @@ env.TUTOR_COURSES_ROOT ??= path.join(root, 'courses')
 function renderTemplate(name, output) {
   const src = path.join(root, 'config', name)
   if (!fs.existsSync(src)) return null
-  const rendered = fs
-    .readFileSync(src, 'utf8')
+  const template = fs.readFileSync(src, 'utf8')
+  const rendered = name === 'settings.yaml' ? renderModelTemplate(template, env) : template
     .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (raw, varName) => {
       if (!(varName in env)) throw new Error(`scripts/agent.mjs: 模板 ${name} 缺少环境变量 ${varName}（见 .env.example）`)
       const value = env[varName]
       return varName === 'TUTOR_LLM_BASE_URL' ? value.replace(/\/+$/, '') : value
     })
   const dst = path.join(dshHome, output)
-  fs.writeFileSync(dst, name === 'settings.yaml' ? renderModelSettings(rendered, env) : rendered)
+  fs.writeFileSync(dst, rendered)
   return dst
 }
-
-const settingsPath = renderTemplate('settings.yaml', 'settings.yaml')
-if (!settingsPath) throw new Error('scripts/agent.mjs: 缺少 config/settings.yaml')
-const patchPath = renderTemplate('cordis.patch.yml', 'tutor.patch.yml')
-
-const require = createRequire(import.meta.url)
-const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
 
 // Harness 依赖 import.meta.main（Node 22.19+/24+ 才有），且官方仅在 22.19/24/26 上测试。
 // 当前机器默认 node 可能不满足，这里解析一个受支持运行时：
@@ -107,7 +94,6 @@ function resolveRuntimeNode() {
   return process.execPath
 }
 
-const patchArgs = patchPath ? ['--patch', patchPath] : []
 const argv = process.argv.slice(2)
 
 // list/status/review/practice/audit：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
@@ -121,6 +107,16 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0
   })
   process.exit(viewResult.status ?? 1)
 }
+
+// 服务和零模型命令无需先填写模型配置；空白安装也能打开网页设置。
+// 网页宿主已冻结本次流程的配置时不再读取保存文件，避免并发保存切换到别的渠道。
+if (env.TUTOR_MODEL_CONFIG_RESOLVED !== '1') env = new ModelConfigStore(root, { env }).environment()
+const settingsPath = renderTemplate('settings.yaml', 'settings.yaml')
+if (!settingsPath) throw new Error('scripts/agent.mjs: 缺少 config/settings.yaml')
+const patchPath = renderTemplate('cordis.patch.yml', 'tutor.patch.yml')
+const patchArgs = patchPath ? ['--patch', patchPath] : []
+const require = createRequire(import.meta.url)
+const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
 
 let runnerArgs = []
 let runnerMode = null
@@ -187,6 +183,10 @@ if (['new', 'assess', 'plan', 'learn', 'research', 'practice-gen', 'exam', 'audi
   const modePatchPath = path.join(dshHome, `${runnerMode}.patch.yml`)
   fs.writeFileSync(modePatchPath, yaml.stringify(modePatch))
   runnerArgs = ['--patch', modePatchPath]
+  if (runnerMode === 'research') {
+    if (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN) throw new Error('联网教研需要配置搜索 MCP；也可在网页跳过教研')
+    runnerArgs.push('--patch', renderTemplate('search.patch.yml', 'search.patch.yml'))
+  }
 }
 
 const innerArgs = runnerMode ? [] : argv

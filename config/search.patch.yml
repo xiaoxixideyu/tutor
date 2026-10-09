@@ -1,0 +1,11 @@
+# 仅联网教研加载搜索服务。访谈、课堂及网页设置不依赖搜索配置。
+- insert:
+    - id: mcp-searchix
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: searchix
+        transport: streamable-http
+        url: ${TUTOR_MCP_SEARCH_URL}
+        headers:
+          Authorization: !!js '`Bearer ${process.env.TUTOR_MCP_SEARCH_TOKEN}`'
+        toolCallTimeoutMs: 120000

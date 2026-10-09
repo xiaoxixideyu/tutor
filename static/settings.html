@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型设置 · tutor 导师</title>
+<style>
+  :root { --fg:#1a1d21; --muted:#6b7280; --bg:#f6f7f9; --card:#fff; --border:#e4e7ec; --accent:#2563eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif; color:var(--fg); background:var(--bg); }
+  header { display:flex; align-items:center; gap:16px; padding:16px 24px; border-bottom:1px solid var(--border); background:var(--card); }
+  header a { color:var(--muted); font-size:13px; text-decoration:none; }
+  header h1 { margin:0; font-size:18px; }
+  main { max-width:700px; margin:32px auto; padding:0 20px 40px; }
+  .intro { color:var(--muted); font-size:14px; line-height:1.7; margin:0 0 20px; }
+  form { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:26px; }
+  fieldset { border:0; margin:0; padding:0; min-width:0; }
+  .field + .field { margin-top:22px; }
+  label { display:block; font-weight:600; font-size:14px; margin-bottom:8px; }
+  input, select { display:block; width:100%; border:1px solid #cfd5df; border-radius:7px; padding:11px 12px; font:inherit; font-size:14px; background:#fff; color:var(--fg); }
+  input:focus, select:focus { outline:2px solid #bfdbfe; border-color:var(--accent); }
+  .hint { color:var(--muted); font-size:12px; line-height:1.65; margin:7px 0 0; }
+  .key-state { display:inline-block; color:#166534; background:#f0fdf4; border-radius:4px; padding:2px 7px; font-weight:400; font-size:12px; margin-left:6px; }
+  .key-state[hidden] { display:none; }
+  details { margin-top:24px; padding-top:20px; border-top:1px solid var(--border); }
+  summary { cursor:pointer; font-size:14px; color:var(--muted); }
+  details .field { margin-top:20px; }
+  .actions { display:flex; align-items:center; gap:16px; margin-top:26px; flex-wrap:wrap; }
+  button { border:0; border-radius:7px; background:var(--accent); color:#fff; padding:11px 20px; font:inherit; font-size:14px; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  .saved { font-size:12px; color:var(--muted); }
+  #message { margin-top:18px; padding:12px 14px; border-radius:7px; font-size:14px; line-height:1.65; }
+  #message:empty { display:none; }
+  #message.error { background:#fef2f2; color:#b91c1c; }
+  #message.success { background:#f0fdf4; color:#166534; }
+  .note { color:var(--muted); font-size:12px; line-height:1.7; margin-top:18px; }
+  @media (max-width:520px) { main { margin-top:20px; padding:0 14px 30px; } form { padding:20px; } }
+</style>
+</head>
+<body>
+<header><a href="/">← 课程列表</a><h1>模型设置</h1></header>
+<main>
+  <p class="intro">接入支持 OpenAI 兼容接口的模型服务。保存后，新开始的教学流程自动使用最新设置，无需重启服务。</p>
+  <form id="form">
+    <fieldset id="fields" disabled>
+      <div class="field">
+        <label for="baseUrl">服务地址（Base URL）</label>
+        <input id="baseUrl" type="url" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" required maxlength="2048">
+        <p class="hint">填写渠道提供的基础地址，通常以 /v1 结尾，不包含 /chat/completions。</p>
+      </div>
+      <div class="field">
+        <label for="model">模型名称</label>
+        <input id="model" placeholder="渠道提供的完整模型 ID" autocomplete="off" spellcheck="false" required maxlength="256">
+        <p class="hint">名称必须与该渠道支持的模型 ID 一致。</p>
+      </div>
+      <div class="field">
+        <label for="apiKey">API Key <span id="keyState" class="key-state" hidden>已配置</span></label>
+        <input id="apiKey" type="password" placeholder="填写该渠道的 API Key" autocomplete="new-password" spellcheck="false" maxlength="8192">
+        <p id="keyHint" class="hint">密钥保存在本机，保存后不会回显到页面。</p>
+      </div>
+      <details>
+        <summary>高级设置</summary>
+        <div class="field">
+          <label for="thinking">推理模式</label>
+          <select id="thinking">
+            <option value="default">跟随服务默认（推荐）</option>
+            <option value="on">开启推理</option>
+            <option value="off">关闭推理</option>
+          </select>
+          <p class="hint">显式开关目前仅支持 deepseek-* 模型。关闭推理可能影响教学与审查质量；其他模型请使用服务默认。</p>
+        </div>
+        <div class="field">
+          <label for="contextWindow">上下文长度（token）</label>
+          <input id="contextWindow" type="number" min="1024" max="2000000" step="1" value="262144" required>
+          <p class="hint">按渠道说明填写，用于限制单次请求可容纳的上下文。</p>
+        </div>
+      </details>
+      <div class="actions"><button id="save" type="submit">保存设置</button><span id="saved" class="saved"></span></div>
+    </fieldset>
+    <div id="message" role="status" aria-live="polite"></div>
+  </form>
+  <p class="note">正在进行的课堂或考试继续使用开始时的配置。切换服务地址时需要填写新渠道的密钥。费用仍按当前单价配置估算，切换模型后应核对单价。</p>
+</main>
+<script src="/settings.js"></script>
+</body>
+</html>

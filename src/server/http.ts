@@ -6,7 +6,9 @@ import path from 'node:path'
 import { CourseStore, COURSE_ID_PATTERN } from '../core/store.ts'
 import { handleRpcRequest, RPC_ERRORS, type RpcRequest } from '../core/rpc.ts'
 import type { KnowledgeMap } from '../core/schema.ts'
+import { ModelConfigStore } from '../core/model-config.ts'
 
+export const FLOW_PROTOCOL_VERSION = 1
 const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice'])
 const STOP_LINES: Record<string, string> = { learn: '/exit', exam: '', practice: 'q' }
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }
@@ -34,13 +36,24 @@ export interface TutorServerOptions {
   coursesRoot?: string
   today?: () => string
   stopTimeoutMs?: number
+  modelConfigFile?: string
+  modelEnvironment?: NodeJS.ProcessEnv
   // 注入确定性交互进程，测试真实 HTTP/SSE 而不调用模型。
-  launch?: (input: FlowStart) => ChildProcessWithoutNullStreams
+  launch?: (input: FlowStart, env: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
+}
+
+function localSettingsRequest(req: IncomingMessage): boolean {
+  try {
+    const target = new URL(`http://${req.headers.host ?? ''}`)
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(target.hostname) || target.username || target.password) return false
+    if (req.headers.origin && req.headers.origin !== target.origin) return false
+    return req.headers['sec-fetch-site'] !== 'cross-site'
+  } catch { return false }
 }
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -62,11 +75,12 @@ export function createTutorServer(options: TutorServerOptions) {
   const staticDir = path.join(root, 'static')
   const store = new CourseStore(options.coursesRoot ?? path.join(root, 'courses'))
   const today = options.today ?? (() => new Date().toISOString().slice(0, 10))
+  const models = new ModelConfigStore(root, { file: options.modelConfigFile, env: options.modelEnvironment })
   const flows = new Map<string, Flow>()
   let active: Flow | null = null
-  const launch = options.launch ?? ((input: FlowStart) => spawn(process.execPath,
+  const launch = options.launch ?? ((input: FlowStart, env: NodeJS.ProcessEnv) => spawn(process.execPath,
     [path.join(root, 'scripts', 'agent.mjs'), input.kind, input.courseId, ...(input.milestoneId ? [input.milestoneId] : []), ...(input.nodeId ? ['--node', input.nodeId] : [])],
-    { cwd: root, env: { ...process.env, TUTOR_COURSES_ROOT: store.root }, stdio: ['pipe', 'pipe', 'pipe'], detached: true }))
+    { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }))
 
   function broadcast(flow: Flow, event: Record<string, unknown>): void {
     const payload = `data: ${JSON.stringify({ ...snapshot(flow), ...event })}\n\n`
@@ -110,7 +124,8 @@ export function createTutorServer(options: TutorServerOptions) {
     if (input.nodeId && (!store.has(input.courseId, 'knowledge-map') || !(store.read(input.courseId, 'knowledge-map') as KnowledgeMap).nodes.some((node) => node.id === input.nodeId))) {
       return { ok: false, error: '所选知识点不在本课程知识地图中' }
     }
-    const child = launch(input)
+    const env = input.kind === 'practice' ? { ...(options.modelEnvironment ?? process.env) } : models.environment()
+    const child = launch(input, { ...env, TUTOR_COURSES_ROOT: store.root })
     const flow: Flow = { ...input, flowId: randomUUID(), child, status: 'running', buffer: [], bytes: 0, clients: new Set() }
     active = flow
     flows.set(flow.flowId, flow)
@@ -139,6 +154,22 @@ export function createTutorServer(options: TutorServerOptions) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     try {
+      if (url.pathname === '/api/model-config') {
+        if (!localSettingsRequest(req)) { json(res, 403, { ok: false, error: '模型设置仅允许从本机同源页面访问' }); return }
+        if (req.method === 'GET') {
+          json(res, 200, { ok: true, config: models.publicConfig(), active: active ? snapshot(active) : null }); return
+        }
+        if (req.method === 'POST') {
+          if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+            json(res, 415, { ok: false, error: '模型设置请求必须使用 application/json' }); return
+          }
+          let input
+          try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型设置请求必须是有效的 JSON' }); return }
+          const config = models.save(input)
+          json(res, 200, { ok: true, config, active: active ? snapshot(active) : null }); return
+        }
+        json(res, 405, { ok: false, error: '不支持此操作' }); return
+      }
       if (req.method === 'POST' && url.pathname === '/rpc') {
         let request
         try { request = await body(req) } catch {
@@ -153,7 +184,7 @@ export function createTutorServer(options: TutorServerOptions) {
       }
       if (req.method === 'GET' && url.pathname === '/flow/state') {
         const requested = flows.get(url.searchParams.get('flowId') ?? '')
-        json(res, 200, { active: active ? snapshot(active) : null, flow: requested ? snapshot(requested) : null }); return
+        json(res, 200, { protocolVersion: FLOW_PROTOCOL_VERSION, active: active ? snapshot(active) : null, flow: requested ? snapshot(requested) : null }); return
       }
       if (req.method === 'GET' && url.pathname === '/flow/stream') {
         const flow = flows.get(url.searchParams.get('flowId') ?? '')
@@ -197,7 +228,7 @@ export function createTutorServer(options: TutorServerOptions) {
         const file = path.resolve(staticDir, relative)
         if (!file.startsWith(staticDir + path.sep)) { res.writeHead(403).end(); return }
         if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end('404'); return }
-        res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' })
+        res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' })
         res.end(fs.readFileSync(file)); return
       }
       res.writeHead(405).end()

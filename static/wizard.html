@@ -64,8 +64,9 @@
 <header>
   <a href="/" class="backlink">← 课程列表</a>
   <h1 id="title">新课程向导</h1>
-  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中… 0s</span></span>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">等待模型回复… 0s</span></span>
   <span class="state" id="state"></span>
+  <a href="/settings.html" class="backlink" target="_blank" rel="noopener">模型设置</a>
   <button class="danger" id="stopBtn">中止流程</button>
 </header>
 <div class="steps" id="steps" style="display:none">
@@ -131,11 +132,11 @@ function setBusy(on, label) {
   if ($send) $send.disabled = on
   if (on) {
     busySeconds = 0
-    document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… 0s`
+    document.getElementById('busyText').textContent = `${label ?? '等待模型回复'}… 0s`
     $busy.style.display = 'inline-flex'
     busyTimer = setInterval(() => {
       busySeconds++
-      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+      document.getElementById('busyText').textContent = `${label ?? '等待模型回复'}… ${busySeconds}s`
     }, 1000)
   } else {
     $busy.style.display = 'none'
@@ -422,7 +423,7 @@ async function startFlow(kind) {
   $footer.style.display = 'block'
   $setup.style.display = 'none'
   document.getElementById('stopBtn').disabled = false
-  setBusy(true, kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : '模型思考中')
+  setBusy(true, kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : '等待模型回复')
   await api('/flow/start', { kind, courseId: courseName })
 }
 
@@ -464,7 +465,8 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     document.getElementById('err').textContent = '课程标识需为小写英文/数字/连字符'
     return
   }
-  const state = await (await fetch('/flow/state')).json()
+  const state = await flowClient.state()
+  if (!state) return
   if (state.active) {
     document.getElementById('err').textContent = `已有进行中的流程（${state.active.kind} ${state.active.courseId}）`
     return
@@ -497,7 +499,8 @@ function resumeFrom(kind, course) {
 
 // 页面加载：附加进行中的流程（刷新不丢）；否则若带 ?course=&resume= 则续起；再否则停在 setup
 const entryParams = new URLSearchParams(location.search)
-fetch(`/flow/state?flowId=${encodeURIComponent(entryParams.get('flowId') ?? '')}`).then((r) => r.json()).then((state) => {
+flowClient.state(entryParams.get('flowId')).then((state) => {
+  if (!state) return
   const requestedCourse = entryParams.get('course')
   const available = state.flow ?? state.active
   if (available) {
@@ -506,7 +509,7 @@ fetch(`/flow/state?flowId=${encodeURIComponent(entryParams.get('flowId') ?? '')}
       document.getElementById('err').textContent = `当前流程属于 ${available.kind} ${available.courseId}，请先返回课程列表。`
       return
     }
-    flowClient.attach(available)
+    if (!flowClient.attach(available)) return
     rememberFlow(available)
     currentKind = available.kind
     courseName = available.courseId

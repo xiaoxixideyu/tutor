@@ -1,6 +1,6 @@
 # tutor 模型接入配置（设计文档 §6.3 + §4.1 判断三：分级调度）
-# 这是模板：scripts/agent.mjs 读取 .env 后替换 ${...} 占位符，
-# 生成运行时副本 $DSH_HOME/settings.yaml。三要素（base_url/api_key/model）统一在 .env 维护。
+# 这是模板：scripts/agent.mjs 读取网页保存的模型设置（未保存时回退到环境变量 / .env），
+# 生成运行时副本 $DSH_HOME/settings.yaml。密钥仅从子进程环境读取。
 llm-pi-ai:
   providers:
     tutor:
@@ -22,4 +22,3 @@ llm-pi-ai:
 agent-default-model:
   provider: tutor
   model: ${TUTOR_LLM_MODEL}
-

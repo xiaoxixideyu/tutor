@@ -60,7 +60,8 @@
   <a href="/" class="backlink">← 课程列表</a>
   <h1>课堂</h1>
   <span class="state" id="state">未连接</span>
-  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">等待模型回复…</span></span>
+  <a href="/settings.html" class="backlink" target="_blank" rel="noopener">模型设置</a>
   <button id="stopBtn" class="danger">暂停本课</button>
 </header>
 <div class="banner" id="banner"></div>
@@ -143,11 +144,11 @@ function setBusy(on, label) {
   if (on || flowFinished) for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   if (on) {
     busySeconds = 0
-    document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
+    document.getElementById('busyText').textContent = label ?? '等待模型回复… 0s'
     $busy.style.display = 'inline-flex'
     busyTimer = setInterval(() => {
       busySeconds++
-      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+      document.getElementById('busyText').textContent = `${label ?? '等待模型回复'}… ${busySeconds}s`
     }, 1000)
   } else {
     $busy.style.display = 'none'
@@ -396,7 +397,8 @@ async function api(path, body) {
 }
 
 async function ensureLesson() {
-  const state = await (await fetch('/flow/state')).json()
+  const state = await flowClient.state()
+  if (!state) return undefined
   if (state.active) return state.active
   // 无进行中的课堂：让用户从课程列表选课（本页简化为提示去首页）
   return null
@@ -432,7 +434,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 // 全局同一时间只运行一个流程；课程或流程类型不匹配时，显示切换入口。
 function renderCourseMismatch(runningFlow, wanted) {
-  flowClient.attach(runningFlow)
+  if (!flowClient.attach(runningFlow)) return
   const running = runningFlow.courseId
   const kind = { new: '需求访谈', assess: '摸底测评', plan: '教学规划', research: '教研',
     learn: '课堂', exam: '里程碑大考', 'practice-gen': '实践任务生成', practice: '实践' }[runningFlow.kind] || '教学流程'
@@ -448,7 +450,8 @@ function renderCourseMismatch(runningFlow, wanted) {
     if (!stopped.ok) { btn.disabled = false; btn.textContent = '重试切换'; return }
     // 等旧流程子进程真正退出（serve 侧 flow 置空）再起新课，否则会撞「已有进行中的流程」
     for (let i = 0; i < 40; i++) {
-      const s = await (await fetch('/flow/state')).json()
+      const s = await flowClient.state()
+      if (!s) { btn.disabled = false; return }
       if (!s.active) break
       await new Promise((r) => setTimeout(r, 500))
     }
@@ -467,13 +470,14 @@ function renderCourseMismatch(runningFlow, wanted) {
 // 页面加载：同时核对课程与流程类型，决定附着、提示切换或起新课。
 const wanted = new URLSearchParams(location.search).get('course')
 ensureLesson().then(async (running) => {
+  if (running === undefined) return
   // 不匹配时先提示切换，避免将其他课程或其他类型的输出灌进课堂。
   if (running && (running.kind !== 'learn' || (wanted && running.courseId !== wanted))) {
     renderCourseMismatch(running, wanted || running.courseId)
     return
   }
   if (running) {
-    flowClient.attach(running)
+    if (!flowClient.attach(running)) return
     $state.textContent = `课堂进行中：${running.courseId}`
     startSse()
     return

@@ -53,6 +53,7 @@
   <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">运行中…</span></span>
   <span class="state" id="state">未连接</span>
   <button id="stopBtn" class="danger">存盘退出</button>
+  <a href="/settings.html" class="backlink" target="_blank" rel="noopener">模型设置</a>
 </header>
 <div class="banner" id="banner"></div>
 <div style="padding:12px 20px"><label for="nodeSelect">练习知识点：</label><select id="nodeSelect" aria-label="练习知识点"></select></div>
@@ -260,7 +261,7 @@ async function startPracticeGen() {
 // 全局流程桥同一时间只跑一个子进程。想练习却撞上别的进行中流程（另一门课、或本课的课堂/大考等）时，
 // 如实说明并给「结束并开始实践」入口，而不是把别的流程的输出灌进本页。
 function renderFlowMismatch(runningFlow) {
-  flowClient.attach(runningFlow)
+  if (!flowClient.attach(runningFlow)) return
   const runLabel = KIND_LABEL[runningFlow.kind] || runningFlow.kind
   $state.textContent = `${runLabel}进行中：${runningFlow.courseId}`
   $banner.innerHTML = ''
@@ -271,7 +272,8 @@ function renderFlowMismatch(runningFlow) {
     btn.disabled = true; btn.textContent = '正在结束当前流程…'
     await api('/flow/stop')
     for (let i = 0; i < 40; i++) {
-      const s = await (await fetch('/flow/state')).json()
+      const s = await flowClient.state()
+      if (!s) { btn.disabled = false; return }
       if (!s.active) break
       await new Promise((r) => setTimeout(r, 500))
     }
@@ -293,7 +295,8 @@ async function enterPractice() {
 // 页面加载：按 URL 想练的课 vs 全局正在跑的流程，决定附着 / 提示切换 / 起新练习。
 ;(async () => {
   if (!wantedCourse) { showBanner('缺少 course 参数——请从课程列表进入实践。'); return }
-  const state = await (await fetch('/flow/state')).json()
+  const state = await flowClient.state()
+  if (!state) return
   const act = state.active
   const course = await rpc('courseStatus', { id: wantedCourse })
   if (!course.hasPlan) { showBanner('请先完成课程规划，再选择知识点实践。'); return }
@@ -310,7 +313,7 @@ async function enterPractice() {
   const mine = sameCourse && act.nodeId === wantedNode
   if (act && !mine) { renderFlowMismatch(act); return }
   if (act) {
-    flowClient.attach(act)
+    if (!flowClient.attach(act)) return
     setRunning(true, act.kind === 'practice-gen' ? '生成任务中' : '加载中')
     startSse(); return
   }

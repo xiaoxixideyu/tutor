@@ -47,7 +47,7 @@
 <body>
 <header>
   <h1>tutor 导师</h1>
-  <p>课程进度看板（只读 + 复习提交；数据来自 courses/ 目录）　<a href="/wizard.html" style="color:var(--accent)">＋ 开设新课程</a></p>
+  <p>查看学习进度，继续课程与到期复习。　<a href="/wizard.html" style="color:var(--accent)">＋ 开设新课程</a>　<a href="/settings.html" style="color:var(--accent)">模型设置</a></p>
 </header>
 <main>
   <section id="panel"></section>
@@ -78,7 +78,7 @@ async function renderList() {
   const due = await rpc('dueReviews')
   const dueById = new Map((due ?? []).map((c) => [c.id, c]))
   const rows = courses.length === 0
-    ? '<div class="empty">暂无课程。运行 npm run agent -- new &lt;课程名&gt; 开始。</div>'
+    ? '<div class="empty">暂无课程。先在“模型设置”中配置渠道，再点击“开设新课程”。</div>'
     : courses.map((c) => {
         const pct = c.total > 0 ? Math.round((c.mastered / c.total) * 100) : 0
         const dueBadge = c.dueCount ? `<span class="badge">到期 ${c.dueCount}</span>` : ''

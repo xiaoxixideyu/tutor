@@ -54,7 +54,8 @@
 <header>
   <a href="/" class="backlink">← 课程列表</a>
   <h1 id="title">里程碑大考</h1>
-  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">模型思考中…</span></span>
+  <span class="busy" id="busy" style="display:none"><span class="dot"></span><span id="busyText">等待模型回复…</span></span>
+  <a href="/settings.html" class="backlink" target="_blank" rel="noopener">模型设置</a>
   <span class="state" id="state">未连接</span>
   <button id="stopBtn" class="danger">暂停大考</button>
 </header>
@@ -135,11 +136,11 @@ function setBusy(on, label) {
   if (on || flowFinished) for (const button of $log.querySelectorAll('.choices button')) button.disabled = true
   if (on) {
     busySeconds = 0
-    document.getElementById('busyText').textContent = label ?? '模型思考中… 0s'
+    document.getElementById('busyText').textContent = label ?? '等待模型回复… 0s'
     $busy.style.display = 'inline-flex'
     busyTimer = setInterval(() => {
       busySeconds++
-      document.getElementById('busyText').textContent = `${label ?? '模型思考中'}… ${busySeconds}s`
+      document.getElementById('busyText').textContent = `${label ?? '等待模型回复'}… ${busySeconds}s`
     }, 1000)
   } else {
     $busy.style.display = 'none'
@@ -418,7 +419,7 @@ const KIND_LABEL = { new: '建档访谈', assess: '摸底', plan: '生成计划'
 // 全局流程桥同一时间只跑一个子进程。想开大考却撞上别的进行中流程（另一门课、或同门课的课堂/实践等）时，
 // 如实说明并给「结束并开始大考」入口，而不是把别的流程的输出灌进本页。
 function renderFlowMismatch(running) {
-  flowClient.attach(running)
+  if (!flowClient.attach(running)) return
   const runLabel = KIND_LABEL[running.kind] || running.kind
   $state.textContent = `${runLabel}进行中：${running.courseId}`
   $banner.innerHTML = ''
@@ -430,7 +431,8 @@ function renderFlowMismatch(running) {
     btn.textContent = '正在结束当前流程…'
     await api('/flow/stop')
     for (let i = 0; i < 40; i++) {
-      const s = await (await fetch('/flow/state')).json()
+      const s = await flowClient.state()
+      if (!s) { btn.disabled = false; return }
       if (!s.active) break
       await new Promise((r) => setTimeout(r, 500))
     }
@@ -450,10 +452,11 @@ function renderFlowMismatch(running) {
     startSse()
     return
   }
-  const state = await (await fetch(`/flow/state?flowId=${encodeURIComponent(params.get('flowId') ?? '')}`)).json()
+  const state = await flowClient.state(params.get('flowId'))
+  if (!state) return
   if (state.flow && state.flow.kind === 'exam' && state.flow.courseId === wantedCourse
     && (!wantedMilestone || state.flow.milestoneId === wantedMilestone)) {
-    flowClient.attach(state.flow)
+    if (!flowClient.attach(state.flow)) return
     rememberFlow(state.flow)
     setBusy(state.flow.status === 'running', '正在恢复考试')
     startSse()
@@ -465,7 +468,7 @@ function renderFlowMismatch(running) {
     return
   }
   if (running) {
-    flowClient.attach(running)
+    if (!flowClient.attach(running)) return
     rememberFlow(running)
     $state.textContent = `大考进行中：${running.courseId}`
     startSse()

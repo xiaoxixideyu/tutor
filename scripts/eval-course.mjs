@@ -69,10 +69,9 @@ if (modes[mode]) {
   if (mode === 'research') {
     if (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN) throw new Error('教研需要配置搜索 MCP')
     // 令牌仅从子进程环境读取，不写入验收产物。
-    const template = fs.readFileSync(path.join(root, 'config/cordis.patch.yml'), 'utf8')
-    const mcpPart = template.slice(template.indexOf('    - id: mcp-searchix'))
+    const template = fs.readFileSync(path.join(root, 'config/search.patch.yml'), 'utf8')
     const mcpPatch = path.join(stageDir, 'mcp.patch.yml')
-    fs.writeFileSync(mcpPatch, '- insert:\n' + mcpPart.replace('${TUTOR_MCP_SEARCH_URL}', env.TUTOR_MCP_SEARCH_URL))
+    fs.writeFileSync(mcpPatch, template.replace('${TUTOR_MCP_SEARCH_URL}', env.TUTOR_MCP_SEARCH_URL))
   }
   const patch = [
     ...['headless-runner', 'headless-startup', 'session-title-llm', 'agent-instructions', 'skill-filesystem'].map(id => ({ id, disabled: true })),
