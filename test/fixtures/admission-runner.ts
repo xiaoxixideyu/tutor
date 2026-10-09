@@ -8,6 +8,7 @@ import { apply as exam } from '../../src/plugin/exam-runner.ts'
 import { apply as practice } from '../../src/plugin/practice-gen-runner.ts'
 import { apply as learn } from '../../src/plugin/learn-runner.ts'
 import { apply as assess } from '../../src/plugin/assess-runner.ts'
+import { apply as research } from '../../src/plugin/research-runner.ts'
 
 const [mode, root, behavior] = process.argv.slice(2)
 const store = new CourseStore(root)
@@ -53,6 +54,7 @@ function agent(resumed: boolean) {
         reply = json({ [assessmentNode]: [1, 2, 3].map(difficulty => ({ id: `${assessmentNode}-d${difficulty}`,
           difficulty, type: 'choice', question: `${text} ${assessmentNode} d${difficulty}：1+1=?`, choices: ['2', '3', '4', '5'], answer: 'A' })) })
       } else {
+        if (mode === 'research') fs.appendFileSync(path.join(root, 'research-generation.txt'), 'generated\n')
         generation++
         const approved = behavior !== 'fail' && generation === (mode === 'learn' ? 3 : 4)
         const text = approved ? 'APPROVED_CONTENT' : `REJECT_CANDIDATE-${generation}`
@@ -78,4 +80,5 @@ if (mode === 'exam') exam(ctx, { courseId: 'alpha', milestoneId: behavior.starts
 else if (mode === 'practice-gen') practice(ctx, { courseId: 'alpha', batchSize: 1, nodeId: 'topic' })
 else if (mode === 'learn') learn(ctx, { courseId: 'alpha' })
 else if (mode === 'assess') assess(ctx, { courseId: 'alpha' })
+else if (mode === 'research') research(ctx, { courseId: 'alpha', ...(behavior === 'single-node' ? { nodeId: 'topic' } : {}) })
 else throw new Error('未知测试 runner')

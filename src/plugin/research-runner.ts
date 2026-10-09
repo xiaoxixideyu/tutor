@@ -53,7 +53,7 @@ function skeletonPrompt(profile: Profile): string {
   ].join('\n')
 }
 
-function nodePrompt(profile: Profile, node: { id: string; title?: string; summary?: string }): string {
+export function nodePrompt(profile: Profile, node: { id: string; title?: string; summary?: string }): string {
   const lines = `- ${node.id}（${node.title ?? node.id}）${node.summary ? `：${node.summary}` : ''}`
   return [
     '任务：只对下列一个知识点做联网教研与交叉验证，完成后立即给出结果。',
@@ -70,10 +70,11 @@ function nodePrompt(profile: Profile, node: { id: string; title?: string; summar
     '- summary 只写有来源支撑的事实；两个来源冲突时在 resources[].note 注明分歧',
     '- 区分必要条件与常用做法，不把示例中的写法概括成“必须”；material 只摘录本课范围内需要的事实与例子，排除项不进入摘要',
     '- 引用稳定的页面标题与链接，不写与知识内容无关的章节编号；版本相关结论必须写明版本，不能混用不同版本的编号或行为',
-    '- resources 最多 3 条；summary 是学习范围摘要，最多 120 汉字。每条 material 只保留最多 3 个核心事实、180 汉字以内，note 一句话，不抄长方法清单；缺少足够证据时提交现有资料并保持 verified=false',
+    '- 选型类课程以任务需求、实测质量、延迟、成本、数据与部署约束为主；未经本次来源核实的型号、价格、窗口长度、显存或许可数字不要写入，不凭记忆补全产品排行表',
+    '- resources 最多 3 条；summary 是学习范围摘要，最多 120 字符。每条 material 只保留最多 3 个核心事实、180 字符以内，note 一句话且最多 120 字符，title 最多 120 字符；程序会校验长度，缺少足够证据时提交现有资料并保持 verified=false',
     '',
     '输出 JSON（```json 代码块，只含当前知识点，不更改标题或扩展课程）：',
-    '{"nodes": [{"id": "…", "title": "…", "summary": "…", "verified": true 或 false}], "resources": [{"node": "…", "title": "…", "url": "https://…", "note": "推荐理由", "material": "正文摘要（可选 ≤300字）"}]}',
+    '{"nodes": [{"id": "…", "title": "…", "summary": "…", "verified": true 或 false}], "resources": [{"node": "…", "title": "…", "url": "https://…", "note": "推荐理由", "material": "正文摘要（可选 ≤180字符）"}]}',
     '除该 JSON 外不要输出其他内容。',
   ].join('\n')
 }
@@ -112,7 +113,7 @@ async function pruneDeadResources(
   }
 }
 
-function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
+export function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
   const schemaResult = trySchema(BatchSchema, data)
   if (!schemaResult.ok) return schemaResult
   const batch = schemaResult.value as BatchResult
@@ -127,6 +128,13 @@ function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
   if (orphan) return { ok: false, error: `resources 中的知识点 "${orphan.node}" 不在本批里` }
   const invalidUrl = resources.find((r) => r.url && !/^https?:\/\//.test(r.url))
   if (invalidUrl) return { ok: false, error: `资源 "${invalidUrl.title}" 的 URL 非法` }
+  for (const item of [...batch.nodes, ...resources]) {
+    for (const [field, limit] of Object.entries({ summary: 120, material: 180, note: 120, title: 120 })) {
+      const value = (item as Record<string, unknown>)[field]
+      if (typeof value === 'string' && [...value].length > limit) return { ok: false,
+        error: `${'id' in item ? item.id : item.node} 的 ${field} 超过 ${limit} 字符。只保留已取得来源支撑的核心事实，完整改写后返回当前知识点 JSON；保留必要限定条件，不机械截断、不扩大搜索。` }
+    }
+  }
   return schemaResult
 }
 
@@ -191,6 +199,9 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
   // verified 只代表来源数量；旧地图仍需独立内容审查。修复通过前保留原文件。
   const previousReview = await gate.review(mapContent(map, profile))
   if (!previousReview.approved) {
+    if (config.nodeId || map.nodes.some(node => progress.status(map, profile, node.id) !== 'pending')) {
+      throw new Error(`已有课程地图未通过审查；单点恢复或已有教研进度时不自动重写整张地图，原有节点与资料已保留。请先核查并修复具体问题。记录：${previousReview.evidenceFile}`)
+    }
     map = await generateApproved<KnowledgeMap>(chat, [skeletonPrompt(profile),
       '修复已有地图，保留仍在课程范围内的节点 id；返回完整地图并修正摘要与资料。',
       JSON.stringify(map), `独立审查发现：${previousReview.issues.join('\n')}`].join('\n'), text => {
@@ -218,7 +229,8 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
   const result = await researchNodes(map, queue, {
     research: async (current, id) => {
       const node = current.nodes.find(node => node.id === id)!
-      const nodeChat = await createAgentChat(ctx, { tools: 'research', maxTokens: 4096, retryOnLength: false,
+      // 推理模型的 max_tokens 包含推理用量；正文长度由 validateBatch 独立约束。
+      const nodeChat = await createAgentChat(ctx, { tools: 'research', maxTokens: 8192, retryOnLength: false,
         onProgress: message => out.write(`  ${message}\n`) })
       if (!nodeChat) throw new Error('无法创建本知识点的教研会话')
       try {

@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { CourseStore } from '../src/core/store.ts'
 import { contentKey, examContent, lessonContent, mapContent, planContent, teachingContent } from '../src/core/content-quality.ts'
 import { ExamAttemptStore, newExamAttempt } from '../src/core/exam-attempt.ts'
+import { ResearchProgressStore } from '../src/core/research.ts'
 import type { ExamPaper } from '../src/core/exam.ts'
 import type { AssessmentState, KnowledgeMap, LessonState, Plan, Profile, QuestionBank } from '../src/core/schema.ts'
 import { approveFixture } from './fixtures/quality.ts'
@@ -24,11 +25,31 @@ function fixture(t: TestContext) {
   const map = store.read('alpha', 'knowledge-map') as KnowledgeMap
   approveFixture(root, 'alpha', mapContent(map, profile))
   approveFixture(root, 'alpha', planContent(store.read('alpha', 'plan') as Plan, profile, map))
-  const run = (mode: string, behavior: 'repair' | 'fail' | 'grading-fail' | 'grading-success' | 'assessment-ready' | 'assessment-second-fail', input = '') => spawnSync(process.execPath,
+  const run = (mode: string, behavior: 'repair' | 'fail' | 'grading-fail' | 'grading-success' | 'assessment-ready' | 'assessment-second-fail' | 'single-node' | 'continue-research', input = '') => spawnSync(process.execPath,
     [fileURLToPath(new URL('./fixtures/admission-runner.ts', import.meta.url)), mode, root, behavior],
     { input, encoding: 'utf8', timeout: 10000 })
   return { root, store, profile, map, run }
 }
+
+it('单点恢复及已有教研断点遇到地图拒绝时保留课程，不生成替代骨架或改写真人状态', t => {
+  for (const behavior of ['single-node', 'continue-research'] as const) {
+    const { root, store, profile, map, run } = fixture(t)
+    map.nodes[0].title = 'REJECT_CANDIDATE 范围需要核查'
+    store.write('alpha', 'knowledge-map', map)
+    const progress = new ResearchProgressStore(root, 'alpha')
+    if (behavior === 'continue-research') progress.save(map, profile, 'topic')
+    const files = ['knowledge-map.yaml', 'profile.yaml', 'mastery.yaml', 'plan.yaml']
+    const before = files.map(file => fs.readFileSync(path.join(root, 'alpha', file), 'utf8'))
+    const result = run('research', behavior)
+    assert.equal(result.status, 1, result.stdout + result.stderr)
+    assert.match(result.stderr, /不自动重写整张地图/)
+    assert.equal(fs.existsSync(path.join(root, 'research-generation.txt')), false)
+    assert.deepEqual(files.map(file => fs.readFileSync(path.join(root, 'alpha', file), 'utf8')), before)
+    if (behavior === 'continue-research') assert.equal(progress.completed(map, profile, 'topic'), true)
+    assert.equal(store.has('alpha', 'assessment'), false)
+    assert.equal(store.has('alpha', 'learner-profile'), false)
+  }
+})
 
 it('39 节课程只准备当前摸底节点就显示首题；未作答时不生成后续题库、不更新掌握度', t => {
   const { root, store, profile, run } = fixture(t)

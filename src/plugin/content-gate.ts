@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
+import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, MAP_NODE_REVIEW_CONTRACT, MAP_OUTLINE_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, mapTeachingTime, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
   requiredAssertions, teachingContent, validateContentInput, type ApprovedTeachingTurn, type ContentInput } from '../core/content-quality.ts'
 import type { KnowledgeMap, Profile } from '../core/schema.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
@@ -57,6 +57,8 @@ export class ContentGate {
     const previous = history[0]
     // 明确拒绝不能靠重新抽样变成通过；只有没有完成的检查才恢复。
     for (const rejected of history.filter(record => record.status === 'rejected')) {
+      // 上下文修复后重跑失配的检查；其余逐字匹配的拒绝仍由 checkPart 复用，不能重抽成通过。
+      if (!this.store.reviewContextCurrent(rejected, input)) continue
       const issues = contentIssues(input, rejected.solutions ?? [], rejected.review ?? { units: [] }, rejected.facts)
       if (issues.length) return { approved: false, issues, cached: true, evidenceFile: this.store.evidenceFile(rejected.id) }
     }
@@ -138,6 +140,8 @@ export class ContentGate {
         const reviewed = await checkPart('reviewer', units, partUnits => JSON.stringify({
           ...(input.kind === 'map' ? { dataContract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { dataContract: TEACHING_REVIEW_CONTRACT }
             : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : {}),
+          ...(input.kind === 'map' && partUnits.some(unit => unit.id === 'outline') ? { outlineScopeContract: MAP_OUTLINE_REVIEW_CONTRACT, teachingTime: mapTeachingTime(input) } : {}),
+          ...(input.kind === 'map' && partUnits.some(unit => unit.id.startsWith('node:')) ? { nodeScopeContract: MAP_NODE_REVIEW_CONTRACT } : {}),
           ...(input.kind === 'map' && partUnits.some(unit => unit.id.startsWith('resource:')) ? { resourceScopeContract: MAP_RESOURCE_REVIEW_CONTRACT } : {}),
           content: { ...input, context: mapReviewContext(input, partUnits), units: partUnits },
           independentSolutions: record.solutions!.filter(s => partUnits.some(u => u.id === s.id)),

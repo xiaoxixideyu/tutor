@@ -103,6 +103,91 @@ it('分批审查资料时提供完整课程节点和当前资料归属，避免�
   }
 })
 
+function writeLegacyNodeContext(store: QualityStore, record: QualityRecord): void {
+  for (const call of record.calls.filter(call => call.role === 'reviewer')) {
+    const request = JSON.parse(call.prompt)
+    if (!request.content.units.some((unit: { id: string }) => unit.id.startsWith('node:'))) continue
+    delete request.nodeScopeContract
+    if (!request.resourceScopeContract) request.content.context = record.input.context
+    call.prompt = JSON.stringify(request)
+  }
+  // 模拟升级前落盘的证据，不能经当前校验器伪造一份新批准。
+  fs.writeFileSync(store.evidenceFile(record.id), JSON.stringify(record))
+  if (record.status === 'approved') fs.writeFileSync(path.join(store.directory, 'approved', `${record.key}.json`), JSON.stringify(record))
+}
+
+it('摘要批次带完整清单；旧空上下文批准失效，仅重审失配批次并保留旧证据', async t => {
+  const { gate, store, records, requests } = setup(t)
+  const content = mapContent({ ...map, nodes: [...map.nodes, { id: 'next', title: '下一课' }],
+    resources: [{ node: 'die', title: '资料', url: 'https://example.org/a' }] }, profile)
+  await gate.review(content)
+  const original = records()[0]
+  writeLegacyNodeContext(store, original)
+  const evidence = fs.readFileSync(store.evidenceFile(original.id), 'utf8')
+  assert.equal(store.approved(content), false, '仅有内容哈希一致不足以继续使用旧批准')
+  const before = requests.length
+  assert.equal((await gate.review(content)).approved, true)
+  assert.equal(requests.length - before, 1, '骨架与资料请求仍逐字匹配，只重审节点摘要')
+  const request = JSON.parse(requests.at(-1)!.prompt)
+  assert.deepEqual(request.content.context.nodes, [{ id: 'die', title: '一次掷骰' }, { id: 'next', title: '下一课' }])
+  assert.deepEqual(request.content.context.activeNodes, ['die', 'next'])
+  assert.match(request.nodeScopeContract, /不要求一个节点覆盖整门课程/)
+  assert.equal(fs.readFileSync(store.evidenceFile(original.id), 'utf8'), evidence)
+  assert.equal(store.approved(content), true)
+})
+
+it('地图时间预算区分每日分钟与总教学小时，错误单位的旧请求不能支撑批准', async t => {
+  const { gate, store, records, requests } = setup(t)
+  const course = mapContent({ verified: false, nodes: Array.from({ length: 39 }, (_, i) => ({ id: `n${i}`, title: `知识点 ${i}` })), edges: [] },
+    { goal: '半年内达到能面试的水平', daily_minutes: 120, requests: ['工作日一到两个小时，周末半天'] })
+  assert.equal((await gate.review(course)).approved, true)
+  const request = JSON.parse(requests[0].prompt)
+  assert.deepEqual(request.teachingTime, { lessons: 39, minutesPerLesson: 120, totalMinutes: 4680, totalHours: 78 })
+  assert.match(request.outlineScopeContract, /不是学员承诺的总预算/)
+  const record = records()[0]
+  request.teachingTime.totalHours = 90
+  record.calls[0].prompt = JSON.stringify(request)
+  fs.writeFileSync(store.evidenceFile(record.id), JSON.stringify(record))
+  fs.writeFileSync(path.join(store.directory, 'approved', `${record.key}.json`), JSON.stringify(record))
+  assert.equal(store.approved(course), false)
+  const before = requests.length
+  assert.equal((await gate.review(course)).approved, true)
+  assert.equal(requests.length - before, 1, '时间依据失配后只重审骨架，不能借用错误单位的请求')
+})
+
+it('修复空上下文可重审节点，但仍复用同一资料的语义拒绝，不能重抽成通过', async t => {
+  for (const resourceRejected of [false, true]) await t.test(String(resourceRejected), async t => {
+    const { gate, store, records } = setup(t, content => {
+      const review = reviewFor(content)
+      for (const unit of review.units) {
+        if (unit.id.startsWith('node:')) { unit.scope = 'uncertain'; unit.correctness = 'uncertain'; unit.explanation = '缺少完整课程清单' }
+        if (resourceRejected && unit.id.startsWith('resource:')) { unit.correctness = 'fail'; unit.explanation = '资料有错误事实' }
+      }
+      return review
+    })
+    const content = mapContent({ ...map, nodes: [...map.nodes, { id: 'next', title: '下一课' }],
+      resources: [{ node: 'die', title: '资料', url: 'https://example.org/a' }] }, profile)
+    assert.equal((await gate.review(content)).approved, false)
+    writeLegacyNodeContext(store, records()[0])
+    const requested: string[][] = []
+    const resumed = new ContentGate(store, async () => mockChat(prompt => {
+      const data = JSON.parse(prompt)
+      requested.push(data.content.units.map((unit: { id: string }) => unit.id))
+      return json(reviewFor(data.content))
+    }, 'fixed-node-context'))
+    const verdict = await resumed.review(content)
+    assert.deepEqual(requested, [['node:die', 'node:next']])
+    assert.equal(verdict.approved, !resourceRejected)
+    assert.equal(store.approved(content), !resourceRejected)
+    if (resourceRejected) {
+      assert.match(verdict.issues.join(''), /resource:0.*错误事实/)
+      assert.doesNotMatch(verdict.issues.join(''), /缺少完整课程清单/)
+      const noResampling = new ContentGate(store, async () => { throw new Error('不能重抽拒绝') })
+      assert.equal((await noResampling.review(content)).approved, false)
+    }
+  })
+})
+
 it('精确分数运算拒绝错误概率恒等式，解析器不执行代码或接受无限大输入', () => {
   assert.equal(evaluateRational('1/3 + 1/2 + 1/3'), '7/6')
   assert.equal(evaluateRational('-(0.25+1/4)*2'), '-1')

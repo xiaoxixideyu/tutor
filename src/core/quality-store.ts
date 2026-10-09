@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { COURSE_ID_PATTERN } from './store.ts'
 import type { UsageSample } from './cost.ts'
-import { bankContent, blindQuestions, canonicalJson, contentIssues, contentKey, factProbes, MAP_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY, requiredAssertions,
+import { bankContent, blindQuestions, canonicalJson, contentIssues, contentKey, factProbes, MAP_REVIEW_CONTRACT, MAP_NODE_REVIEW_CONTRACT, MAP_OUTLINE_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, mapTeachingTime, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY, requiredAssertions,
   validateContentInput, type ApprovedTeachingTurn, type BlindSolution, type ContentInput, type ContentReview, type FactCheck } from './content-quality.ts'
 import type { DocKind, KnowledgeMap, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
 
@@ -71,6 +71,9 @@ function mapCallMatches(call: QualityCall, input: ContentInput): boolean {
     return Array.isArray(units) && units.length > 0 && new Set(units.map(unit => unit.id)).size === units.length
       && units.every(unit => input.units.some(current => current.id === unit.id && canonicalJson(current) === canonicalJson(unit)))
       && canonicalJson(request.content.context) === canonicalJson(mapReviewContext(input, units))
+      && request.outlineScopeContract === (units.some(unit => unit.id === 'outline') ? MAP_OUTLINE_REVIEW_CONTRACT : undefined)
+      && canonicalJson(request.teachingTime) === canonicalJson(units.some(unit => unit.id === 'outline') ? mapTeachingTime(input) : undefined)
+      && request.nodeScopeContract === (units.some(unit => unit.id.startsWith('node:')) ? MAP_NODE_REVIEW_CONTRACT : undefined)
       && request.resourceScopeContract === (units.some(unit => unit.id.startsWith('resource:')) ? MAP_RESOURCE_REVIEW_CONTRACT : undefined)
       && canonicalJson(request.requiredAssertions) === canonicalJson(units.map(unit => ({ unitId: unit.id, assertions: requiredAssertions(input, unit) })))
   } catch { return false }
@@ -120,6 +123,10 @@ export class QualityStore {
   history(input: ContentInput): QualityRecord[] {
     const key = contentKey(input)
     return this.records().filter(record => record.policy === QUALITY_POLICY && record.key === key && contentKey(record.input) === key)
+  }
+  reviewContextCurrent(record: QualityRecord, input: ContentInput): boolean {
+    // 内容摘要相同也不代表审查上下文相同。旧版空节点清单的结论只能留作历史证据。
+    return input.kind !== 'map' || record.calls.filter(call => !call.error).every(call => mapCallMatches(call, input))
   }
   mapReuseHistory(input: ContentInput): QualityRecord[] {
     if (input.kind !== 'map') return []
@@ -209,6 +216,7 @@ export class QualityStore {
     try {
       validateContentInput(input)
       if (record.status !== 'approved' || record.policy !== QUALITY_POLICY || record.key !== contentKey(input) || contentKey(record.input) !== record.key) return false
+      if (!this.reviewContextCurrent(record, input)) return false
       const solver = record.calls.filter(c => c.role === 'solver')
       const reviewers = record.calls.filter(c => c.role === 'reviewer')
       if (!reviewers.length || record.calls.some(call => !call.sessionId || (call.error && !call.splitAfterError)) || new Set(record.calls.map(call => call.sessionId)).size !== record.calls.length) return false

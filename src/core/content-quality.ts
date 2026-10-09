@@ -55,9 +55,18 @@ export function mapContent(map: KnowledgeMap, profile: Profile): ContentInput {
 }
 
 export const MAP_RESOURCE_REVIEW_CONTRACT = '本批资料的所属节点见 content.context.nodes（完整课程节点清单），当前待核查节点见 activeNodes。完整课时骨架已单独核查；本批 units 只是资料片段，不是完整地图，不能因本批未包含 outline 就判定课程节点不存在。仍需依据学员原始范围及所属节点核查每条资料。'
+export const MAP_NODE_REVIEW_CONTRACT = '本批是课程节点摘要，完整课程清单见 content.context.nodes，当前待核查节点见 activeNodes。完整课时骨架已单独核查；不要因本批未重复 outline 就判定课时或范围无法核查，也不要求一个节点覆盖整门课程。仍须逐条核查摘要是否属于该节点、是否符合学员原始范围以及事实是否正确。'
+export const MAP_OUTLINE_REVIEW_CONTRACT = '只有学员原话明确指定总课数时，才按该数字核对节点总数。daily_minutes 是每天可投入的分钟数；目标日期、学习频次和每日时长不能被擅自换算成原话未给出的总小时数或节点数上限。teachingTime 按每节约 daily_minutes 分钟估算教学总时长，不含作业和复习，也不是学员承诺的总预算。判断时间冲突需说明原始约束、单位和计算依据；不能仅因学员未逐一列出各节标题就认定目标内的分解节点越界。明确课数、排除项及课程目标仍须严格遵守。'
+
+export function mapTeachingTime(input: ContentInput): { lessons: number; minutesPerLesson: number; totalMinutes: number; totalHours: number } {
+  const outline = input.units.find(unit => unit.id === 'outline')?.content as { nodes: unknown[] }
+  const minutesPerLesson = input.context.profile.daily_minutes ?? 30
+  const totalMinutes = outline.nodes.length * minutesPerLesson
+  return { lessons: outline.nodes.length, minutesPerLesson, totalMinutes, totalHours: totalMinutes / 60 }
+}
 
 export function mapReviewContext(input: ContentInput, units: ContentUnit[]): ContentContext {
-  if (input.kind !== 'map' || !units.some(unit => unit.id.startsWith('resource:'))) return input.context
+  if (input.kind !== 'map' || !units.some(unit => unit.node)) return input.context
   const outline = input.units.find(unit => unit.id === 'outline')?.content as { nodes: ContentContext['nodes'] }
   return { ...input.context, nodes: outline.nodes, activeNodes: [...new Set(units.flatMap(unit => unit.node ? [unit.node] : []))] }
 }
