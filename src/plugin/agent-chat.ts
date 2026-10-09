@@ -5,8 +5,10 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-tools'
 import { addUsage, normalizeUsage, type ReportedUsage, type UsageSample } from '../core/cost.ts'
 import { TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from './turn-timeout.ts'
+import { ResearchBudget } from './research-budget.ts'
 
 interface SessionEventView {
   type: string
@@ -56,6 +58,7 @@ export interface CreateAgentChatOptions {
   deadlineMs?: number
   maxTokens?: number
   retryOnLength?: boolean
+  onProgress?: (message: string) => void
 }
 
 export class OutputLimitError extends Error {
@@ -63,11 +66,12 @@ export class OutputLimitError extends Error {
 }
 
 function requestDeadline(options: CreateAgentChatOptions): number {
-  const value = options.deadlineMs ?? Number(process.env.TUTOR_LLM_DEADLINE_MS)
+  const value = options.deadlineMs ?? Number(options.tools === 'research'
+    ? process.env.TUTOR_RESEARCH_DEADLINE_MS ?? process.env.TUTOR_LLM_DEADLINE_MS : process.env.TUTOR_LLM_DEADLINE_MS)
   return Number.isFinite(value) && value > 0 ? value : options.tools === 'research' ? 480_000 : 300_000
 }
 
-function permanentModelError(error: unknown): boolean {
+export function permanentModelError(error: unknown): boolean {
   // 实测同一可用模型偶发返回网关路由 404；只为这个具体响应保留一次重试。
   // 模型不存在、认证失败与权限错误仍立即结束。
   if (error instanceof Error && /404:\s*\{\s*"message"\s*:\s*"404 Route Not Found"/i.test(error.message)
@@ -90,12 +94,14 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
   // 工具」的回合会在正常吐字途中被误判卡死。这里订阅逐块流帧：中转站每吐一块（chunk）就 +1，于是
   // 「正在吐字」= 有进展，真正的「完全没有字节返回」才会累积停滞。事件缺失时降级为 seq-only（不劣于原状）。
   let streamTicks = 0
+  const research = options.tools === 'research' ? new ResearchBudget(options.onProgress) : undefined
   const createOptions = {
     meta: { cwd: process.cwd() },
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
       agentCtx.on('agent/request', async (_payload, next) => {
+        research?.startRequest()
         const request = await next()
         return { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, options.maxTokens ?? 8192) }
       })
@@ -103,10 +109,16 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
         && (name.startsWith('mcp__searchix__') || name === 'web_fetch')
       agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
         const result = await next()
-        return { ...result, tools: result.tools.filter(tool => allowed(tool.name)) }
+        return { ...result, tools: result.tools.filter(tool => allowed(tool.name) && (!research || research.available(tool.name))),
+          sections: research ? [...result.sections, { name: 'tutor:research-budget', text: research.instruction() }] : result.sections }
       })
       ;(agentCtx.get('tools') as { guard: (fn: (execution: { name: string }) => string | undefined) => unknown })
-        .guard(execution => allowed(execution.name) ? undefined : '教学内容必须通过 runner 审查后发布，禁止模型调用此工具')
+        .guard(execution => allowed(execution.name) ? research?.claim(execution.name) : '教学内容必须通过 runner 审查后发布，禁止模型调用此工具')
+      if (research) agentCtx.on('tools/post-execute', async (execution, result, next) => {
+        const decision = await next()
+        if (decision.kind === 'block' || 'value' in decision) return decision
+        return { ...decision, content: research.result(execution.name, decision.content ?? result.content, result.isError) }
+      })
       if (options.isolatedSystemPrompt) {
         // Agent 局部作用域，避免教学生成角色、课程插件上下文和工具泄漏进盲解/审查会话。
         agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => ({ ...await next(),
@@ -193,6 +205,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
             })
           )
           await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs(), 1000, requestDeadline(options))
+          if (research?.failure) throw research.failure
           let text = ''
           let turnError: string | null = null
           let aborted = false
@@ -223,6 +236,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
           return text
         } catch (error) {
           lastError = error
+          if (research?.failure) throw research.failure
           if (error instanceof TurnTimeoutError) {
             // Harness 支持按 agent 取消；先收敛旧请求，禁止在仍运行的会话叠加 followup。
             agent.cancel?.({ kind: 'hook', reason: error.message })

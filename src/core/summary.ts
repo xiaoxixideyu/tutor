@@ -3,6 +3,7 @@ import { dueReviews, type DueReview } from './review.ts'
 import { currentNode } from './lesson.ts'
 import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile } from './schema.ts'
 import type { MasteryStatusId } from './schema.ts'
+import { ResearchProgressStore } from './research.ts'
 
 export interface ProgressNode {
   id: string
@@ -11,6 +12,7 @@ export interface ProgressNode {
   score?: number
   review_due?: string
   practiceCount: number
+  researchStatus?: 'pending' | 'saved' | 'verified'
 }
 
 export interface ProgressMilestone {
@@ -36,6 +38,7 @@ export interface CourseProgress {
   // 是否已生成实践任务（practice.yaml 存在）——决定看板给「去实践」还是「生成实践任务」入口。
   hasPractice: boolean
   hasPlan: boolean
+  research?: { completed: number; verified: number; pending: number; total: number }
 }
 
 // 课程阶段：决定看板上该课的下一步入口，避免把「只建档没计划」的半成品课丢进课堂死路。
@@ -70,6 +73,7 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
   const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
   const practice = store.has(id, 'practice') ? (store.read(id, 'practice') as PracticeTaskFile) : undefined
   const titles = new Map((map?.nodes ?? []).map((node) => [node.id, node.title]))
+  const research = new ResearchProgressStore(store.root, id)
 
   const order: string[] = []
   const seen = new Set<string>()
@@ -85,11 +89,14 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
 
   const nodes: ProgressNode[] = order.map((nodeId) => {
     const entry = mastery?.[nodeId]
+    const mapNode = map?.nodes.find(node => node.id === nodeId)
+    const researchStatus = mapNode && map && profile ? research.status(map, profile, nodeId) : undefined
     return {
       id: nodeId,
       ...(titles.has(nodeId) ? { title: titles.get(nodeId) } : {}),
       status: entry?.status ?? 'unknown',
       practiceCount: practice?.tasks.filter((task) => task.node === nodeId).length ?? 0,
+      ...(researchStatus ? { researchStatus } : {}),
       ...(entry?.score !== undefined ? { score: entry.score } : {}),
       ...(entry?.review_due !== undefined ? { review_due: entry.review_due } : {}),
     }
@@ -123,6 +130,11 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
     totalNodes: nodes.length,
     hasPractice: store.has(id, 'practice'),
     hasPlan: !!plan,
+    ...(map ? { research: {
+      completed: nodes.filter(node => node.researchStatus === 'saved' || node.researchStatus === 'verified').length,
+      verified: nodes.filter(node => node.researchStatus === 'verified').length,
+      pending: nodes.filter(node => node.researchStatus === 'pending').length, total: map.nodes.length,
+    } } : {}),
   }
 }
 

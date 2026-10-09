@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
+import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
   requiredAssertions, teachingContent, validateContentInput, type ApprovedTeachingTurn, type ContentInput } from '../core/content-quality.ts'
 import type { KnowledgeMap, Profile } from '../core/schema.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
@@ -11,6 +11,9 @@ import { formatTurnCost } from '../core/cost.ts'
 import { loadCostConfigFromRepo } from './cost-line.ts'
 
 export interface ContentVerdict { approved: boolean; issues: string[]; cached: boolean; evidenceFile?: string }
+export class ContentReviewError extends Error {
+  constructor(message: string, cause: unknown) { super(message, { cause }); this.name = 'ContentReviewError' }
+}
 export const CONTENT_REVIEW_LIMITS = { maxTokens: 8192, deadlineMs: 240_000, retryOnLength: false } as const
 type ChatFactory = (role: QualityRecord['calls'][number]['role'], systemPrompt: string) => Promise<AgentChat>
 
@@ -34,14 +37,14 @@ async function parallelParts<T, R>(parts: T[], work: (part: T) => Promise<R>, st
   return results
 }
 
-interface GateOptions { onStart?: (record: QualityRecord) => void; onProgress?: (record: QualityRecord) => void }
+interface GateOptions { onStart?: (record: QualityRecord) => void; onProgress?: (record: QualityRecord, call: QualityRecord['calls'][number]) => void }
 
 export class ContentGate {
   readonly store: QualityStore
   private readonly createChat: ChatFactory
   private readonly report: (record: QualityRecord) => void
   private readonly onStart: (record: QualityRecord) => void
-  private readonly onProgress: (record: QualityRecord) => void
+  private readonly onProgress: (record: QualityRecord, call: QualityRecord['calls'][number]) => void
   constructor(store: QualityStore, createChat: ChatFactory, report: (record: QualityRecord) => void = () => {}, options: GateOptions = {}) {
     this.store = store; this.createChat = createChat; this.report = report
     this.onStart = options.onStart ?? (() => {}); this.onProgress = options.onProgress ?? (() => {})
@@ -50,6 +53,7 @@ export class ContentGate {
     validateContentInput(input)
     if (this.store.approved(input)) return { approved: true, issues: [], cached: true }
     const history = this.store.history(input)
+    const reusableHistory = [...history, ...this.store.mapReuseHistory(input)]
     const previous = history[0]
     // 明确拒绝不能靠重新抽样变成通过；只有没有完成的检查才恢复。
     for (const rejected of history.filter(record => record.status === 'rejected')) {
@@ -88,7 +92,7 @@ export class ContentGate {
         }
         call.elapsedMs = Date.now() - started
         this.store.save(record)
-        this.onProgress(record)
+        this.onProgress(record, call)
         if (!failed && call.error) throw new Error(call.error)
       }
     }
@@ -97,7 +101,7 @@ export class ContentGate {
       parse: (value: unknown, items: T[]) => R[], stop: () => boolean = () => false): Promise<R[]> => {
       if (stop()) return []
       const request = prompt(items)
-      const saved = history.flatMap(record => record.calls.map(call => ({ ...call, reusedFrom: call.reusedFrom ?? record.id })))
+      const saved = reusableHistory.flatMap(record => record.calls.map(call => ({ ...call, reusedFrom: call.reusedFrom ?? record.id })))
         .find(call => call.role === role && call.prompt === request && call.reply && !call.error
           && call.sessionId && !used.has(call.sessionId) && this.store.reusable(call, input))
       if (saved) {
@@ -109,7 +113,7 @@ export class ContentGate {
             used.add(saved.sessionId!)
             record.calls.push({ ...saved, usage: { inputTokens: 0, outputTokens: 0 } })
             this.store.save(record)
-            this.onProgress(record)
+            this.onProgress(record, saved)
             return result
           }
         }
@@ -125,6 +129,7 @@ export class ContentGate {
         return split()
       }
     }
+    let failure: unknown
     try {
       record.solutions = []
       record.facts = []
@@ -132,7 +137,9 @@ export class ContentGate {
       const reviewPart = async (units: ContentInput['units']) => {
         const reviewed = await checkPart('reviewer', units, partUnits => JSON.stringify({
           ...(input.kind === 'map' ? { dataContract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { dataContract: TEACHING_REVIEW_CONTRACT }
-            : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : {}), content: { ...input, units: partUnits },
+            : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : {}),
+          ...(input.kind === 'map' && partUnits.some(unit => unit.id.startsWith('resource:')) ? { resourceScopeContract: MAP_RESOURCE_REVIEW_CONTRACT } : {}),
+          content: { ...input, context: mapReviewContext(input, partUnits), units: partUnits },
           independentSolutions: record.solutions!.filter(s => partUnits.some(u => u.id === s.id)),
           independentFactChecks: record.facts!.filter(f => partUnits.some(u => requiredAssertions(input, u).some(a => f.id === `${u.id}/${a.id}`))),
           requiredAssertions: partUnits.map(unit => ({ unitId: unit.id, assertions: requiredAssertions(input, unit) })) }),
@@ -163,6 +170,7 @@ export class ContentGate {
       record.issues = contentIssues(input, record.solutions, record.review, record.facts)
       record.status = record.issues.length ? 'rejected' : 'approved'
     } catch (error) {
+      failure = error
       record.status = 'error'; record.error = error instanceof Error ? error.message : String(error)
     } finally {
       record.completedAt = new Date().toISOString()
@@ -170,7 +178,7 @@ export class ContentGate {
       this.report(record)
     }
     const evidenceFile = this.store.evidenceFile(record.id)
-    if (record.status === 'error') throw new Error(`内容审查未完成，未发布内容。记录：${evidenceFile}（${record.error}）`)
+    if (record.status === 'error') throw new ContentReviewError(`内容审查未完成，未发布内容。记录：${evidenceFile}（${record.error}）`, failure)
     return { approved: record.status === 'approved', issues: record.issues ?? [], cached: false, evidenceFile }
   }
   async require(input: ContentInput): Promise<void> {
@@ -194,22 +202,28 @@ export function createContentGate(ctx: Context, store: { root: string }, courseI
     for (const call of record.calls) if (call.model && !call.reusedFrom) out.write(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, out.isTTY === true)}\n`)
   }, {
     onStart: record => process.stdout.write(`正在核对${labels[record.input.kind]}的范围与正确性…\n`),
-    onProgress: record => process.stdout.write(`${labels[record.input.kind]}核查中：已完成 ${record.calls.filter(call => call.elapsedMs !== undefined).length} 项检查。\n`),
+    onProgress: (record, call) => {
+      if (call.reusedFrom) return
+      const completed = record.calls.filter(item => item.elapsedMs !== undefined && !item.reusedFrom).length
+      const reused = record.calls.filter(item => item.reusedFrom).length
+      process.stdout.write(`${labels[record.input.kind]}核查中：已完成 ${completed} 项新检查${reused ? `，复用 ${reused} 项已有检查` : ''}。\n`)
+    },
   })
 }
 
 export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial<Pick<AgentChat, 'flush'>>, prompt: string, parse: (text: string) => ParseResult | Promise<ParseResult>,
-  gate: ContentGate, content: (value: T) => ContentInput): Promise<T> {
+  gate: ContentGate, content: (value: T) => ContentInput, options: { reviewLimitRepair?: string } = {}): Promise<T> {
   const rejected = new Map<string, ContentVerdict>()
+  const reviewLimits = new Map<string, string>()
   const saved = gate.store.candidate(prompt)
   // 历史拒绝由 gate 依据完整原证据重新判定；不将缓存的问题字符串当作新的审查结论。
-  let replayCandidate = !!saved
+  let replayCandidate = !!saved && !(options.reviewLimitRepair && saved.status === 'review-limit')
   let seedRepair = !!saved
   const generation = { ask: async (request: string) => {
     if (replayCandidate) { replayCandidate = false; return saved!.reply }
     if (seedRepair) {
       seedRepair = false
-      return chat.ask(`${prompt}\n上一版草稿尚未发布，以下为待修复数据：${JSON.stringify(saved!.reply)}\n${request}`)
+      return chat.ask(`${prompt}\n上一版草稿尚未发布，以下为待修复数据：${JSON.stringify(saved!.reply)}\n${saved!.status === 'review-limit' ? saved!.issues!.join('\n') : ''}\n${request}`)
     }
     return chat.ask(request)
   } }
@@ -219,8 +233,20 @@ export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial
       if (!result.ok) return result
       const input = content(result.value as T)
       const key = contentKey(input)
+      if (reviewLimits.has(key)) return { ok: false, error: reviewLimits.get(key)! }
       gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'pending' })
-      const verdict = rejected.get(key) ?? await gate.review(input)
+      let verdict: ContentVerdict
+      try { verdict = rejected.get(key) ?? await gate.review(input) }
+      catch (error) {
+        // 仅教研可缩短资料重新生成，不能把审查失败改成通过；服务/认证错误仍立即传播。
+        if (!options.reviewLimitRepair || input.kind !== 'map' || !(error instanceof ContentReviewError)
+          || !(error.cause instanceof OutputLimitError || error.cause instanceof TurnTimeoutError)) throw error
+        const issue = `${options.reviewLimitRepair}\n${error.message}`
+        reviewLimits.set(key, issue)
+        gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'review-limit', issues: [issue] })
+        process.stdout.write('资料审查达到时限或输出上限，正在精简本知识点资料后重新核查…\n')
+        return { ok: false, error: issue }
+      }
       if (!verdict.approved) {
         rejected.set(key, verdict)
         gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'rejected', issues: verdict.issues })

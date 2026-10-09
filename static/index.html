@@ -122,6 +122,7 @@ async function renderStatus(id) {
       <td>${esc(n.status)}</td><td>${esc(n.id)}</td><td>${esc(n.title ?? '')}</td>
       <td>${n.score !== undefined ? esc(n.score) : ''}</td>
       <td>${n.review_due !== undefined ? `复习→${esc(n.review_due)}` : ''}</td>
+      <td>${n.researchStatus ? `${{ pending: '待教研', saved: '已保存 · 来源待补', verified: '来源已验证' }[n.researchStatus]} <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research&node=${encodeURIComponent(n.id)}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
       <td>${p.hasPlan ? `<button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}&node=${encodeURIComponent(n.id)}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
     </tr>`
   }).join('')
@@ -147,18 +148,20 @@ async function renderStatus(id) {
     <h2 style="margin-top:12px">${esc(p.id)}${p.goal ? ` · ${esc(p.goal)}` : ''}</h2>
     <div class="meta">指针：${p.current ? esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
     <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
+    ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
     ${practiceRow}
     ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
     <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
-    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>实践</th></tr></thead>
+    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>教研资料</th><th>实践</th></tr></thead>
     <tbody>${nodeRows}</tbody></table>`
   document.getElementById('back').addEventListener('click', renderList)
-  for (const btn of $panel.querySelectorAll('.ms-exam, .go-practice')) {
+  for (const btn of $panel.querySelectorAll('.ms-exam, .go-practice, .go-research')) {
     btn.addEventListener('click', () => { location.href = btn.dataset.href })
   }
 }
 
-renderList().catch((error) => {
+const requestedCourse = new URLSearchParams(location.search).get('course')
+;(requestedCourse ? renderStatus(requestedCourse) : renderList()).catch((error) => {
   $panel.innerHTML = `<div class="err">加载失败：${esc(error.message)}</div>`
 })
 </script>

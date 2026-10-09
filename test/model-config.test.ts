@@ -21,7 +21,7 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   assert.equal(before.source, 'environment')
   assert.equal(before.apiKeySet, true)
   assert.ok(!JSON.stringify(before).includes('environment-secret'))
-  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768 })
+  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768, researchDeadlineMs: 600000 })
   assert.equal(config.source, 'saved')
   assert.equal(config.baseUrl, 'https://second.invalid/v1')
   assert.ok(!JSON.stringify(config).includes('replacement-secret'))
@@ -33,6 +33,7 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   assert.equal(launch.TUTOR_LLM_API_KEY, 'replacement-secret')
   assert.equal(launch.TUTOR_LLM_THINKING, '')
   assert.equal(launch.TUTOR_LLM_CONTEXT_WINDOW, '32768')
+  assert.equal(launch.TUTOR_RESEARCH_DEADLINE_MS, '600000')
   assert.equal(launch.TUTOR_MODEL_CONFIG_RESOLVED, '1')
 })
 
@@ -57,6 +58,7 @@ it('不合法的渠道、字段或推理设置不覆盖已保存配置', (t) => 
     { baseUrl: 'https://first.invalid/v1?api_key=hidden' }, { baseUrl: 'https://first.invalid/v1/chat/completions' },
     { model: 'model\nother: value' }, { model: 'bad\0model' }, { apiKey: 123 }, { apiKey: 'bad\nkey' }, { apiKey: 'bad\0key' },
     { thinking: 'unknown' }, { thinking: ['on'] }, { thinking: 'off', model: 'other-model' }, { contextWindow: 0 }, { contextWindow: 1.5 },
+    { researchDeadlineMs: 0 }, { researchDeadlineMs: 1_800_001 }, { researchDeadlineMs: '600000' },
   ]) assert.throws(() => store.save({ ...valid, ...invalid }))
   assert.equal(fs.readFileSync(store.file, 'utf8'), previous)
 })

@@ -3,7 +3,8 @@ import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
 import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
-import { createAgentChat, type AgentChat } from './agent-chat.ts'
+import { createAgentChat, permanentModelError } from './agent-chat.ts'
+import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../core/research.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { mapContent } from '../core/content-quality.ts'
@@ -12,7 +13,7 @@ import { profileScope } from '../core/interview.ts'
 
 const name = 'tutor-research-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required(), batchSize: z.number().default(3) })
+const Config = z.object({ courseId: z.string().required(), nodeId: z.string() })
 
 interface StoreView {
   root: string
@@ -52,23 +53,26 @@ function skeletonPrompt(profile: Profile): string {
   ].join('\n')
 }
 
-function batchPrompt(profile: Profile, batch: { id: string; title?: string; summary?: string }[], batchIndex: number, totalBatches: number): string {
-  const lines = batch.map((n) => `- ${n.id}（${n.title ?? n.id}）${n.summary ? `：${n.summary}` : ''}`).join('\n')
+function nodePrompt(profile: Profile, node: { id: string; title?: string; summary?: string }): string {
+  const lines = `- ${node.id}（${node.title ?? node.id}）${node.summary ? `：${node.summary}` : ''}`
   return [
-    `任务：对下列知识点做联网教研与交叉验证（第 ${batchIndex + 1}/${totalBatches} 批）。`,
+    '任务：只对下列一个知识点做联网教研与交叉验证，完成后立即给出结果。',
     '',
-    '本批知识点：',
+    '本次知识点：',
     lines,
     '',
     `学员目的与原始范围：${profileScope(profile)}；基础：${profile.background || '未填写'}`,
     '',
     '要求（克制搜索预算）：',
-    '- 每个知识点最多 2 次搜索（mcp__searchix__ 工具，查询用英文，优先官方文档/一手资料）；必要时用 web_fetch 抓正文',
+    '- 先用一轮工具调用提交 2 个互补的英文查询，优先官方文档/一手资料。通常完成 2 次搜索；服务不可用时最多增加 1 次替代搜索',
+    '- 必要时最多抓取 2 个来源正文。只保留相关片段，不下载整站，不追读本地缓存，不继续扩大搜索',
     '- 两个独立来源相互印证才标 verified=true；系统要求至少两个不同注册域名（同站不同页面或子域不算两个来源）。不够则保留 verified=false，不要编造来源',
     '- summary 只写有来源支撑的事实；两个来源冲突时在 resources[].note 注明分歧',
     '- 区分必要条件与常用做法，不把示例中的写法概括成“必须”；material 只摘录本课范围内需要的事实与例子，排除项不进入摘要',
+    '- 引用稳定的页面标题与链接，不写与知识内容无关的章节编号；版本相关结论必须写明版本，不能混用不同版本的编号或行为',
+    '- resources 最多 3 条；summary 是学习范围摘要，最多 120 汉字。每条 material 只保留最多 3 个核心事实、180 汉字以内，note 一句话，不抄长方法清单；缺少足够证据时提交现有资料并保持 verified=false',
     '',
-    '输出 JSON（```json 代码块，只含本批知识点）：',
+    '输出 JSON（```json 代码块，只含当前知识点，不更改标题或扩展课程）：',
     '{"nodes": [{"id": "…", "title": "…", "summary": "…", "verified": true 或 false}], "resources": [{"node": "…", "title": "…", "url": "https://…", "note": "推荐理由", "material": "正文摘要（可选 ≤300字）"}]}',
     '除该 JSON 外不要输出其他内容。',
   ].join('\n')
@@ -102,7 +106,7 @@ async function pruneDeadResources(
   for (let i = withUrl.length - 1; i >= 0; i--) {
     const resource = withUrl[i]
     if (verdicts[i]) { resource.url = verdicts[i]!; continue }
-    out.write(`  ⚠ 来源失效，已剔除：${resource.title}（${resource.url}）\n`)
+    out.write(`  ⚠ 来源暂无法访问，未计入本次资料：${resource.title}（${resource.url}）\n`)
     const index = resources.indexOf(resource)
     if (index >= 0) resources.splice(index, 1)
   }
@@ -118,6 +122,7 @@ function validateBatch(data: unknown, batchIds: Set<string>): ParseResult {
   const missing = [...batchIds].filter((id) => !batch.nodes.some((n) => n.id === id))
   if (missing.length > 0) return { ok: false, error: `缺少本批知识点：${missing.join('、')}` }
   const resources = batch.resources ?? []
+  if (resources.length > 3) return { ok: false, error: '一个知识点最多保留 3 条最相关来源' }
   const orphan = resources.find((r) => !batchIds.has(r.node))
   if (orphan) return { ok: false, error: `resources 中的知识点 "${orphan.node}" 不在本批里` }
   const invalidUrl = resources.find((r) => r.url && !/^https?:\/\//.test(r.url))
@@ -142,7 +147,7 @@ const BatchSchema = z.object({
     .default([]),
 }) as unknown as Schema<unknown, BatchResult>
 
-async function run(ctx: Context, config: { courseId: string; batchSize: number }): Promise<void> {
+async function run(ctx: Context, config: { courseId: string; nodeId?: string }): Promise<void> {
   const courseState = ctx.get('courseState') as { store: StoreView } | undefined
   if (!courseState) throw new Error('tutor: 核心服务未就绪')
   const store = courseState.store
@@ -162,7 +167,9 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   }
   const profile = store.read(config.courseId, 'profile') as Profile
   const gate = createContentGate(ctx, store, config.courseId)
-  const chat = await createAgentChat(ctx, { tools: 'research' })
+  const progress = new ResearchProgressStore(store.root, config.courseId)
+  // 骨架无须联网；每个知识点另建会话，避免累积整门课的抓取正文。
+  const chat = await createAgentChat(ctx, { tools: 'none' })
   if (!chat) throw new Error('tutor: 模型会话创建失败')
 
   let map: KnowledgeMap
@@ -193,9 +200,11 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
     store.write(config.courseId, 'knowledge-map', map)
   }
 
-  const pending = map.nodes.filter((n) => n.verified !== true)
+  if (config.nodeId && !map.nodes.some(node => node.id === config.nodeId)) throw new Error('所选知识点不在本课程知识地图中')
+  const pending = config.nodeId ? [config.nodeId] : pendingResearchNodes(map, profile, progress)
   if (pending.length === 0) {
-    out.write('全部知识点均已联网验证。\n')
+    const unverified = map.nodes.filter(node => !node.verified).length
+    out.write(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个来源不足，仍保持待验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
     await chat.flush()
     process.stdin.destroy()
   exit(0)
@@ -203,44 +212,58 @@ async function run(ctx: Context, config: { courseId: string; batchSize: number }
   }
 
   const order = topoOrder(map)
-  const queue = order.filter((id) => pending.some((n) => n.id === id))
-  const batches: { id: string; title?: string; summary?: string }[][] = []
-  for (let i = 0; i < queue.length; i += config.batchSize) {
-    const ids = queue.slice(i, i + config.batchSize)
-    batches.push(ids.map((id) => map.nodes.find((n) => n.id === id)!))
-  }
-  out.write(`待教研 ${queue.length} 个知识点，分 ${batches.length} 批（每批 ${config.batchSize} 个）。\n`)
-
-  for (const [index, batch] of batches.entries()) {
-    out.write(`\n第 ${index + 1}/${batches.length} 批教研中（${batch.map((n) => n.id).join('、')}）…\n`)
-    const batchIds = new Set(batch.map((n) => n.id))
-    const nextMap = await generateApproved<KnowledgeMap>(chat, batchPrompt(profile, batch, index, batches.length), async (text) => {
-      const data = parseJsonBlock(text)
-      if (!data.ok) return data
-      const validated = validateBatch(data.value, batchIds)
-      if (!validated.ok) return validated
-      const result = validated.value as BatchResult
-      if (result.resources?.length) await pruneDeadResources(result.resources, out)
-      return { ok: true, value: { ...mergeResearchBatch(map, result), researched_at: today() } }
-    }, gate, value => mapContent(value, profile))
-    map = nextMap
-    store.write(config.courseId, 'knowledge-map', map)
-    const verified = map.nodes.filter((n) => batchIds.has(n.id) && n.verified).length
-    for (const node of map.nodes.filter((n) => batchIds.has(n.id) && !n.verified)) {
-      out.write(`  ${node.id} 待验证（来源域名 ${sourceDomains(map.resources ?? [], node.id).length} 个，需两个独立来源并完成交叉核对）。\n`)
-    }
-    out.write(`  已验证 ${verified}/${batch.length}，来源共 ${map.resources?.length ?? 0}（进度已保存，可随时中断）\n`)
-  }
+  const queue = order.filter((id) => pending.includes(id))
+  if (!config.nodeId && queue.length < map.nodes.length) out.write(`保留并跳过 ${map.nodes.length - queue.length} 个已有教研结果。\n`)
+  out.write(`待教研 ${queue.length} 个知识点，逐个执行、逐个保存；每个知识点使用独立会话。\n`)
+  const result = await researchNodes(map, queue, {
+    research: async (current, id) => {
+      const node = current.nodes.find(node => node.id === id)!
+      const nodeChat = await createAgentChat(ctx, { tools: 'research', maxTokens: 4096, retryOnLength: false,
+        onProgress: message => out.write(`  ${message}\n`) })
+      if (!nodeChat) throw new Error('无法创建本知识点的教研会话')
+      try {
+        return await generateApproved<KnowledgeMap>(nodeChat, nodePrompt(profile, node), async (text) => {
+          const data = parseJsonBlock(text)
+          if (!data.ok) return data
+          const validated = validateBatch(data.value, new Set([id]))
+          if (!validated.ok) return validated
+          const batch = validated.value as BatchResult
+          if (batch.resources?.length) await pruneDeadResources(batch.resources, out)
+          // 教研补充摘要和资料，课程标题由已有骨架决定；无需为同义改写重跑模型。
+          return { ok: true, value: { ...mergeResearchBatch(current, batch, { preserveTitles: true }), researched_at: today() } }
+        }, gate, value => mapContent(value, profile), {
+          reviewLimitRepair: '本知识点资料太长，独立审查达到预算。请只保留原课程要求的核心事实，summary 缩至 100 字以内，每条 material 缩至 150 字以内，note 一句话；去掉无关的章节编号和冗长方法清单。保留已取得的真实来源链接，不新增搜索，不扩大课程，不改变节点 id。返回原结构的完整 JSON，仍须接受完整内容审查。',
+        })
+      } finally { await nodeChat.flush(); printSessionTotal(nodeChat, out) }
+    },
+    save: (next, node) => {
+      store.write(config.courseId, 'knowledge-map', next); map = next
+      // 只在已通过准入并成功写入地图后记录调度断点。
+      progress.save(next, profile, node)
+    },
+    permanentError: permanentModelError,
+    report: event => {
+      if (event.type === 'start') out.write(`\n第 ${event.index}/${event.total} 个知识点教研中（${event.node}）…\n`)
+      else if (event.type === 'failed') out.write(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
+      else {
+        const verified = map.nodes.find(node => node.id === event.node)?.verified
+        out.write(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源不足，保持待验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
+      }
+    },
+  })
+  map = result.map
+  if (result.failed.length) throw new Error(`${result.stopped ? '连续两个知识点未完成，已停止本次教研以避免重复消耗。' : ''}未完成：${result.failed.join('、')}；已保存进度可继续。`)
 
   const verifiedTotal = map.nodes.filter((n) => n.verified).length
-  out.write(`\n教研完成：${verifiedTotal}/${map.nodes.length} 个知识点已联网验证，来源 ${map.resources?.length ?? 0} 条。\n`)
+  const remaining = pendingResearchNodes(map, profile, progress).length
+  out.write(`\n本次教研已保存：${map.nodes.length - remaining}/${map.nodes.length} 个知识点已完成资料检查，${verifiedTotal} 个已联网验证，来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
   await chat.flush()
   printSessionTotal(chat, out)
   process.stdin.destroy()
   exit(0)
 }
 
-export function apply(ctx: Context, config: { courseId: string; batchSize: number }): void {
+export function apply(ctx: Context, config: { courseId: string; nodeId?: string }): void {
   const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
   if (!exit) throw new Error('tutor-research-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
   run(ctx, config).catch((error) => {

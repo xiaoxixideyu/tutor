@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { CourseStore } from '../src/core/store.ts'
 import { courseProgress, listCourseSummaries, listDueReviews } from '../src/core/summary.ts'
+import { ResearchProgressStore } from '../src/core/research.ts'
+import type { KnowledgeMap } from '../src/core/schema.ts'
 
 function makeStore(): CourseStore {
   return new CourseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-summary-')))
@@ -72,6 +74,19 @@ describe('courseProgress', () => {
   it('不存在的课程报错', () => {
     const store = makeStore()
     assert.throws(() => courseProgress(store, 'nope'), /不存在/)
+  })
+
+  it('教研进度区分尚未完成、已保存但来源不足和来源已验证', t => {
+    const store = makeStore(), profile = { goal: '三节课' }
+    t.after(() => fs.rmSync(store.root, { recursive: true, force: true }))
+    store.create('course', profile)
+    store.write('course', 'knowledge-map', { nodes: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }, { id: 'c', title: 'C', verified: true }],
+      resources: [{ node: 'c', title: '官方', url: 'https://python.org/' }, { node: 'c', title: '独立', url: 'https://example.org/' }] })
+    new ResearchProgressStore(store.root, 'course').save(store.read('course', 'knowledge-map') as KnowledgeMap, profile, 'b')
+    const progress = courseProgress(store, 'course')
+    assert.deepEqual(progress.nodes.map(node => node.researchStatus), ['pending', 'saved', 'verified'])
+    assert.deepEqual(progress.research, { completed: 2, verified: 1, pending: 1, total: 3 })
+    assert.deepEqual(progress.counts, { mastered: 0, learning: 0, weak: 0, unknown: 3 })
   })
 })
 

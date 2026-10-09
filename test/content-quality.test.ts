@@ -9,6 +9,7 @@ import { bankContent, blindQuestions, contentIssues, contentKey, lessonContent, 
 import { QualityStore, type QualityRecord } from '../src/core/quality-store.ts'
 import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/plugin/content-gate.ts'
 import { OutputLimitError, type AgentChat } from '../src/plugin/agent-chat.ts'
+import { TurnTimeoutError } from '../src/plugin/turn-timeout.ts'
 import type { KnowledgeMap, LessonDraft, Profile, QuestionBank } from '../src/core/schema.ts'
 import { parseJsonBlock } from '../src/plugin/generation.ts'
 
@@ -41,6 +42,66 @@ function setup(t: TestContext, reviewer: (content: ContentInput) => unknown = re
   const records = () => fs.readdirSync(path.join(store.directory, 'reviews')).map(file => JSON.parse(fs.readFileSync(path.join(store.directory, 'reviews', file), 'utf8')) as QualityRecord)
   return { root, gate, store, requests, records }
 }
+
+it('39 节地图逐点补充资料时只检查变化单元，完整批准仍依赖原始证据', async t => {
+  const { gate, store, requests, records } = setup(t)
+  const large: KnowledgeMap = { verified: false, nodes: Array.from({ length: 39 }, (_, i) => ({ id: 'n' + i, title: '知识点' + i, summary: '原始摘要' })), edges: [] }
+  const oldInput = mapContent(large, profile)
+  assert.equal((await gate.review(oldInput)).approved, true)
+  const oldRecord = records()[0]
+  const baseline = requests.length
+  const updated = structuredClone(large)
+  updated.nodes[0].summary = '已补充的有据摘要'
+  updated.resources = [{ node: 'n0', title: '来源甲', url: 'https://example.org/a' }, { node: 'n0', title: '来源乙', url: 'https://python.org/b' }]
+  const nextInput = mapContent(updated, profile)
+  assert.equal((await gate.review(nextInput)).approved, true)
+  assert.equal(requests.length - baseline, 3)
+  assert.ok(records().find(record => record.key === contentKey(nextInput))!.calls.some(call => call.reusedFrom === oldRecord.id))
+  assert.equal(store.approved(nextInput), true)
+  fs.unlinkSync(store.evidenceFile(oldRecord.id))
+  assert.equal(store.approved(nextInput), false, '源证据丢失后，跨版本复用不能继续签发批准')
+})
+
+it('地图内容或范围变化不能借用旧通过结论；旧证据被篡改也不能批准', async t => {
+  const { gate, store, requests, records } = setup(t, content => {
+    const review = reviewFor(content)
+    for (const unit of review.units) if (JSON.stringify(content.units.find(item => item.id === unit.id)).includes('错误断言')) unit.correctness = 'fail'
+    return review
+  })
+  const original = mapContent(map, profile)
+  await gate.review(original)
+  const old = records()[0]
+  const changed = mapContent({ ...map, nodes: [{ ...map.nodes[0], summary: '错误断言' }] }, profile)
+  assert.equal((await gate.review(changed)).approved, false)
+  const before = requests.length
+  assert.equal((await gate.review(mapContent(map, { ...profile, daily_minutes: 30 }))).approved, true)
+  assert.equal(requests.length - before, 2, '档案范围变更后重新核查骨架与节点')
+  const extended = mapContent({ ...map, resources: [{ node: 'die', title: '资料', url: 'https://example.org' }] }, profile)
+  await gate.review(extended)
+  old.review!.units[0].scope = 'fail'
+  fs.writeFileSync(store.evidenceFile(old.id), JSON.stringify(old))
+  assert.equal(store.approved(extended), false)
+})
+
+it('分批审查资料时提供完整课程节点和当前资料归属，避免把片段当成空地图', async t => {
+  const { gate, requests } = setup(t, content => {
+    const review = reviewFor(content)
+    for (const unit of content.units.filter(unit => unit.id.startsWith('resource:'))) {
+      assert.ok(content.context.nodes.some(node => node.id === unit.node))
+      assert.ok(content.context.activeNodes.includes(unit.node!))
+    }
+    return review
+  })
+  const withResources = mapContent({ ...map, resources: Array.from({ length: 3 }, (_, i) => ({ node: 'die', title: `来源 ${i}`, url: `https://example.org/${i}` })) }, profile)
+  assert.equal((await gate.review(withResources)).approved, true)
+  const sourceRequests = requests.filter(request => JSON.parse(request.prompt).resourceScopeContract)
+  assert.equal(sourceRequests.length, 2)
+  for (const request of sourceRequests) {
+    const data = JSON.parse(request.prompt)
+    assert.deepEqual(data.content.context.nodes, [{ id: 'die', title: '一次掷骰' }])
+    assert.match(data.resourceScopeContract, /不是完整地图/)
+  }
+})
 
 it('精确分数运算拒绝错误概率恒等式，解析器不执行代码或接受无限大输入', () => {
   assert.equal(evaluateRational('1/3 + 1/2 + 1/3'), '7/6')
@@ -159,6 +220,54 @@ it('生成后审查中断保留待审草稿，续跑重新校验与审查而不�
   assert.equal(requests.filter(request => request.role === 'solver').length, 1)
   assert.equal(store.approved(input), true)
   assert.equal(store.candidate('生成该节点题库'), undefined)
+})
+
+it('教研资料单项审查超限后精简重审，原失败保留，未缩短稿不反复调用审查', async t => {
+  const { gate, store, records } = setup(t, content => {
+    if (JSON.stringify(content).includes('冗长资料')) throw new OutputLimitError()
+    return reviewFor(content)
+  })
+  const long = { ...map, resources: [{ node: 'die', title: '资料', material: '冗长资料' }] }
+  const short = { ...map, resources: [{ node: 'die', title: '资料', material: '简短事实' }] }
+  let calls = 0
+  const options = { reviewLimitRepair: '精简资料后重新核查' }
+  const result = await generateApproved<KnowledgeMap>({ ask: async prompt => {
+    if (calls++) assert.match(prompt, /精简资料/)
+    return json(calls <= 2 ? long : short)
+  } }, '单点教研', parseJsonBlock, gate, value => mapContent(value, profile), options)
+  assert.equal(result.resources?.[0].material, '简短事实')
+  assert.equal(records().filter(record => record.status === 'error').length, 1)
+  assert.equal(store.approved(mapContent(long, profile)), false)
+  assert.equal(store.approved(mapContent(short, profile)), true)
+})
+
+it('精简前中断可恢复修复请求；普通服务错误不能触发资料精简或准入', async t => {
+  const { gate, store, records } = setup(t, content => {
+    if (JSON.stringify(content).includes('冗长资料')) throw new TurnTimeoutError(240_000, true)
+    return reviewFor(content)
+  })
+  const long = { ...map, resources: [{ node: 'die', title: '资料', material: '冗长资料' }] }
+  const short = { ...map, resources: [{ node: 'die', title: '资料', material: '简短事实' }] }
+  const options = { reviewLimitRepair: '精简资料后重新核查' }
+  let calls = 0
+  await assert.rejects(generateApproved<KnowledgeMap>({ ask: async () => {
+    if (calls++) throw new Error('生成器中断')
+    return json(long)
+  } }, '恢复单点教研', parseJsonBlock, gate, value => mapContent(value, profile), options), /生成器中断/)
+  assert.equal(store.candidate('恢复单点教研')?.status, 'review-limit')
+  const before = records().length
+  await generateApproved<KnowledgeMap>({ ask: async prompt => {
+    assert.match(prompt, /冗长资料/)
+    assert.match(prompt, /精简资料/)
+    return json(short)
+  } }, '恢复单点教研', parseJsonBlock, gate, value => mapContent(value, profile), options)
+  assert.equal(records().length - before, 1, '恢复后先精简，不重新请求失败的原稿审查')
+  const broken = new ContentGate(store, async () => { throw new Error('401 unauthorized') })
+  let generations = 0
+  await assert.rejects(generateApproved<KnowledgeMap>({ ask: async () => { generations++; return json(long) } },
+    '认证失败', parseJsonBlock, broken, value => mapContent(value, profile), options), /401/)
+  assert.equal(generations, 1)
+  assert.equal(store.approved(mapContent(long, profile)), false)
 })
 
 it('中断后复用逐字匹配且结构完整的检查，保留原失败并只计算新增请求', async t => {

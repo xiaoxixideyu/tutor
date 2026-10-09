@@ -31,12 +31,12 @@ export interface ResearchBatch {
 }
 
 // 一批重新教研后替换本批旧资料。旧的失效链接不能混入新证据并抬高验证状态。
-export function mergeResearchBatch(map: KnowledgeMap, batch: ResearchBatch): KnowledgeMap {
+export function mergeResearchBatch(map: KnowledgeMap, batch: ResearchBatch, options: { preserveTitles?: boolean } = {}): KnowledgeMap {
   const updates = new Map(batch.nodes.map((node) => [node.id, node]))
   return enforceSourceVerification({ ...map,
     nodes: map.nodes.map((node) => {
       const update = updates.get(node.id)
-      return update ? { ...node, ...update, title: update.title ?? node.title,
+      return update ? { ...node, ...update, title: options.preserveTitles ? node.title : update.title ?? node.title,
         summary: update.summary ?? node.summary, verified: update.verified ?? false } : node
     }),
     resources: [...(map.resources ?? []).filter((r) => !updates.has(r.node)), ...(batch.resources ?? [])],

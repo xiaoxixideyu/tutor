@@ -10,6 +10,7 @@ interface ModelConfig {
   apiKey: string
   thinking: ThinkingMode
   contextWindow: number
+  researchDeadlineMs: number
 }
 
 interface SavedModelConfig extends ModelConfig {
@@ -58,7 +59,11 @@ function validate(value: Record<string, unknown>): ModelConfig {
   if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow < 1024 || contextWindow > 2_000_000) {
     throw new ModelConfigError('上下文长度必须是 1024–2000000 之间的整数')
   }
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow }
+  const researchDeadlineMs = value.researchDeadlineMs ?? 480_000
+  if (typeof researchDeadlineMs !== 'number' || !Number.isSafeInteger(researchDeadlineMs) || researchDeadlineMs < 60_000 || researchDeadlineMs > 1_800_000) {
+    throw new ModelConfigError('教研回合时限必须是 1–30 分钟（60000–1800000 毫秒）')
+  }
+  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs }
 }
 
 export class ModelConfigStore {
@@ -74,6 +79,7 @@ export class ModelConfigStore {
       model: this.env.TUTOR_LLM_MODEL ?? '', apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
       thinking: (this.env.TUTOR_LLM_THINKING || 'default') as ThinkingMode,
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
+      researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
     }
   }
 
@@ -95,7 +101,7 @@ export class ModelConfigStore {
 
   publicConfig() {
     const { config, source, updatedAt } = this.read()
-    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow,
+    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow, researchDeadlineMs: config.researchDeadlineMs,
       apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt }
   }
 
@@ -109,7 +115,8 @@ export class ModelConfigStore {
     let previousUrl = previous.baseUrl
     try { if (previousUrl) previousUrl = baseUrl(previousUrl) } catch { /* 旧环境地址可由网页修正 */ }
     if (!replacement && nextUrl !== previousUrl) throw new ModelConfigError('更换服务地址时，请填写新渠道的 API Key；不会沿用旧渠道的密钥')
-    const config = validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey })
+    const config = validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
+      researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs })
     const saved: SavedModelConfig = { version: 1, ...config, updatedAt: new Date().toISOString() }
     const temporary = `${this.file}.${randomUUID()}.tmp`
     try {
@@ -131,6 +138,6 @@ export class ModelConfigStore {
     const config = validate({ ...current })
     return { ...this.env, TUTOR_LLM_BASE_URL: config.baseUrl, TUTOR_LLM_MODEL: config.model,
       TUTOR_LLM_API_KEY: config.apiKey, TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
-      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_MODEL_CONFIG_RESOLVED: '1' }
+      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs), TUTOR_MODEL_CONFIG_RESOLVED: '1' }
   }
 }

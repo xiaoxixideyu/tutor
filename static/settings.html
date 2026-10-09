@@ -74,6 +74,11 @@
           <input id="contextWindow" type="number" min="1024" max="2000000" step="1" value="262144" required>
           <p class="hint">按渠道说明填写，用于限制单次请求可容纳的上下文。</p>
         </div>
+        <div class="field">
+          <label for="researchMinutes">教研回合时限（分钟）</label>
+          <input id="researchMinutes" type="number" min="1" max="30" step="1" value="8" required>
+          <p class="hint">单个知识点的一次教研回合上限，包含模型等待、搜索和抓取；独立内容审查另计时。达到时限保留已保存进度。</p>
+        </div>
       </details>
       <div class="actions"><button id="save" type="submit">保存设置</button><span id="saved" class="saved"></span></div>
     </fieldset>

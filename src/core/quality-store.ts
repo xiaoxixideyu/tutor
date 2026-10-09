@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { COURSE_ID_PATTERN } from './store.ts'
 import type { UsageSample } from './cost.ts'
-import { bankContent, blindQuestions, contentIssues, contentKey, factProbes, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY,
+import { bankContent, blindQuestions, canonicalJson, contentIssues, contentKey, factProbes, MAP_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, parseBlindSolutions, parseContentReview, parseFactChecks, practiceContent, QUALITY_POLICY, requiredAssertions,
   validateContentInput, type ApprovedTeachingTurn, type BlindSolution, type ContentInput, type ContentReview, type FactCheck } from './content-quality.ts'
 import type { DocKind, KnowledgeMap, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
 
@@ -49,8 +49,31 @@ export interface PublishedTurn {
 export interface GeneratedCandidate {
   reply: string
   inputKey: string
-  status: 'pending' | 'rejected'
+  status: 'pending' | 'rejected' | 'review-limit'
   issues?: string[]
+}
+
+interface ApprovalCheck { visiting: Set<string>; results: Map<string, boolean> }
+
+// 仅地图允许跨版本复用：范围、完整课时骨架或单元中的任一字段变更都会使相应请求失配。
+function mapCallMatches(call: QualityCall, input: ContentInput): boolean {
+  try {
+    if (input.kind !== 'map') return false
+    const request = JSON.parse(call.prompt)
+    if (call.role === 'facts') {
+      const expected = new Map(factProbes(input).map(claim => [claim.id, canonicalJson(claim)]))
+      return Array.isArray(request.claims) && request.claims.length > 0
+        && new Set(request.claims.map((claim: { id: string }) => claim.id)).size === request.claims.length
+        && request.claims.every((claim: { id: string }) => expected.get(claim.id) === canonicalJson(claim))
+    }
+    if (call.role !== 'reviewer' || request.dataContract !== MAP_REVIEW_CONTRACT || request.content?.kind !== 'map') return false
+    const units = request.content.units as ContentInput['units']
+    return Array.isArray(units) && units.length > 0 && new Set(units.map(unit => unit.id)).size === units.length
+      && units.every(unit => input.units.some(current => current.id === unit.id && canonicalJson(current) === canonicalJson(unit)))
+      && canonicalJson(request.content.context) === canonicalJson(mapReviewContext(input, units))
+      && request.resourceScopeContract === (units.some(unit => unit.id.startsWith('resource:')) ? MAP_RESOURCE_REVIEW_CONTRACT : undefined)
+      && canonicalJson(request.requiredAssertions) === canonicalJson(units.map(unit => ({ unitId: unit.id, assertions: requiredAssertions(input, unit) })))
+  } catch { return false }
 }
 
 function atomicJson(file: string, value: unknown): void {
@@ -98,6 +121,13 @@ export class QualityStore {
     const key = contentKey(input)
     return this.records().filter(record => record.policy === QUALITY_POLICY && record.key === key && contentKey(record.input) === key)
   }
+  mapReuseHistory(input: ContentInput): QualityRecord[] {
+    if (input.kind !== 'map') return []
+    const key = contentKey(input)
+    return this.records().filter(record => record.policy === QUALITY_POLICY && record.status === 'approved'
+      && record.input.kind === 'map' && record.key !== key && record.key === contentKey(record.input)
+      && canonicalJson(record.input.context) === canonicalJson(input.context))
+  }
   unfinishedTeaching(node: string, reply: string, previousReply: string): ApprovedTeachingTurn | undefined {
     for (const record of this.records()) {
       if (!['pending', 'error', 'approved'].includes(record.status) || record.input.kind !== 'teaching') continue
@@ -108,13 +138,17 @@ export class QualityStore {
     }
     return undefined
   }
-  reusable(call: QualityCall, input: ContentInput): boolean {
+  reusable(call: QualityCall, input: ContentInput, check: ApprovalCheck = { visiting: new Set(), results: new Map() }): boolean {
     if (!call.reusedFrom) return true
     try {
       const original = JSON.parse(fs.readFileSync(this.evidenceFile(call.reusedFrom), 'utf8')) as QualityRecord
-      return original.policy === QUALITY_POLICY && original.key === contentKey(input) && contentKey(original.input) === original.key
-        && original.calls.some(saved => !saved.error && !saved.reusedFrom && saved.sessionId === call.sessionId
-          && saved.role === call.role && saved.prompt === call.prompt && saved.reply === call.reply)
+      if (original.policy !== QUALITY_POLICY || contentKey(original.input) !== original.key
+        || !original.calls.some(saved => !saved.error && !saved.reusedFrom && saved.sessionId === call.sessionId
+          && saved.role === call.role && saved.prompt === call.prompt && saved.reply === call.reply)) return false
+      if (original.key === contentKey(input)) return true
+      return original.input.kind === 'map' && input.kind === 'map'
+        && canonicalJson(original.input.context) === canonicalJson(input.context)
+        && mapCallMatches(call, input) && this.validApproval(original, original.input, check)
     } catch { return false }
   }
   private candidateFile(prompt: string): string {
@@ -124,8 +158,8 @@ export class QualityStore {
   candidate(prompt: string): GeneratedCandidate | undefined {
     try {
       const value = JSON.parse(fs.readFileSync(this.candidateFile(prompt), 'utf8')) as GeneratedCandidate
-      if (typeof value.reply !== 'string' || !/^[a-f0-9]{64}$/.test(value.inputKey) || !['pending', 'rejected'].includes(value.status)
-        || (value.status === 'rejected' && (!Array.isArray(value.issues) || !value.issues.length || value.issues.some(issue => typeof issue !== 'string')))) return undefined
+      if (typeof value.reply !== 'string' || !/^[a-f0-9]{64}$/.test(value.inputKey) || !['pending', 'rejected', 'review-limit'].includes(value.status)
+        || (value.status !== 'pending' && (!Array.isArray(value.issues) || !value.issues.length || value.issues.some(issue => typeof issue !== 'string')))) return undefined
       return value
     } catch { return undefined }
   }
@@ -161,14 +195,24 @@ export class QualityStore {
       } catch { return [] }
     }).sort((a, b) => a.seq - b.seq)
   }
-  private validApproval(record: QualityRecord, input: ContentInput): boolean {
+  private validApproval(record: QualityRecord, input: ContentInput, check: ApprovalCheck = { visiting: new Set(), results: new Map() }): boolean {
+    const marker = record.id + ':' + contentKey(input)
+    if (check.results.has(marker)) return check.results.get(marker)!
+    if (check.visiting.has(marker)) return false
+    check.visiting.add(marker)
+    let valid = false
+    try { valid = this.inspectApproval(record, input, check) }
+    finally { check.visiting.delete(marker); check.results.set(marker, valid) }
+    return valid
+  }
+  private inspectApproval(record: QualityRecord, input: ContentInput, check: ApprovalCheck): boolean {
     try {
       validateContentInput(input)
       if (record.status !== 'approved' || record.policy !== QUALITY_POLICY || record.key !== contentKey(input) || contentKey(record.input) !== record.key) return false
       const solver = record.calls.filter(c => c.role === 'solver')
       const reviewers = record.calls.filter(c => c.role === 'reviewer')
       if (!reviewers.length || record.calls.some(call => !call.sessionId || (call.error && !call.splitAfterError)) || new Set(record.calls.map(call => call.sessionId)).size !== record.calls.length) return false
-      if (record.calls.some(call => !this.reusable(call, input))) return false
+      if (record.calls.some(call => !this.reusable(call, input, check))) return false
       if (blindQuestions(input).length && !solver.length) return false
       if (factProbes(input).length && !record.calls.some(call => call.role === 'facts')) return false
       const solutions = parseBlindSolutions({ solutions: record.solutions }, input)

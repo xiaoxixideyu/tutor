@@ -112,6 +112,7 @@ let chipSelection = []
 let chipsAnswered = false
 let currentKind = null
 let courseName = null
+let currentNodeId = ''
 let busy = false
 let busyTimer = null
 let busySeconds = 0
@@ -312,10 +313,10 @@ function researchDecision(skipKind, skipLabel) {
 
 // 单步确认 chip：两个模型步骤之间放一个「下一步 →」按钮，避免自动触发一次模型调用（会花钱），
 // 也给用户一个明确的推进入口。用于摸底完成→生成计划这类只有唯一后继的环节。
-function nextStepChip(kind, label) {
+function nextStepChip(kind, label, nodeId = '') {
   const row = el('<div class="chips"></div>')
   const go = el(`<button class="chip">${esc(label)}</button>`)
-  go.addEventListener('click', () => { row.remove(); startFlow(kind) })
+  go.addEventListener('click', () => { row.remove(); startFlow(kind, nodeId) })
   row.appendChild(go)
   $log.appendChild(row)
   scrollToEnd()
@@ -357,6 +358,7 @@ async function startSse() {
       bubbleText = ''
     }
     if (msg.type === 'hello') {
+      currentNodeId = msg.nodeId || ''
       if (msg.kind && msg.kind !== currentKind) {
         // 已有别的流程在跑
         currentKind = msg.kind
@@ -384,9 +386,11 @@ async function startSse() {
         document.getElementById('gotoBtn').style.display = 'none'
         nextStepChip('plan', '生成教学计划 →')
       } else if (msg.kind === 'research' && msg.code === 0) {
-        markStep('research', 'done')
+        if (!currentNodeId) markStep('research', 'done')
         document.getElementById('researchBtn').style.display = 'none'
-        $log.appendChild(el('<div class="sysline">—— 教研完成 ——</div>'))
+        $log.appendChild(el('<div class="sysline">—— 本次教研已保存，可继续剩余教研或进入摸底 ——</div>'))
+        nextStepChip('research', '继续未完成的教研 →')
+        $log.appendChild(el(`<div class="sysline"><a href="/?course=${encodeURIComponent(courseName)}">查看各知识点的资料与验证进度</a></div>`))
         nextStepChip('assess', '开始摸底 →')
       } else if (msg.kind === 'plan' && msg.code === 0) {
         markStep('plan', 'done')
@@ -394,7 +398,10 @@ async function startSse() {
         document.getElementById('gotoBtn').style.display = 'inline-block'
       } else {
         $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
-        if (msg.code !== 0) nextStepChip(msg.kind, '从已保存进度重试 →')
+        if (msg.code !== 0) {
+          nextStepChip(msg.kind, currentNodeId ? '重试本知识点 →' : '从已保存进度重试 →', currentNodeId)
+          if (msg.kind === 'research' && currentNodeId) nextStepChip('research', '继续未完成的教研 →')
+        }
       }
       scrollToEnd()
     }
@@ -409,22 +416,30 @@ async function api(path, body) {
 }
 
 function rememberFlow(flow) {
+  currentNodeId = flow.nodeId || ''
   const url = new URL(location.href)
   url.searchParams.set('course', flow.courseId)
   url.searchParams.set('resume', flow.kind)
   url.searchParams.set('flowId', flow.flowId)
+  if (currentNodeId) url.searchParams.set('node', currentNodeId)
+  else url.searchParams.delete('node')
   history.replaceState(null, '', url)
 }
 
-async function startFlow(kind) {
+function busyLabel(kind) {
+  return kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : kind === 'research' ? '联网教研进行中' : '等待模型回复'
+}
+
+async function startFlow(kind, nodeId = '') {
   currentKind = kind
+  currentNodeId = kind === 'research' ? nodeId : ''
   markStep(kind, 'active')
   $title.textContent = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
   $footer.style.display = 'block'
   $setup.style.display = 'none'
   document.getElementById('stopBtn').disabled = false
-  setBusy(true, kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : '等待模型回复')
-  await api('/flow/start', { kind, courseId: courseName })
+  setBusy(true, busyLabel(kind))
+  await api('/flow/start', { kind, courseId: courseName, ...(currentNodeId ? { nodeId: currentNodeId } : {}) })
 }
 
 function showConsole() {
@@ -483,7 +498,7 @@ document.getElementById('researchBtn').addEventListener('click', () => startFlow
 
 // 从课程列表「生成计划 / 去摸底」跳进来时的续起：?course=<id>&resume=<kind>，跳过 setup 面板、
 // 直接从该步起流程（复用 startFlow），并把该步之前的阶段标为已完成。仅接受向导内的步骤，learn 归课堂页。
-function resumeFrom(kind, course) {
+function resumeFrom(kind, course, nodeId) {
   courseName = course
   $setup.style.display = 'none'
   $steps.style.display = 'flex'
@@ -494,7 +509,7 @@ function resumeFrom(kind, course) {
     if (steps[i] === 'research') continue // 教研可选，不预标完成
     markStep(steps[i], 'done')
   }
-  startFlow(kind)
+  startFlow(kind, nodeId)
 }
 
 // 页面加载：附加进行中的流程（刷新不丢）；否则若带 ?course=&resume= 则续起；再否则停在 setup
@@ -515,20 +530,25 @@ flowClient.state(entryParams.get('flowId')).then((state) => {
     courseName = available.courseId
     showConsole()
     markStep(currentKind, 'active')
-    setBusy(available.status === 'running')
+    setBusy(available.status === 'running', busyLabel(currentKind))
     startSse()
     return
   }
   const course = entryParams.get('course')
   const resume = entryParams.get('resume')
+  const nodeId = resume === 'research' ? entryParams.get('node') || '' : ''
+  if (nodeId && !/^[a-z0-9][a-z0-9-]*$/.test(nodeId)) {
+    document.getElementById('err').textContent = '知识点参数非法'
+    return
+  }
   if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && ['assess', 'plan', 'research', 'new'].includes(resume)) {
     if (entryParams.has('flowId')) {
       currentKind = resume; courseName = course; showConsole()
       $footer.style.display = 'none'
       document.getElementById('stopBtn').disabled = true
       $log.appendChild(el('<div class="sysline">流程回放已过期。可从课程已保存的进度继续。</div>'))
-      nextStepChip(resume, '从已保存进度继续 →')
-    } else resumeFrom(resume, course)
+      nextStepChip(resume, '从已保存进度继续 →', nodeId)
+    } else resumeFrom(resume, course, nodeId)
   }
   startSse()
 })

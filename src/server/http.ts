@@ -113,7 +113,7 @@ export function createTutorServer(options: TutorServerOptions) {
     if (!RUNNERS.has(input.kind)) return { ok: false, error: `未知流程 "${input.kind}"` }
     if (!COURSE_ID_PATTERN.test(input.courseId)) return { ok: false, error: `课程名 "${input.courseId}" 非法` }
     if (input.milestoneId && (input.kind !== 'exam' || !COURSE_ID_PATTERN.test(input.milestoneId))) return { ok: false, error: '里程碑参数非法' }
-    if (input.nodeId && (!['practice', 'practice-gen'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) return { ok: false, error: '实践知识点参数非法' }
+    if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) return { ok: false, error: '知识点参数非法' }
     if (active) {
       if (active.status === 'running' && active.kind === input.kind && active.courseId === input.courseId && active.milestoneId === input.milestoneId && active.nodeId === input.nodeId) {
         return { ok: true, resumed: true, ...snapshot(active) }

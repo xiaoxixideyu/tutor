@@ -128,7 +128,7 @@ if (['new', 'assess', 'plan', 'learn', 'research', 'practice-gen', 'exam', 'audi
   }
   const nodeIndex = argv.indexOf('--node', 2)
   const nodeId = nodeIndex >= 0 ? argv[nodeIndex + 1] : ''
-  if (runnerMode === 'practice-gen' && nodeIndex >= 0 && (!nodeId || !/^[a-z0-9][a-z0-9-]*$/.test(nodeId))) {
+  if (['practice-gen', 'research'].includes(runnerMode) && nodeIndex >= 0 && (!nodeId || !/^[a-z0-9][a-z0-9-]*$/.test(nodeId))) {
     throw new Error('--node 需要合法的知识点 id')
   }
   const personaByMode = { new: 'interview.md', assess: 'assess.md', plan: 'plan.md', learn: 'teach.md', research: 'research.md', 'practice-gen': 'practice-gen.md', exam: 'exam-grade.md' }
@@ -175,7 +175,7 @@ if (['new', 'assess', 'plan', 'learn', 'research', 'practice-gen', 'exam', 'audi
           name: path.join(root, 'src', 'plugin', runnerModule),
           inject: ['agentDefaultModel', 'agents', 'sessions', 'courseState'],
           config: runnerMode === 'exam' ? { courseId, milestoneId: argv[2] ?? '' }
-            : runnerMode === 'practice-gen' ? { courseId, nodeId } : { courseId },
+            : ['practice-gen', 'research'].includes(runnerMode) ? { courseId, nodeId } : { courseId },
         },
       ],
     },

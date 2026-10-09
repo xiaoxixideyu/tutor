@@ -99,12 +99,13 @@ it('网页配置立即影响下一条模型流程，当前流程保留配置快�
   const first = (await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body
   const events = await stream(t, base, first.flowId)
   await events.wait((e) => e.text?.includes('启动'))
-  const saved = await post('/api/model-config', { baseUrl: 'https://second.invalid/v1', model: 'other-model', apiKey: 'replacement-private-key', contextWindow: 32768 })
+  const saved = await post('/api/model-config', { baseUrl: 'https://second.invalid/v1', model: 'other-model', apiKey: 'replacement-private-key', contextWindow: 32768, researchDeadlineMs: 600000 })
   assert.equal(saved.status, 200)
   assert.equal(saved.body.active.flowId, first.flowId)
   assert.ok(!JSON.stringify(saved.body).includes('replacement-private-key'))
   assert.equal(launches[0].TUTOR_LLM_MODEL, 'deepseek-fixture')
   assert.equal(launches[0].TUTOR_LLM_API_KEY, 'fixture-private-key')
+  assert.equal(launches[0].TUTOR_RESEARCH_DEADLINE_MS, '480000')
   assert.equal(fs.statSync(modelConfigFile).mode & 0o777, 0o600)
   await post('/flow/stop', { flowId: first.flowId })
   await events.wait((e) => e.type === 'exit')
@@ -112,6 +113,7 @@ it('网页配置立即影响下一条模型流程，当前流程保留配置快�
   assert.equal(launches[1].TUTOR_LLM_MODEL, 'other-model')
   assert.equal(launches[1].TUTOR_LLM_API_KEY, 'replacement-private-key')
   assert.equal(launches[1].TUTOR_LLM_CONTEXT_WINDOW, '32768')
+  assert.equal(launches[1].TUTOR_RESEARCH_DEADLINE_MS, '600000')
   assert.equal(launches[1].TUTOR_MODEL_CONFIG_RESOLVED, '1')
   const state: any = await (await fetch(base + '/flow/state')).json()
   assert.equal(state.protocolVersion, 1)
@@ -240,16 +242,20 @@ it('子进程启动失败会清理活动流程并留下失败事件', async (t) 
   assert.equal(state.active, null)
 })
 
-it('实践知识点传给 runner 并参与流程身份；不同节点不复用，非法节点不启动', async (t) => {
+it('实践和教研的知识点传给 runner 并参与流程身份；不同节点不复用，非法节点不启动', async (t) => {
   const { base, post, store } = await fixture(t)
   store.write('alpha', 'knowledge-map', { verified: false, nodes: [{ id: 'basics', title: '基础' }, { id: 'advanced', title: '进阶' }], edges: [] })
   assert.equal((await post('/flow/start', { kind: 'practice', courseId: 'alpha', nodeId: 'unknown' })).body.ok, false)
   assert.equal((await post('/flow/start', { kind: 'learn', courseId: 'alpha', nodeId: 'basics' })).body.ok, false)
   assert.equal((await post('/flow/start', { kind: 'practice', courseId: 'alpha', nodeId: '../beta' })).body.ok, false)
-  const flow = (await post('/flow/start', { kind: 'practice', courseId: 'alpha', nodeId: 'basics' })).body
-  assert.equal(flow.nodeId, 'basics')
-  const events = await stream(t, base, flow.flowId)
-  await events.wait((e) => e.text?.includes('启动 practice alpha basics'))
-  assert.equal((await post('/flow/start', { kind: 'practice', courseId: 'alpha', nodeId: 'basics' })).body.flowId, flow.flowId)
-  assert.equal((await post('/flow/start', { kind: 'practice', courseId: 'alpha', nodeId: 'advanced' })).status, 409)
+  for (const kind of ['practice', 'research']) {
+    const flow = (await post('/flow/start', { kind, courseId: 'alpha', nodeId: 'basics' })).body
+    assert.equal(flow.nodeId, 'basics')
+    const events = await stream(t, base, flow.flowId)
+    await events.wait((e) => e.text?.includes(`启动 ${kind} alpha basics`))
+    assert.equal((await post('/flow/start', { kind, courseId: 'alpha', nodeId: 'basics' })).body.flowId, flow.flowId)
+    assert.equal((await post('/flow/start', { kind, courseId: 'alpha', nodeId: 'advanced' })).status, 409)
+    await post('/flow/stop', { flowId: flow.flowId })
+    await events.wait((e) => e.type === 'exit')
+  }
 })

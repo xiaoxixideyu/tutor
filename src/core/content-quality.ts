@@ -54,6 +54,14 @@ export function mapContent(map: KnowledgeMap, profile: Profile): ContentInput {
   ] }
 }
 
+export const MAP_RESOURCE_REVIEW_CONTRACT = '本批资料的所属节点见 content.context.nodes（完整课程节点清单），当前待核查节点见 activeNodes。完整课时骨架已单独核查；本批 units 只是资料片段，不是完整地图，不能因本批未包含 outline 就判定课程节点不存在。仍需依据学员原始范围及所属节点核查每条资料。'
+
+export function mapReviewContext(input: ContentInput, units: ContentUnit[]): ContentContext {
+  if (input.kind !== 'map' || !units.some(unit => unit.id.startsWith('resource:'))) return input.context
+  const outline = input.units.find(unit => unit.id === 'outline')?.content as { nodes: ContentContext['nodes'] }
+  return { ...input.context, nodes: outline.nodes, activeNodes: [...new Set(units.flatMap(unit => unit.node ? [unit.node] : []))] }
+}
+
 export function planContent(plan: Plan, profile: Profile, map: KnowledgeMap): ContentInput {
   // 考试成绩、复习指针是学习状态，不属于教学内容，正常推进不使已审查内容失效。
   return { kind: 'plan', context: context(profile, map), units: [
@@ -98,6 +106,7 @@ export function contentKey(input: ContentInput): string {
   return createHash('sha256').update(canonicalJson({ policy: QUALITY_POLICY, solver: SOLVER_PERSONA, reviewer: REVIEWER_PERSONA, facts: FACT_PERSONA,
     ...(input.kind === 'map' ? { contract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { contract: TEACHING_REVIEW_CONTRACT }
       : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : {}),
+    ...(input.kind === 'map' && input.units.some(unit => unit.id.startsWith('resource:')) ? { resourceScope: MAP_RESOURCE_REVIEW_CONTRACT } : {}),
     ...(factProbes(input).some(claim => claim.conditionCheck) ? { conditionCheck: NECESSARY_CONDITION_CONTRACT } : {}), input })).digest('hex')
 }
 
