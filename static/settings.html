@@ -75,6 +75,11 @@
           <p class="hint">按渠道说明填写，用于限制单次请求可容纳的上下文。</p>
         </div>
         <div class="field">
+          <label for="requestsPerMinute">每分钟请求数</label>
+          <input id="requestsPerMinute" type="number" min="1" max="600" step="1" value="8" required>
+          <p class="hint">按渠道配额填写，默认 8 次。教学、教研和审查共用额度；额度不足时会排队等待。</p>
+        </div>
+        <div class="field">
           <label for="researchMinutes">教研回合时限（分钟）</label>
           <input id="researchMinutes" type="number" min="1" max="30" step="1" value="8" required>
           <p class="hint">单个知识点的一次教研回合上限，包含模型等待、搜索和抓取；独立内容审查另计时。达到时限保留已保存进度。</p>

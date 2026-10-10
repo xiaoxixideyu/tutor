@@ -38,11 +38,15 @@ export class ResearchBudget {
       : kind === 'fetch' ? this.fetches < RESEARCH_LIMITS.fetches : false
   }
 
-  startRequest(): void {
+  checkRequest(): void {
     if (this.requests >= RESEARCH_LIMITS.modelRequests) {
       this.failure = new ResearchBudgetError()
       throw this.failure
     }
+  }
+
+  startRequest(): void {
+    this.checkRequest()
     this.requests++
     this.progress(this.requests > RESEARCH_LIMITS.toolRounds ? '正在汇总本知识点的资料…' : '正在核对本知识点的资料…')
   }

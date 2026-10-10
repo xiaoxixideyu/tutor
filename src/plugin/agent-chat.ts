@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { addUsage, normalizeUsage, type ReportedUsage, type UsageSample } from '../core/cost.ts'
 import { TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from './turn-timeout.ts'
 import { ResearchBudget } from './research-budget.ts'
+import { ModelRateLimitError, ModelRequestQueueError, modelRateLimiterFromEnvironment } from '../core/model-rate-limit.ts'
 
 interface SessionEventView {
   type: string
@@ -74,9 +75,16 @@ function requestDeadline(options: CreateAgentChatOptions): number {
 export function permanentModelError(error: unknown): boolean {
   // 实测同一可用模型偶发返回网关路由 404；只为这个具体响应保留一次重试。
   // 模型不存在、认证失败与权限错误仍立即结束。
-  if (error instanceof Error && /404:\s*\{\s*"message"\s*:\s*"404 Route Not Found"/i.test(error.message)
-    && /"type"\s*:\s*"bad_response_status_code"/i.test(error.message)) return false
-  return error instanceof Error && /\b(400|401|403|404|422)\b|model is not found|not_found_error|UNSUPPORTED_REASONING_EFFORT/i.test(error.message)
+  const seen = new Set<Error>()
+  while (error instanceof Error && !seen.has(error)) {
+    seen.add(error)
+    if (error instanceof ModelRateLimitError || error instanceof ModelRequestQueueError) return true
+    const transientRoute = /404:\s*\{\s*"message"\s*:\s*"404 Route Not Found"/i.test(error.message)
+      && /"type"\s*:\s*"bad_response_status_code"/i.test(error.message)
+    if (!transientRoute && /\b(400|401|403|404|422)\b|model is not found|not_found_error|UNSUPPORTED_REASONING_EFFORT/i.test(error.message)) return true
+    error = error.cause
+  }
+  return false
 }
 
 export async function createAgentChat(ctx: Context, options: CreateAgentChatOptions = {}): Promise<AgentChat | null> {
@@ -95,16 +103,50 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
   // 「正在吐字」= 有进展，真正的「完全没有字节返回」才会累积停滞。事件缺失时降级为 seq-only（不劣于原状）。
   let streamTicks = 0
   const research = options.tools === 'research' ? new ResearchBudget(options.onProgress) : undefined
+  const limiter = selection.provider === 'tutor' ? modelRateLimiterFromEnvironment() : undefined
+  let requestFailure: ModelRateLimitError | ModelRequestQueueError | undefined
+  let rateLimitStep = ''
+  let rateLimitFailures = 0
+  const progress = options.onProgress ?? ((message: string) => { process.stderr.write(`tutor: ${message}\n`) })
   const createOptions = {
     meta: { cwd: process.cwd() },
     agentOptions: { provider: selection.provider, model: selection.model },
     setup: (agentCtx: Context) => {
       installModelSelection(agentCtx as never, { current: selection, assembled: undefined })
-      agentCtx.on('agent/request', async (_payload, next) => {
-        research?.startRequest()
+      agentCtx.on('agent/request', async ({ signal }, next) => {
+        if (requestFailure) throw requestFailure
+        research?.checkRequest()
         const request = await next()
+        try { await limiter?.acquire(signal, ms => progress(`等待渠道请求额度，约 ${Math.ceil(ms / 1000)} 秒…`)) }
+        catch (error) {
+          if (error instanceof ModelRequestQueueError) requestFailure = error
+          throw error
+        }
+        signal.throwIfAborted()
+        research?.startRequest()
         return { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, options.maxTokens ?? 8192) }
       })
+      if (limiter) agentCtx.on('agent/request-error', async ({ turn, step, failure, signal }, next) => {
+        if (failure.code !== 'RATE_LIMIT') return next()
+        const key = `${turn}:${step}`
+        if (key !== rateLimitStep) { rateLimitStep = key; rateLimitFailures = 0 }
+        rateLimitFailures++
+        try {
+          const wait = await limiter.cooldown(signal, failure.providerRetryAfterMs)
+          if (rateLimitFailures >= 2) {
+            requestFailure = new ModelRateLimitError()
+            throw requestFailure
+          }
+          try { research?.checkRequest() }
+          catch { requestFailure = new ModelRateLimitError(true); throw requestFailure }
+          progress(`渠道返回 429，等待至少 ${Math.ceil(wait / 1000)} 秒后重试一次。`)
+        } catch (error) {
+          if (error instanceof ModelRequestQueueError) requestFailure = error
+          throw error
+        }
+        // 内置策略可能不接受较长 Retry-After；本地队列负责等待，最多重试一次。
+        return await next() ?? { kind: 'retry' }
+      }, { prepend: true })
       const allowed = (name: string) => !options.isolatedSystemPrompt && options.tools === 'research'
         && (name.startsWith('mcp__searchix__') || name === 'web_fetch')
       agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
@@ -205,6 +247,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
             })
           )
           await whenIdleOrStalled(() => agent.whenIdle(), () => agent.session.seq + streamTicks, turnTimeoutMs(), 1000, requestDeadline(options))
+          if (requestFailure) throw requestFailure
           if (research?.failure) throw research.failure
           let text = ''
           let turnError: string | null = null
@@ -236,6 +279,7 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
           return text
         } catch (error) {
           lastError = error
+          if (requestFailure) throw requestFailure
           if (research?.failure) throw research.failure
           if (error instanceof TurnTimeoutError) {
             // Harness 支持按 agent 取消；先收敛旧请求，禁止在仍运行的会话叠加 followup。

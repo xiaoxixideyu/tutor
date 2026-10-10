@@ -20,8 +20,9 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   const before = store.publicConfig()
   assert.equal(before.source, 'environment')
   assert.equal(before.apiKeySet, true)
+  assert.equal(before.requestsPerMinute, 8)
   assert.ok(!JSON.stringify(before).includes('environment-secret'))
-  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768, researchDeadlineMs: 600000 })
+  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768, researchDeadlineMs: 600000, requestsPerMinute: 6 })
   assert.equal(config.source, 'saved')
   assert.equal(config.baseUrl, 'https://second.invalid/v1')
   assert.ok(!JSON.stringify(config).includes('replacement-secret'))
@@ -35,6 +36,10 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   assert.equal(launch.TUTOR_LLM_CONTEXT_WINDOW, '32768')
   assert.equal(launch.TUTOR_RESEARCH_DEADLINE_MS, '600000')
   assert.equal(launch.TUTOR_MODEL_CONFIG_RESOLVED, '1')
+  assert.equal(launch.TUTOR_LLM_REQUESTS_PER_MINUTE, '6')
+  assert.equal(launch.TUTOR_MODEL_RATE_LIMIT_FILE, path.join(root, 'data/model-rate-limits.sqlite'))
+  store.save({ baseUrl: config.baseUrl, model: config.model })
+  assert.equal(store.publicConfig().requestsPerMinute, 6, '旧页面保存未提供限流字段时保留最新配额')
 })
 
 it('留空密钥只在同一基础地址沿用，切换渠道必须提供新密钥', (t) => {
@@ -59,8 +64,23 @@ it('不合法的渠道、字段或推理设置不覆盖已保存配置', (t) => 
     { model: 'model\nother: value' }, { model: 'bad\0model' }, { apiKey: 123 }, { apiKey: 'bad\nkey' }, { apiKey: 'bad\0key' },
     { thinking: 'unknown' }, { thinking: ['on'] }, { thinking: 'off', model: 'other-model' }, { contextWindow: 0 }, { contextWindow: 1.5 },
     { researchDeadlineMs: 0 }, { researchDeadlineMs: 1_800_001 }, { researchDeadlineMs: '600000' },
+    { requestsPerMinute: 0 }, { requestsPerMinute: 601 }, { requestsPerMinute: 1.5 }, { requestsPerMinute: '8' },
   ]) assert.throws(() => store.save({ ...valid, ...invalid }))
   assert.equal(fs.readFileSync(store.file, 'utf8'), previous)
+})
+
+it('旧版已保存设置默认 8 次，独立 DSH_HOME 仍共用渠道队列', (t) => {
+  const { root, store } = fixture(t)
+  store.save({ baseUrl: 'https://first.invalid/v1', model: 'deepseek-fixture' })
+  const saved = JSON.parse(fs.readFileSync(store.file, 'utf8'))
+  delete saved.requestsPerMinute
+  fs.writeFileSync(store.file, JSON.stringify(saved))
+  const first = new ModelConfigStore(root, { env: { DSH_HOME: path.join(root, 'one'), TUTOR_LLM_REQUESTS_PER_MINUTE: '99' } })
+  const second = new ModelConfigStore(root, { env: { DSH_HOME: path.join(root, 'two') } })
+  assert.equal(first.publicConfig().requestsPerMinute, 8)
+  assert.equal(first.environment().TUTOR_MODEL_RATE_LIMIT_FILE, second.environment().TUTOR_MODEL_RATE_LIMIT_FILE)
+  const custom = new ModelConfigStore(root, { env: { TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'shared.sqlite') } })
+  assert.equal(custom.environment().TUTOR_MODEL_RATE_LIMIT_FILE, path.join(root, 'shared.sqlite'))
 })
 
 it('配置文件损坏时不泄漏片段，也不静默回退到别的渠道', (t) => {

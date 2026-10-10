@@ -27,6 +27,7 @@ function populate(config) {
   $('model').value = config.model
   $('thinking').value = config.thinking
   $('contextWindow').value = config.contextWindow
+  $('requestsPerMinute').value = config.requestsPerMinute ?? 8
   $('researchMinutes').value = (config.researchDeadlineMs ?? 480000) / 60000
   $('apiKey').value = ''
   $('apiKey').placeholder = config.apiKeySet ? '留空继续使用已配置的密钥' : '填写该渠道的 API Key'
@@ -48,7 +49,8 @@ $('baseUrl').addEventListener('input', updateKeyHint)
 $('form').addEventListener('submit', async (event) => {
   event.preventDefault()
   const config = { baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
-    thinking: $('thinking').value, contextWindow: Number($('contextWindow').value), researchDeadlineMs: Number($('researchMinutes').value) * 60000 }
+    thinking: $('thinking').value, contextWindow: Number($('contextWindow').value), requestsPerMinute: Number($('requestsPerMinute').value),
+    researchDeadlineMs: Number($('researchMinutes').value) * 60000 }
   $('fields').disabled = true
   $('save').textContent = '保存中…'
   try {

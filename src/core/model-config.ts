@@ -11,6 +11,7 @@ interface ModelConfig {
   thinking: ThinkingMode
   contextWindow: number
   researchDeadlineMs: number
+  requestsPerMinute: number
 }
 
 interface SavedModelConfig extends ModelConfig {
@@ -63,23 +64,30 @@ function validate(value: Record<string, unknown>): ModelConfig {
   if (typeof researchDeadlineMs !== 'number' || !Number.isSafeInteger(researchDeadlineMs) || researchDeadlineMs < 60_000 || researchDeadlineMs > 1_800_000) {
     throw new ModelConfigError('教研回合时限必须是 1–30 分钟（60000–1800000 毫秒）')
   }
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs }
+  const requestsPerMinute = value.requestsPerMinute ?? 8
+  if (typeof requestsPerMinute !== 'number' || !Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 600) {
+    throw new ModelConfigError('每分钟请求数必须是 1–600 之间的整数')
+  }
+  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs, requestsPerMinute }
 }
 
 export class ModelConfigStore {
   readonly file: string
   private readonly defaults: ModelConfig
   private readonly env: NodeJS.ProcessEnv
+  private readonly rateLimitFile: string
 
   constructor(root: string, options: { file?: string; env?: NodeJS.ProcessEnv } = {}) {
     this.env = readModelEnvironment(root, options.env)
     this.file = path.resolve(options.file ?? this.env.TUTOR_MODEL_CONFIG_FILE ?? path.join(root, 'data/model-config.json'))
+    this.rateLimitFile = path.resolve(this.env.TUTOR_MODEL_RATE_LIMIT_FILE ?? path.join(root, 'data/model-rate-limits.sqlite'))
     this.defaults = {
       baseUrl: (this.env.TUTOR_LLM_BASE_URL ?? '').replace(/\/+$/, ''),
       model: this.env.TUTOR_LLM_MODEL ?? '', apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
       thinking: (this.env.TUTOR_LLM_THINKING || 'default') as ThinkingMode,
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
       researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
+      requestsPerMinute: Number(this.env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
     }
   }
 
@@ -101,7 +109,7 @@ export class ModelConfigStore {
 
   publicConfig() {
     const { config, source, updatedAt } = this.read()
-    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow, researchDeadlineMs: config.researchDeadlineMs,
+    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow, researchDeadlineMs: config.researchDeadlineMs, requestsPerMinute: config.requestsPerMinute,
       apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt }
   }
 
@@ -116,7 +124,8 @@ export class ModelConfigStore {
     try { if (previousUrl) previousUrl = baseUrl(previousUrl) } catch { /* 旧环境地址可由网页修正 */ }
     if (!replacement && nextUrl !== previousUrl) throw new ModelConfigError('更换服务地址时，请填写新渠道的 API Key；不会沿用旧渠道的密钥')
     const config = validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
-      researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs })
+      researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs,
+      requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute })
     const saved: SavedModelConfig = { version: 1, ...config, updatedAt: new Date().toISOString() }
     const temporary = `${this.file}.${randomUUID()}.tmp`
     try {
@@ -138,6 +147,7 @@ export class ModelConfigStore {
     const config = validate({ ...current })
     return { ...this.env, TUTOR_LLM_BASE_URL: config.baseUrl, TUTOR_LLM_MODEL: config.model,
       TUTOR_LLM_API_KEY: config.apiKey, TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
-      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs), TUTOR_MODEL_CONFIG_RESOLVED: '1' }
+      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs),
+      TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute), TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile, TUTOR_MODEL_CONFIG_RESOLVED: '1' }
   }
 }

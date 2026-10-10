@@ -168,6 +168,7 @@ if (['new', 'assess', 'plan', 'learn', 'research', 'practice-gen', 'exam', 'audi
     },
     { id: 'headless-runner', disabled: true },
     { id: 'headless-startup', disabled: true },
+    { id: 'session-title-llm', disabled: true },
     {
       insert: [
         {
