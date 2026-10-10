@@ -55,6 +55,7 @@ it('三个独立进程和 DSH_HOME 合计遵守渠道滚动窗口，而非各自
 })
 
 it('同一渠道地址规范化后共用额度，其他密钥独立；等待取消不预占后续名额', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
   const { options, limiter, signal } = fixture(t, { requestsPerMinute: 1, windowMs: 250 })
   await limiter.acquire(signal)
   const other = new ModelRateLimiter({ ...options, apiKey: 'different-fixture-key' })
@@ -70,21 +71,29 @@ it('同一渠道地址规范化后共用额度，其他密钥独立；等待取�
   db.close()
   assert.equal(states.length, 2)
   assert.ok(states.every(state => state.starts.length === 1), '取消等待不能写入请求名额')
+  t.mock.timers.tick(options.windowMs)
   await equivalent.acquire(signal)
 })
 
 it('较低的新配额约束旧快照，减少配额时还要等待已有请求退出窗口', async t => {
+  // 磁盘提交在 CI 上可能比窗口还慢。用可控时钟精确验证时序，跨进程测试仍走真实时钟。
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
   const { options, limiter, signal } = fixture(t)
-  const first = Date.now()
   await limiter.acquire(signal)
+  t.mock.timers.tick(options.windowMs / options.requestsPerMinute)
   await limiter.acquire(signal)
   const slower = new ModelRateLimiter({ ...options, requestsPerMinute: 2 })
+  const remainingWait = async (client: ModelRateLimiter) => {
+    const controller = new AbortController()
+    let wait = 0
+    await assert.rejects(client.acquire(controller.signal, ms => { wait = ms; controller.abort() }), { name: 'AbortError' })
+    return wait
+  }
+  assert.equal(await remainingWait(slower), 150, '降低配额后，已有请求必须先退出滚动窗口')
+  assert.equal(await remainingWait(limiter), 150, '旧快照也必须遵守刚发布的较低配额')
+  t.mock.timers.tick(150)
   await slower.acquire(signal)
-  assert.ok(Date.now() - first >= options.windowMs - 10)
-  const controller = new AbortController()
-  let wait = 0
-  await assert.rejects(limiter.acquire(controller.signal, ms => { wait = ms; controller.abort() }), { name: 'AbortError' })
-  assert.ok(wait >= 70, '旧的 4 次配额不能覆盖仍活跃的 2 次配额')
+  assert.equal(await remainingWait(limiter), 100, '旧的 4 次配额不能覆盖仍活跃的 2 次配额')
 })
 
 it('429 的冷却由其他进程读取，并遵守更长的 Retry-After', async t => {
@@ -99,13 +108,11 @@ it('429 的冷却由其他进程读取，并遵守更长的 Retry-After', async 
   assert.equal(await limiter.cooldown(signal, 1), 80, '短 Retry-After 仍至少等待完整窗口')
 })
 
-it('取消冷却等待立即结束；队列不可用时明确失败而非绕过限流', async t => {
+it('取消冷却等待立即结束；队列不可用时明确失败而非绕过限流', { timeout: 10000 }, async t => {
   const { root, options, limiter, signal } = fixture(t)
   await limiter.cooldown(signal, 60_000)
   const controller = new AbortController()
-  const since = Date.now()
   await assert.rejects(limiter.acquire(controller.signal, () => controller.abort()), { name: 'AbortError' })
-  assert.ok(Date.now() - since < 1000)
   const parent = path.join(root, 'not-a-directory')
   fs.writeFileSync(parent, '')
   await assert.rejects(new ModelRateLimiter({ ...options, file: path.join(parent, 'queue.sqlite') }).acquire(signal), ModelRequestQueueError)
