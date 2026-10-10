@@ -28,13 +28,20 @@ import { renderModelTemplate } from '../src/core/model-settings.ts'
 import { ModelConfigStore, readModelEnvironment } from '../src/core/model-config.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const dshHome = path.resolve(process.env.DSH_HOME ?? path.join(root, 'data', 'dsh-home'))
+const argv = process.argv.slice(2)
+const defaultHome = path.join(root, 'data', 'dsh-home')
+const requestedHome = path.resolve(process.env.DSH_HOME ?? defaultHome)
+// 网页教研也使用独立运行目录，避免覆盖访谈/课堂使用的 Harness 配置。显式 CLI 隔离目录继续沿用。
+if (argv[0] === 'research') fs.mkdirSync(path.join(root, 'data'), { recursive: true })
+const dshHome = argv[0] === 'research' && requestedHome === defaultHome
+  ? fs.mkdtempSync(path.join(root, 'data', 'research-home-')) : requestedHome
 const workspace = path.resolve(process.env.TUTOR_WORKSPACE ?? root)
 fs.mkdirSync(dshHome, { recursive: true })
 fs.mkdirSync(workspace, { recursive: true })
 
 // .env / 环境变量提供初始配置；网页保存的配置在模型流程启动时覆盖这些默认值。
 let env = readModelEnvironment(root, { ...process.env, DSH_HOME: dshHome })
+if (argv[0] === 'research') env.TUTOR_RESEARCH_PROGRESS = '1'
 
 // 渲染 config/ 下的模板（替换 ${VAR} 占位符）到运行时目录
 env.TUTOR_PLUGIN_PATH ??= path.join(root, 'src', 'plugin', 'course-state.ts')
@@ -94,8 +101,6 @@ function resolveRuntimeNode() {
   return process.execPath
 }
 
-const argv = process.argv.slice(2)
-
 // list/status/review/practice/audit：只读或零模型交互，直接用受支持运行时执行对应脚本（不经 dsh）
 if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0] === 'practice' || argv[0] === 'audit' || argv[0] === 'serve') {
   const scriptByMode = { review: 'review.mjs', practice: 'practice.mjs', audit: 'audit.mjs', serve: 'serve.mjs' }
@@ -111,6 +116,11 @@ if (argv[0] === 'list' || argv[0] === 'status' || argv[0] === 'review' || argv[0
 // 服务和零模型命令无需先填写模型配置；空白安装也能打开网页设置。
 // 网页宿主已冻结本次流程的配置时不再读取保存文件，避免并发保存切换到别的渠道。
 if (env.TUTOR_MODEL_CONFIG_RESOLVED !== '1') env = new ModelConfigStore(root, { env }).environment()
+if (argv[0] === 'research') {
+  env.TUTOR_CHANNEL_TRACE_FILE ??= path.join(dshHome, 'transport.jsonl')
+  const observer = new URL('../src/core/model-transport.ts', import.meta.url).href
+  env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import=${observer}`].filter(Boolean).join(' ')
+}
 const settingsPath = renderTemplate('settings.yaml', 'settings.yaml')
 if (!settingsPath) throw new Error('scripts/agent.mjs: 缺少 config/settings.yaml')
 const patchPath = renderTemplate('cordis.patch.yml', 'tutor.patch.yml')

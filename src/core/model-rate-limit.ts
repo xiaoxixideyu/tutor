@@ -4,14 +4,14 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
+import { ModelRecoveryError } from './model-recovery.ts'
 
 // 比渠道的 60 秒窗口多留 1 秒余量，均匀发起请求，避免窗口边界的突发流量。
 const WINDOW_MS = 61_000
 
-export class ModelRateLimitError extends Error {
-  constructor(retryBudgetExhausted = false) {
-    super((retryBudgetExhausted ? '渠道返回 429，且本知识点已无剩余重试预算' : '渠道在等待限流窗口并重试后仍返回 429')
-      + '，已停止本次运行并保留进度；请检查渠道额度或降低每分钟请求数')
+export class ModelRateLimitError extends ModelRecoveryError {
+  constructor(failures: number) {
+    super('429', failures)
     this.name = 'ModelRateLimitError'
   }
 }
@@ -95,7 +95,8 @@ export class ModelRateLimiter {
   }
 
   async acquire(signal: AbortSignal, onWait: (ms: number) => void = () => {}): Promise<void> {
-    let reported = false
+    let reportedAt = -Infinity
+    let reportedUntil = 0
     for (;;) {
       const waitMs = await this.update(signal, (state, now) => {
         // 配置切换时，仍活跃的较低配额在一个窗口内优先；旧快照不会冲破新限制。
@@ -111,7 +112,10 @@ export class ModelRateLimiter {
         return wait
       })
       if (waitMs === 0) return
-      if (!reported) { onWait(waitMs); reported = true }
+      const now = Date.now()
+      if (now - reportedAt >= 15_000 || now + waitMs > reportedUntil + 2000) {
+        onWait(waitMs); reportedAt = now; reportedUntil = now + waitMs
+      }
       // 定期重新检查其他进程发布的冷却时间；AbortSignal 立即取消本地等待。
       await delay(Math.min(waitMs, 1000), undefined, { signal })
     }

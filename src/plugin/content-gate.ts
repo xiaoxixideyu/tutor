@@ -9,6 +9,7 @@ import { TurnTimeoutError } from './turn-timeout.ts'
 import { generateTurn, parseJsonBlock, type ParseResult } from './generation.ts'
 import { formatTurnCost } from '../core/cost.ts'
 import { loadCostConfigFromRepo } from './cost-line.ts'
+import { researchStatus } from './research-status.ts'
 
 export interface ContentVerdict { approved: boolean; issues: string[]; cached: boolean; evidenceFile?: string }
 export class ContentReviewError extends Error {
@@ -205,12 +206,18 @@ export function createContentGate(ctx: Context, store: { root: string }, courseI
     if (reused) out.write(`复用同一内容的 ${reused} 项已完成检查，原始证据与费用保留；本次不重复计费。\n`)
     for (const call of record.calls) if (call.model && !call.reusedFrom) out.write(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, out.isTTY === true)}\n`)
   }, {
-    onStart: record => process.stdout.write(`正在核对${labels[record.input.kind]}的范围与正确性…\n`),
+    onStart: record => {
+      const message = `正在核对${labels[record.input.kind]}的范围与正确性…`
+      process.stdout.write(message + '\n')
+      researchStatus({ phase: 'review', message })
+    },
     onProgress: (record, call) => {
       if (call.reusedFrom) return
-      const completed = record.calls.filter(item => item.elapsedMs !== undefined && !item.reusedFrom).length
+      const completed = record.calls.filter(item => item.elapsedMs !== undefined && !item.reusedFrom && !item.error).length
       const reused = record.calls.filter(item => item.reusedFrom).length
-      process.stdout.write(`${labels[record.input.kind]}核查中：已完成 ${completed} 项新检查${reused ? `，复用 ${reused} 项已有检查` : ''}。\n`)
+      const message = `${labels[record.input.kind]}核查中：已完成 ${completed} 项新检查${reused ? `，复用 ${reused} 项已有检查` : ''}。`
+      process.stdout.write(message + '\n')
+      researchStatus({ phase: 'review', message })
     },
   })
 }

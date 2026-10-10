@@ -1,0 +1,7 @@
+.research-live { max-width: 860px; width: calc(100% - 32px); margin: 12px auto; padding: 14px 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; font-size: 13px; line-height: 1.7; }
+.research-live h2 { font-size: 15px; margin: 0 0 4px; }
+.research-live p { margin: 3px 0; }
+.research-live progress { width: 100%; height: 9px; accent-color: #2563eb; }
+.research-live a { color: #2563eb; }
+.research-live .research-meta { color: #4b5563; font-size: 12px; }
+.research-live[hidden] { display: none; }

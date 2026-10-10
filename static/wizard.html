@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tutor 导师 · 新课程向导</title>
+<link rel="stylesheet" href="/research-progress.css">
 <style>
   :root {
     --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
@@ -78,6 +79,7 @@
   <button class="goto" id="gotoBtn" style="display:none">进入课堂 →</button>
   <button class="goto" id="researchBtn" style="display:none">先联网教研（约 ¥1，官方来源）</button>
 </div>
+<section id="researchLive" hidden></section>
 <main id="log"></main>
 <div class="setup" id="setup">
   <h2>开设新课程</h2>
@@ -94,7 +96,9 @@
   </div>
 </footer>
 <script src="/flow-client.js"></script>
+<script src="/research-progress.js"></script>
 <script>
+const researchLive = new TutorResearchProgress(document.getElementById('researchLive'))
 const flowClient = new TutorFlowClient((message) => {
   setBusy(false)
   $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
@@ -198,6 +202,7 @@ function renderBubble() {
 
 function handleLine(line) {
   const trimmed = line.trim()
+  if (trimmed.startsWith('@@tutor-progress ')) return
   if (trimmed === '>') {
     const closed = closeBubble()
     if (closed) maybeChips(closed)
@@ -443,6 +448,7 @@ async function startFlow(kind, nodeId = '') {
 }
 
 function showConsole() {
+  researchLive.connect(currentKind === 'research' ? courseName : null)
   $setup.style.display = 'none'
   $steps.style.display = 'flex'
   $footer.style.display = 'block'

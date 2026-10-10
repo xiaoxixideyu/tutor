@@ -6,7 +6,8 @@ import { ContentReviewError } from '../src/plugin/content-gate.ts'
 import { ModelRateLimiter, ModelRateLimitError } from '../src/core/model-rate-limit.ts'
 import { researchNodes } from '../src/core/research.ts'
 import { ResearchBudgetError } from '../src/plugin/research-budget.ts'
-import { TurnTimeoutError } from '../src/plugin/turn-timeout.ts'
+import { ModelWaitTimeoutError } from '../src/plugin/turn-timeout.ts'
+import { MODEL_RECOVERY_LIMITS, recoveryDelay, transientModelFailure } from '../src/core/model-recovery.ts'
 
 const initialized = new WeakSet<TestContext>()
 
@@ -86,21 +87,40 @@ it('生成和独立审查的每次传输与内部重试都进入同一队列，4
   }
 })
 
-it('队列等待计入回合总时限，超时取消等待且不叠加新回合', async t => {
+it('明确的渠道等待不耗掉生成时限，等待结束仍可完成同一回合', async t => {
+  const f = fixture(t, ['success'])
+  t.mock.method(ModelRateLimiter.prototype, 'acquire', () => new Promise<void>(resolve => setTimeout(resolve, 60)))
+  const chat = (await createAgentChat(f.ctx, { tools: 'research', deadlineMs: 20, onProgress: () => {} }))!
+  assert.equal(await chat.ask('请求'), '完成')
+  assert.equal(f.counts().followups, 1)
+})
+
+it('等待仍有单独上限，到期取消原回合且不叠加新请求', async t => {
   const f = fixture(t, ['success'])
   let cancelled = false
   t.mock.method(ModelRateLimiter.prototype, 'acquire', (signal: AbortSignal) => new Promise<void>((_resolve, reject) => {
     signal.addEventListener('abort', () => { cancelled = true; reject(signal.reason) }, { once: true })
   }))
-  const chat = (await createAgentChat(f.ctx, { tools: 'research', deadlineMs: 20, onProgress: () => {} }))!
-  await assert.rejects(chat.ask('请求'), TurnTimeoutError)
+  const chat = (await createAgentChat(f.ctx, { tools: 'research', deadlineMs: 20, maxWaitMs: 30, onProgress: () => {} }))!
+  await assert.rejects(chat.ask('请求'), ModelWaitTimeoutError)
   assert.equal(cancelled, true)
   assert.equal(f.counts().followups, 1)
   assert.equal(f.counts().requestCount, 0)
 })
 
-it('重试后仍 429 时保留类型和费用，经过内容审查包装也立即停止整批', async t => {
-  const f = fixture(t, ['rate-limit', 'rate-limit'])
+it('连续多个 429 可退避后继续，传输重试不占用五次教研生成预算', async t => {
+  const f = fixture(t, ['tool', 'tool', 'tool', 'tool', 'rate-limit', 'rate-limit', 'rate-limit', 'success'])
+  const messages: string[] = []
+  const chat = (await createAgentChat(f.ctx, { tools: 'research', onProgress: message => messages.push(message) }))!
+  assert.equal(await chat.ask('请求'), '完成')
+  assert.deepEqual(f.counts(), { followups: 1, requestCount: 8, downstreamRetries: 3 })
+  assert.ok(messages.some(message => /第 3\/8 次恢复/.test(message)))
+  assert.deepEqual(chat.totalUsage(), { inputTokens: 40, outputTokens: 4 })
+})
+
+it('持续无法恢复达到独立上限时才暂停整批，失败类型和费用仍保留', async t => {
+  const attempts = MODEL_RECOVERY_LIMITS.retries + 1
+  const f = fixture(t, Array.from({ length: attempts }, () => 'rate-limit'))
   const chat = (await createAgentChat(f.ctx, { tools: 'research', onProgress: () => {} }))!
   let requested = 0
   const map = { verified: false, nodes: [{ id: 'a', title: 'a', verified: false }, { id: 'b', title: 'b', verified: false }], edges: [] }
@@ -113,18 +133,29 @@ it('重试后仍 429 时保留类型和费用，经过内容审查包装也立�
     save: () => assert.fail('失败不能保存为完成'), permanentError: permanentModelError,
   }), (error: unknown) => error instanceof ContentReviewError && error.cause instanceof ModelRateLimitError)
   assert.equal(requested, 1)
-  assert.deepEqual(f.counts(), { followups: 1, requestCount: 2, downstreamRetries: 1 })
-  assert.deepEqual(chat.totalUsage(), { inputTokens: 20, outputTokens: 2 })
+  assert.deepEqual(f.counts(), { followups: 1, requestCount: attempts, downstreamRetries: attempts - 1 })
+  assert.deepEqual(chat.totalUsage(), { inputTokens: attempts * 10, outputTokens: attempts })
 })
 
-it('已耗尽研究预算时不进入请求队列；最后一次遇到 429 时保留渠道原因', async t => {
+it('真正生成耗尽五次预算仍停止；最后一次生成遇到 429 可恢复而不增加生成轮数', async t => {
   const exhausted = fixture(t, ['tool', 'tool', 'tool', 'tool', 'tool'])
   const chat = (await createAgentChat(exhausted.ctx, { tools: 'research', onProgress: () => {} }))!
   await assert.rejects(chat.ask('请求'), ResearchBudgetError)
   assert.equal(exhausted.calls.filter(call => call === 'acquire').length, 5)
-  const rate = fixture(t, ['tool', 'tool', 'tool', 'tool', 'rate-limit'])
+  const rate = fixture(t, ['tool', 'tool', 'tool', 'tool', 'rate-limit', 'success'])
   const rateChat = (await createAgentChat(rate.ctx, { tools: 'research', onProgress: () => {} }))!
-  await assert.rejects(rateChat.ask('请求'), (error: unknown) => error instanceof ModelRateLimitError && /429.*无剩余重试预算/.test(error.message))
-  assert.equal(rate.calls.filter(call => call === 'acquire').length, 5)
-  assert.equal(rate.counts().downstreamRetries, 0)
+  assert.equal(await rateChat.ask('请求'), '完成')
+  assert.equal(rate.calls.filter(call => call === 'acquire').length, 6)
+  assert.equal(rate.counts().downstreamRetries, 1)
+})
+
+it('同一步退避遵守渠道建议与递增间隔，认证/余额不足仍不作为瞬时故障重试', () => {
+  const rate = { code: 'RATE_LIMIT', message: '429' }
+  assert.equal(recoveryDelay(rate, 1, () => 0), 61_000)
+  assert.equal(recoveryDelay(rate, 2, () => 0), 122_000)
+  assert.equal(recoveryDelay(rate, 8, () => 0), 300_000)
+  assert.equal(recoveryDelay({ ...rate, providerRetryAfterMs: 600_000 }, 8, () => 0), 600_000)
+  assert.equal(transientModelFailure({ code: 'SERVER', message: 'busy', status: 503 }), true)
+  assert.equal(transientModelFailure({ code: 'AUTH', message: 'unauthorized', status: 401 }), false)
+  assert.equal(transientModelFailure({ ...rate, message: 'insufficient_quota' }), false)
 })

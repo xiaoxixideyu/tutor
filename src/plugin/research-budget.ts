@@ -12,7 +12,7 @@ export class ResearchBudgetError extends Error {
   }
 }
 
-// 按一个知识点计数，JSON 修复和服务重试也不重置预算。
+// 按一个知识点计数。JSON 修复不重置预算，同一步的传输重试使用单独的恢复上限。
 export class ResearchBudget {
   requests = 0
   searches = 0
@@ -20,6 +20,7 @@ export class ResearchBudget {
   characters = 0
   failure?: ResearchBudgetError
   private readonly unavailable = new Set<string>()
+  private readonly requestKeys = new Set<string>()
   private readonly progress: (message: string) => void
 
   constructor(progress: (message: string) => void = () => {}) { this.progress = progress }
@@ -38,15 +39,20 @@ export class ResearchBudget {
       : kind === 'fetch' ? this.fetches < RESEARCH_LIMITS.fetches : false
   }
 
-  checkRequest(): void {
+  hasRequest(key?: string): boolean { return key !== undefined && this.requestKeys.has(key) }
+
+  checkRequest(key?: string): void {
+    if (this.hasRequest(key)) return
     if (this.requests >= RESEARCH_LIMITS.modelRequests) {
       this.failure = new ResearchBudgetError()
       throw this.failure
     }
   }
 
-  startRequest(): void {
-    this.checkRequest()
+  startRequest(key?: string): void {
+    this.checkRequest(key)
+    if (this.hasRequest(key)) return
+    if (key !== undefined) this.requestKeys.add(key)
     this.requests++
     this.progress(this.requests > RESEARCH_LIMITS.toolRounds ? '正在汇总本知识点的资料…' : '正在核对本知识点的资料…')
   }

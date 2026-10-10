@@ -10,6 +10,7 @@ import { printSessionTotal } from './cost-line.ts'
 import { mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
+import { researchStatus } from './research-status.ts'
 
 const name = 'tutor-research-runner'
 const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
@@ -255,6 +256,10 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
     },
     permanentError: permanentModelError,
     report: event => {
+      const completed = map.nodes.length - pendingResearchNodes(map, profile, progress).length
+      researchStatus({ phase: event.type === 'saved' ? 'saved' : 'node', node: event.node,
+        title: map.nodes.find(node => node.id === event.node)?.title, completed, total: map.nodes.length,
+        message: event.type === 'start' ? '正在教研当前知识点。' : event.type === 'saved' ? '当前知识点已通过审查并保存，继续下一点。' : '当前知识点尚未完成，已保存进度保留。' })
       if (event.type === 'start') out.write(`\n第 ${event.index}/${event.total} 个知识点教研中（${event.node}）…\n`)
       else if (event.type === 'failed') out.write(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
       else {

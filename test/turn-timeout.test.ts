@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from '../src/plugin/turn-timeout.ts'
+import { ModelWaitClock, TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from '../src/plugin/turn-timeout.ts'
 
 describe('whenIdleWithin', () => {
   it('idle 先落地则正常返回', async () => {
@@ -38,6 +38,18 @@ describe('whenIdleOrStalled', () => {
     try {
       await assert.rejects(whenIdleOrStalled(() => new Promise<void>(() => {}), () => progress, 1000, 5, 25), /总时限/)
     } finally { clearInterval(tick) }
+  })
+
+  it('排队结束后仍约束真实执行时间，不能用一次等待永久关闭超时保护', async () => {
+    const clock = new ModelWaitClock()
+    const start = Date.now()
+    const idle = async () => {
+      await clock.wait(() => new Promise<void>(resolve => setTimeout(resolve, 40)))
+      await new Promise<void>(() => {})
+    }
+    await assert.rejects(whenIdleOrStalled(idle, noProgress, 1000, 5, 30,
+      { milliseconds: clock.waitingMs, limitMs: 1000 }), TurnTimeoutError)
+    assert.ok(Date.now() - start >= 65)
   })
 
   it('idle 先落地则正常返回', async () => {

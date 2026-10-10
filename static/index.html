@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tutor 导师 · 进度看板</title>
+<link rel="stylesheet" href="/research-progress.css">
 <style>
   :root {
     --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
@@ -50,11 +51,16 @@
   <p>查看学习进度，继续课程与到期复习。　<a href="/wizard.html" style="color:var(--accent)">＋ 开设新课程</a>　<a href="/settings.html" style="color:var(--accent)">模型设置</a></p>
 </header>
 <main>
+  <section id="researchLive" hidden></section>
   <section id="panel"></section>
 </main>
+<script src="/research-progress.js"></script>
 <script>
 const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
 const $panel = document.getElementById('panel')
+const researchLive = new TutorResearchProgress(document.getElementById('researchLive'), id => {
+  renderStatus(id).catch(() => {})
+})
 
 async function rpc(method, params) {
   const response = await fetch('/rpc', {
@@ -74,6 +80,7 @@ function esc(text) {
 }
 
 async function renderList() {
+  researchLive.connect(null)
   const courses = await rpc('listCourses')
   const due = await rpc('dueReviews')
   const dueById = new Map((due ?? []).map((c) => [c.id, c]))
@@ -115,6 +122,7 @@ async function renderList() {
 
 async function renderStatus(id) {
   const p = await rpc('courseStatus', { id })
+  researchLive.connect(id)
   const nodeRows = p.nodes.map((n) => {
     const [sym, cls] = SYM[n.status] ?? SYM.unknown
     return `<tr>

@@ -2,6 +2,7 @@
 // （曾观测到备课在“正在备课…”僵死 15+ 分钟）。超时即抛 TurnTimeoutError，交由调用方 fail-fast
 // 退出——调用方取消 Harness 当前请求，不在未收敛的会话里叠加重试。
 //
+// 明确的额度排队/退避由独立等待预算约束，不挤占下面的生成与工具执行时限。
 // 两种护栏：
 //  - whenIdleWithin：固定上限。用于 bootstrap 这类“一次性、无工具调用”的等待。
 //  - whenIdleOrStalled：停滞看门狗。用于会跑很久的 agentic 回合（如联网教研一批要多次搜索+抓取，
@@ -16,9 +17,29 @@ const DEFAULT_TIMEOUT_MS = 300_000
 export class TurnTimeoutError extends Error {
   constructor(ms: number, deadline = false) {
     super(deadline
-      ? `模型回合达到 ${Math.round(ms / 1000)}s 总时限；未发布未完成内容。请缩小任务或调整该调用的时限。`
+      ? `模型回合达到 ${Math.round(ms / 1000)}s 执行总时限（不含渠道等待）；未发布未完成内容。请缩小任务或调整该调用的时限。`
       : `模型回合超时（${Math.round(ms / 1000)}s 无进展）；未发布未完成内容。可用 TUTOR_LLM_TIMEOUT_MS 调整（毫秒）。`)
     this.name = 'TurnTimeoutError'
+  }
+}
+
+export class ModelWaitTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`本回合累计等待渠道额度或恢复已达 ${Math.round(ms / 60_000)} 分钟，已保留进度；可稍后从断点继续`)
+    this.name = 'ModelWaitTimeoutError'
+  }
+}
+
+// 只暂停明确的排队与退避时间；网络请求、模型生成、搜索和内容修复仍计时。
+export class ModelWaitClock {
+  private elapsed = 0
+  private since: number | undefined
+  waitingMs = (): number => this.elapsed + (this.since === undefined ? 0 : Date.now() - this.since)
+  async wait<T>(work: () => Promise<T>): Promise<T> {
+    if (this.since !== undefined) return work()
+    this.since = Date.now()
+    try { return await work() }
+    finally { this.elapsed += Date.now() - this.since; this.since = undefined }
   }
 }
 
@@ -55,6 +76,7 @@ export async function whenIdleOrStalled(
   stallMs: number,
   pollMs = 3_000,
   deadlineMs = Number.POSITIVE_INFINITY,
+  waiting?: { milliseconds: () => number; limitMs: number },
 ): Promise<void> {
   let done = false
   let failed = false
@@ -65,6 +87,7 @@ export async function whenIdleOrStalled(
   )
   const step = Math.max(1, Math.min(pollMs, stallMs, deadlineMs))
   const startedAt = Date.now()
+  const initialWait = waiting?.milliseconds() ?? 0
   let lastSeq = progress()
   let lastProgressAt = Date.now()
   while (!done) {
@@ -72,12 +95,15 @@ export async function whenIdleOrStalled(
     await Promise.race([settled, new Promise<void>((resolve) => { poll = setTimeout(resolve, step) })])
     if (poll !== undefined) clearTimeout(poll)
     if (done) break
-    if (Date.now() - startedAt >= deadlineMs) throw new TurnTimeoutError(deadlineMs, true)
+    const waited = Math.max(0, (waiting?.milliseconds() ?? 0) - initialWait)
+    if (waiting && waited >= waiting.limitMs) throw new ModelWaitTimeoutError(waiting.limitMs)
+    const activeNow = Date.now() - waited
+    if (activeNow - startedAt >= deadlineMs) throw new TurnTimeoutError(deadlineMs, true)
     const seq = progress()
     if (seq !== lastSeq) {
       lastSeq = seq
-      lastProgressAt = Date.now()
-    } else if (Date.now() - lastProgressAt >= stallMs) {
+      lastProgressAt = activeNow
+    } else if (activeNow - lastProgressAt >= stallMs) {
       throw new TurnTimeoutError(stallMs)
     }
   }
