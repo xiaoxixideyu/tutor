@@ -155,6 +155,7 @@ export function buildPracticeGenPrompt(input: PracticeGenInput): string {
     '- expect_output_contains 只选稳定子串（如程序打印的固定文案），不要依赖编译器本地化提示或时间戳',
     '- 完整答案和数值必须在命令内完整比较：使用整行匹配（如 grep -qxF）、严格解析或数值比较；不能让错误分母、额外数字或集合多项只因包含正确答案的子串而通过。expect_output_contains 只用于检查成功标记，不单独证明完整数值正确；命令须保留被测程序失败的退出状态',
     '- 除 go 标准库外不引入第三方依赖（测试在 GOPROXY=off 下运行）',
+    '- Go 命令（go build/go vet/go test）需要 module 环境：默认工作目录没有 go.mod。测试命令要么自备 module（如在临时目录先写 go.mod 再执行），要么 starter_files 提供 go.mod；不能假设学员会自己补，也不能假设 /tmp 下的检查目录已有 module',
     '- hints 给 1-2 条渐进提示（不直接给完整答案）',
     '',
     '请输出任务 JSON（```json 代码块）：',
