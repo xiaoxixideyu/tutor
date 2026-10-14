@@ -132,15 +132,20 @@ export function requiredAssertions(input: ContentInput, unit: ContentUnit): Requ
   // 选择题干扰项、历史发言不作为教师认可的事实；题干本身另由盲解检查。
   const source = unit.question ? { answer: content.answer, accept: content.accept, keywords: content.keywords }
     : input.kind === 'teaching' ? { reply: content.reply } : unit.content
+  // 课堂讲授里常内嵌课中练习的选择题（教学惯例：先讲解后提问复习）——选项文本（行了首 "- X." 或
+  // "A. " 的行）是给学员排除的干扰项，不承载教师断言，抽出来只会制造"检查员复述选项却标 fail"的误拒。
+  const QUIZ_OPTION = /^\s*[-*]?\s*[A-Fa-f][.、．]\s*/
   function visit(value: unknown, trail: string): void {
     if (typeof value === 'string') {
       for (const sentence of value.split(/[；。！？\n]/).map(s => s.trim()).filter(Boolean)) {
+        if (QUIZ_OPTION.test(sentence)) continue
         // “A，才 B”的前提与结论不能按逗号切开，否则容易只核查 B 或倒置逻辑方向。
         if (NECESSARY_CONDITION.test(sentence)) {
           found.push({ id: `a${found.length}`, quote: sentence, path: trail, conditionCheck: NECESSARY_CONDITION_CONTRACT })
           continue
         }
         for (const quote of sentence.split('，').map(s => s.trim()).filter(Boolean)) {
+          if (QUIZ_OPTION.test(quote)) continue
           if (/必须|只要|只有|唯一|一定|必然|证明|总是|绝不|\b(always|must|only|prove)\b/i.test(quote)) found.push({ id: `a${found.length}`, quote, path: trail })
         }
       }
