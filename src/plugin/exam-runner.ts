@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { EXAM_PASS_SCORE, ExamPaperSchema, gradeObjective, nextMilestone, paperTotalPoints, paperValid, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
+import { EXAM_PASS_SCORE, ExamPaperSchema, examAdmission, gradeObjective, nextMilestone, paperTotalPoints, paperValid, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
 import { applyExamAttempt, ExamAttemptStore, newExamAttempt } from '../core/exam-attempt.ts'
 import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
 import { formatChoice } from '../core/assessment.ts'
@@ -94,9 +94,22 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
   const saved = attempts.read()
   let attempt = saved?.status !== 'completed' ? saved : undefined
   const milestoneId = config.milestoneId || attempt?.paper.milestone
-  const milestone = milestoneId
-    ? (plan.milestones.find((m) => m.id === milestoneId) ?? null)
-    : nextMilestone(plan, mastery ?? {})
+  // 显式指定里程碑也必须过准入闸（全掌握+未通过）；只有断点续考沿用原试卷的里程碑不做重复判定。
+  let milestone: { id: string; title: string; nodes: string[] } | null = null
+  if (milestoneId && !(attempt && attempt.paper.milestone === milestoneId)) {
+    const admission = examAdmission(plan, mastery ?? {}, milestoneId)
+    if ('error' in admission) {
+      process.stderr.write(`tutor: ${admission.error}\n`)
+      process.stdin.destroy()
+      exit(1)
+      return
+    }
+    milestone = admission.milestone
+  } else {
+    milestone = milestoneId
+      ? (plan.milestones.find((m) => m.id === milestoneId) ?? null)
+      : nextMilestone(plan, mastery ?? {})
+  }
   if (!milestone) {
     process.stderr.write('tutor: 没有可考的里程碑（需全部节点已掌握且未通过过大考）。先完成学习与单元小测。\n')
     process.stdin.destroy()
@@ -158,16 +171,37 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
       exit(0)
       return
     }
-    attempt.answers[question.id] = answer.trim()
-    attempts.save(attempt)
     if (question.type === 'objective') {
+      attempt.answers[question.id] = answer.trim()
+      attempts.save(attempt)
       const grading = gradeObjective(question, answer)
       gradings.push(grading)
       out.write(grading.correct ? '✓ 正确\n' : `✗ 错误（正确答案：${(question.choices?.length ?? 0) > 0 ? question.answer.toUpperCase() : question.answer}）\n`)
-    } else {
-      subjectiveAnswers.set(question.id, answer.trim())
-      out.write('已记录，稍后统一判分。\n')
+      continue
     }
+    // 主观题答案（如完整程序）天然多行：持续读取直到出现单独一行 `.`（提交）或 `/exit`（暂停）。
+    // 单行输入者不受影响——立即以 `.` 提交即可；此前"每行覆盖、判分只见最后一行/第一行"是判分重大失真。
+    out.write('（可逐行输入多行；输入单独一行 . 提交，/exit 暂停）\n')
+    const lines: string[] = [answer.trim()]
+    for (;;) {
+      out.write('\n> ')
+      const extra = await readAnswer()
+      if (extra === null || extra.trim() === '/exit') {
+        attempt.answers[question.id] = lines.join('\n')
+        attempts.save(attempt)
+        out.write('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        process.stdin.destroy()
+        exit(0)
+        return
+      }
+      if (extra?.trim() === '.') break
+      if (extra !== undefined && extra !== '') lines.push(extra)
+    }
+    const merged = lines.join('\n')
+    attempt.answers[question.id] = merged
+    attempts.save(attempt)
+    subjectiveAnswers.set(question.id, merged)
+    out.write('已记录，稍后统一判分。\n')
   }
 
   if (subjectiveAnswers.size > 0) {

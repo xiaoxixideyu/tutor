@@ -120,6 +120,8 @@ it('后续摸底出题失败保留此前作答，恢复跳过已答节点且全�
 it('正式 exam runner 在第四次修复通过后才展示试卷；耗尽修复不展示、不记分', t => {
   for (const behavior of ['repair', 'fail'] as const) {
     const { store, run } = fixture(t)
+    // 大考准入要求节点全部已掌握：把 topic 升到 mastered（fixture 初值是 learning）
+    store.write('alpha', 'mastery', { topic: { status: 'mastered', score: 1 } })
     const mastery = store.read('alpha', 'mastery')
     const result = run('exam', behavior)
     assert.equal(result.status, behavior === 'repair' ? 0 : 1, result.stderr) // repair 后 stdin EOF，保存试卷后暂停考试
@@ -149,7 +151,7 @@ it('正式考试暂停和阅卷失败后恢复同一试卷，跳过已答题并�
   assert.match(paused.stdout, /考试暂停/)
   assert.deepEqual(attempts.read()!.answers, { q1: 'A' })
   assert.deepEqual(store.read('alpha', 'mastery'), before)
-  const failed = run('exam', 'grading-fail', 'A\nA\n两个一合起来是二\n')
+  const failed = run('exam', 'grading-fail', 'A\nA\n两个一合起来是二\n.\n')
   assert.equal(failed.status, 1, failed.stdout + failed.stderr)
   assert.match(failed.stderr, /主观题判分失败，作答已保存/)
   assert.doesNotMatch(failed.stdout, /正在生成试卷|【第 1\/4 题/)

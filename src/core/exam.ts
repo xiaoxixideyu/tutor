@@ -147,3 +147,20 @@ export function nextMilestone(plan: Plan, mastery: Mastery): { id: string; title
   }
   return null
 }
+
+// 大考准入：里程碑存在、未通过，且全部节点已掌握。显式指定里程碑Id同样要过这道闸——
+// 路由层只校验 id 格式，没有掌握度概念；不设防的话「跳过学习直接点名大考」能绕过教学闭环。
+export function examAdmission(
+  plan: Plan,
+  mastery: Mastery,
+  milestoneId: string
+): { milestone: { id: string; title: string; nodes: string[] } } | { error: string } {
+  const milestone = plan.milestones.find((m) => m.id === milestoneId)
+  if (!milestone) return { error: `里程碑 "${milestoneId}" 不在本课程教学计划中` }
+  if (milestone.exam_passed) return { error: `里程碑 "${milestoneId}" 的大考已通过，无需重考` }
+  const notMastered = milestone.nodes.filter((node) => mastery[node]?.status !== 'mastered')
+  if (notMastered.length > 0) {
+    return { error: `里程碑 "${milestoneId}" 尚有 ${notMastered.length} 个知识点未掌握（${notMastered.join('、')}），先完成学习并通过单元小测` }
+  }
+  return { milestone }
+}
