@@ -53,6 +53,8 @@ class TutorResearchProgress {
         this.flow = flow
       } else if (this.flow && !state.flow) {
         this.flow = { ...this.flow, status: 'unavailable' }
+        this.source?.close()
+        this.source = null
       }
       this.disconnected = false
       this.render()
@@ -111,16 +113,18 @@ class TutorResearchProgress {
     const p = this.parts, event = this.event, saved = this.progress
     p.heading.textContent = this.disconnected ? '教研状态连接中断，正在重新连接'
       : flow.status === 'running' ? '自动教研进行中' : flow.status === 'stopping' ? '正在停止教研'
-        : flow.status === 'completed' ? '本次教研已结束' : '教研已暂停，已保存进度保留'
+        : flow.status === 'completed' ? '本次教研已结束' : flow.status === 'unavailable'
+          ? '历史流程记录已过期，已保存进度保留' : '教研已暂停，已保存进度保留'
     p.counts.textContent = saved ? `已保存 ${saved.completed}/${saved.total} 个知识点 · 来源已验证 ${saved.verified} 个 · 待研 ${saved.pending} 个` : '正在读取已保存进度…'
     p.bar.max = Math.max(1, saved?.total ?? 1)
     p.bar.value = saved?.completed ?? 0
-    p.node.textContent = event?.node ? `当前知识点：${event.title || event.node}（${event.node}）` : ''
-    const active = flow.status === 'running'
-    p.message.textContent = active ? event?.message ?? '流程已启动，正在准备教研。' : flow.status === 'completed'
+    const active = flow.status === 'running' && !this.disconnected
+    p.node.textContent = event?.node ? `${active ? '当前' : '最近'}知识点：${event.title || event.node}（${event.node}）` : ''
+    p.message.textContent = this.disconnected ? '暂时无法确认最新运行状态，正在重新连接。'
+      : active ? event?.message ?? '流程已启动，正在准备教研。' : flow.status === 'completed'
       ? '请按上方已保存数量核对结果；未完成或待交叉验证的内容仍保持原状态。' : '可以查看记录，并从已保存的断点继续。'
     const seconds = event?.retryAt ? Math.max(0, Math.ceil((event.retryAt - Date.now()) / 1000)) : 0
-    p.time.textContent = active && event?.retryAt ? `${event.retry ? `第 ${event.retry}/${event.maxRetries} 次恢复 · ` : ''}${seconds ? `约 ${seconds} 秒后尝试继续` : '正在重新检查共享额度'}；等待期间完成数不会增加。`
+    p.time.textContent = active && event?.retryAt ? `${event.retry ? `第 ${event.retry}/${event.maxRetries} 次恢复 · ` : ''}${seconds ? `约 ${seconds} 秒后尝试继续` : '正在检查是否可以发送下一次请求'}；等待期间完成数不会增加。`
       : event ? `最近状态更新：${new Date(event.at).toLocaleTimeString()}` : ''
     p.link.href = `/wizard.html?course=${encodeURIComponent(this.course)}&resume=research&flowId=${encodeURIComponent(flow.flowId)}`
   }

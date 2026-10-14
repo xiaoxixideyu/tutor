@@ -158,4 +158,8 @@ it('同一步退避遵守渠道建议与递增间隔，认证/余额不足仍不
   assert.equal(transientModelFailure({ code: 'SERVER', message: 'busy', status: 503 }), true)
   assert.equal(transientModelFailure({ code: 'AUTH', message: 'unauthorized', status: 401 }), false)
   assert.equal(transientModelFailure({ ...rate, message: 'insufficient_quota' }), false)
+  // 模型不存在是配置错误：即使网关把它包进 5xx 也不重试（实测 new-api 以 503 返回 model_not_found）。
+  assert.equal(transientModelFailure({ code: 'SERVER', status: 503,
+    message: '503: {"code":"model_not_found","message":"No available channel for model deepseek-v4-flash under group default (distributor)"}' }), false)
+  assert.equal(transientModelFailure({ code: 'SERVER', status: 404, message: 'No available channel for model x' }), false)
 })

@@ -38,6 +38,11 @@ export interface ModelRateLimiterOptions {
   windowMs?: number
 }
 
+export interface ModelRequestWait {
+  reason: 'local-rate-limit' | 'channel-cooldown'
+  requestsPerMinute: number
+}
+
 // SQLite 事务让网页子进程、独立 DSH_HOME 和审查会话共用额度。
 // 不预订未来名额：排队取消不会消耗一次请求，进程退出也不会留下死锁。
 export class ModelRateLimiter {
@@ -94,11 +99,12 @@ export class ModelRateLimiter {
     }
   }
 
-  async acquire(signal: AbortSignal, onWait: (ms: number) => void = () => {}): Promise<void> {
+  async acquire(signal: AbortSignal, onWait: (ms: number, detail: ModelRequestWait) => void = () => {}): Promise<void> {
     let reportedAt = -Infinity
     let reportedUntil = 0
+    let reportedReason: ModelRequestWait['reason'] | undefined
     for (;;) {
-      const waitMs = await this.update(signal, (state, now) => {
+      const { waitMs, ...detail } = await this.update(signal, (state, now) => {
         // 配置切换时，仍活跃的较低配额在一个窗口内优先；旧快照不会冲破新限制。
         const previous = state.limits.find(limit => limit.rpm === this.rpm)
         if (previous) previous.expiresAt = now + this.windowMs
@@ -109,12 +115,14 @@ export class ModelRateLimiter {
         const rolling = state.starts.length >= rpm ? state.starts[state.starts.length - rpm] + this.windowMs : 0
         const wait = Math.max(0, state.cooldownUntil - now, paced - now, rolling - now)
         if (wait === 0) state.starts.push(now)
-        return wait
+        return { waitMs: wait, requestsPerMinute: rpm,
+          reason: state.cooldownUntil > now && state.cooldownUntil >= Math.max(paced, rolling)
+            ? 'channel-cooldown' as const : 'local-rate-limit' as const }
       })
       if (waitMs === 0) return
       const now = Date.now()
-      if (now - reportedAt >= 15_000 || now + waitMs > reportedUntil + 2000) {
-        onWait(waitMs); reportedAt = now; reportedUntil = now + waitMs
+      if (detail.reason !== reportedReason || now - reportedAt >= 15_000 || now + waitMs > reportedUntil + 2000) {
+        onWait(waitMs, detail); reportedAt = now; reportedUntil = now + waitMs; reportedReason = detail.reason
       }
       // 定期重新检查其他进程发布的冷却时间；AbortSignal 立即取消本地等待。
       await delay(Math.min(waitMs, 1000), undefined, { signal })

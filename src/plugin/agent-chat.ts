@@ -124,10 +124,13 @@ export async function createAgentChat(ctx: Context, options: CreateAgentChatOpti
         research?.checkRequest(requestKey)
         const request = await next()
         try {
-          await waiting.wait(async () => limiter?.acquire(signal, ms => {
-            const message = `等待渠道额度，约 ${Math.ceil(ms / 1000)} 秒后自动继续；已保存的教研进度保留。`
+          await waiting.wait(async () => limiter?.acquire(signal, (ms, detail) => {
+            const message = detail.reason === 'local-rate-limit'
+              ? `按共享队列每分钟 ${detail.requestsPerMinute} 次的设置排队，约 ${Math.ceil(ms / 1000)} 秒后尝试发送请求。`
+              : `渠道临时错误后的重试等待，约 ${Math.ceil(ms / 1000)} 秒后再次尝试。`
             progress(message)
-            researchStatus({ phase: 'waiting', message, retryAt: Date.now() + ms,
+            researchStatus({ phase: 'waiting', message, retryAt: Date.now() + ms, waitReason: detail.reason,
+              requestsPerMinute: detail.requestsPerMinute,
               ...(requestKey === recoveryStep ? { retry: recoveryFailures, maxRetries: MODEL_RECOVERY_LIMITS.retries } : {}) })
           }))
         }

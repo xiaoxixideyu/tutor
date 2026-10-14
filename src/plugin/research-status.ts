@@ -9,6 +9,8 @@ export interface ResearchStatusEvent {
   retry?: number
   maxRetries?: number
   retryAt?: number
+  waitReason?: 'local-rate-limit' | 'channel-cooldown'
+  requestsPerMinute?: number
   code?: string
 }
 

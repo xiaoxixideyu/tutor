@@ -5,6 +5,9 @@ export interface ModelFailure { code: string; message: string; status?: number; 
 
 export function transientModelFailure(failure: ModelFailure): boolean {
   if (/insufficient_quota|billing_hard_limit|credit balance is too low/i.test(failure.message)) return false
+  // 模型不存在是配置错误：换多长等待都不会好，重试只会白白烧掉恢复预算和时限。
+  // 该错误可能被网关包成 404/400，也可能包在 5xx 里返回（实测 new-api 以 503 返回 model_not_found）。
+  if (/model_not_found|no available channel for model/i.test(failure.message)) return false
   if (failure.status && [400, 401, 403, 404, 422].includes(failure.status)) {
     return failure.status === 404 && transientRouteFailure(failure.message)
   }

@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fork } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
-import { ModelRateLimiter, ModelRequestQueueError, type ModelRateLimiterOptions } from '../src/core/model-rate-limit.ts'
+import { ModelRateLimiter, ModelRequestQueueError, type ModelRateLimiterOptions, type ModelRequestWait } from '../src/core/model-rate-limit.ts'
 
 function fixture(t: TestContext, changes: Partial<ModelRateLimiterOptions> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-rate-limit-'))
@@ -106,6 +106,37 @@ it('429 的冷却由其他进程读取，并遵守更长的 Retry-After', async 
   await limiter.acquire(signal)
   assert.ok(Date.now() - since >= 230)
   assert.equal(await limiter.cooldown(signal, 1), 80, '短 Retry-After 仍至少等待完整窗口')
+})
+
+it('本地排队报告共享队列实际采用的低频设置，不误称渠道正在限流', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  const { options, limiter, signal } = fixture(t, { requestsPerMinute: 8, windowMs: 61_000 })
+  await new ModelRateLimiter({ ...options, requestsPerMinute: 2 }).acquire(signal)
+  const controller = new AbortController()
+  let observed: { ms: number; detail: ModelRequestWait } | undefined
+  await assert.rejects(limiter.acquire(controller.signal, (ms, detail) => {
+    observed = { ms, detail }; controller.abort()
+  }), { name: 'AbortError' })
+  assert.deepEqual(observed, { ms: 30_500, detail: { reason: 'local-rate-limit', requestsPerMinute: 2 } })
+})
+
+it('共享重试冷却优先时报告渠道等待，过期后恢复正常本地排队原因', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  const { options, limiter, signal } = fixture(t, { requestsPerMinute: 2, windowMs: 61_000 })
+  const other = new ModelRateLimiter(options)
+  await other.cooldown(signal, 120_000)
+  const observe = async () => {
+    const controller = new AbortController()
+    let result: { ms: number; detail: ModelRequestWait } | undefined
+    await assert.rejects(limiter.acquire(controller.signal, (ms, detail) => {
+      result = { ms, detail }; controller.abort()
+    }), { name: 'AbortError' })
+    return result
+  }
+  assert.deepEqual(await observe(), { ms: 120_000, detail: { reason: 'channel-cooldown', requestsPerMinute: 2 } })
+  t.mock.timers.tick(120_000)
+  await limiter.acquire(signal)
+  assert.deepEqual(await observe(), { ms: 30_500, detail: { reason: 'local-rate-limit', requestsPerMinute: 2 } })
 })
 
 it('取消冷却等待立即结束；队列不可用时明确失败而非绕过限流', { timeout: 10000 }, async t => {
