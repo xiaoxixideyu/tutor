@@ -1,0 +1,56 @@
+{
+  "sessionId": "636f8466-f6ea-4676-88ab-fd59d0297170",
+  "node": "go-fundamentals",
+  "title": "Go 环境搭建与语言基础（对照 Java）",
+  "structure": [
+    {
+      "point": "开场对照：Java 最小项目的 Maven/目录样板 vs Go 的最小工作流，激发先动手的动机",
+      "coverage": 0.44
+    },
+    {
+      "point": "官方入门路线走一遍（学员动手）：安装 Go → 写 hello.go（package main + import \"fmt\"）→ go run / go build 运行 [资料:1]",
+      "coverage": 0.35
+    },
+    {
+      "point": "依赖与模块：go mod init example/hello 生成 go.mod，开启依赖跟踪并记录模块路径 [资料:1]；再用 example.com/greetings 演示跨模块通过模块路径 import 调用，若要发布，模块路径必须是 Go 工具可下载的仓库路径 [资料:2]；go.mod 记录模块路径、Go 版本与依赖，类比 pom.xml 但由 go 命令自动维护",
+      "coverage": 0.13
+    },
+    {
+      "point": "控制结构差异（对照 Java）：if/for/switch 不带括号，左花括号不能另起一行（词法器按行自动插入分号）",
+      "coverage": 0.13
+    },
+    {
+      "point": "循环统一：没有 do/while，只有 for 的三种形态，range 遍历切片/字符串/map/channel，用 _ 丢弃不需要的返回值",
+      "coverage": 0.04
+    },
+    {
+      "point": "函数与错误处理：函数可返回多个值，惯例 error 作为最后一个返回值（如 os.File.Write 返回 (n int, err error)），对照 Java 的 try/catch",
+      "coverage": 0.1
+    },
+    {
+      "point": "命名与格式：MixedCaps 不用下划线；gofmt/go fmt 统一格式",
+      "coverage": 0.07
+    },
+    {
+      "point": "收尾强调：Effective Go 明确提醒，把 Java 直译成 Go 不会令人满意，要用 Go 的方式思考",
+      "coverage": 0.1
+    }
+  ],
+  "coverageRate": 0,
+  "plannedPoints": 8,
+  "reachedPoints": 0,
+  "partial": true,
+  "citations": {
+    "totalCitations": 1,
+    "invalidCitations": [],
+    "uncitedAssertions": 0,
+    "assertionSentences": 0
+  },
+  "drift": [],
+  "cost": {
+    "inputTokens": 16013,
+    "outputTokens": 612,
+    "turns": 1
+  },
+  "generatedAt": "2026-09-23 08:35:59"
+}

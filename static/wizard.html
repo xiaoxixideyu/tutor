@@ -40,6 +40,7 @@
   .chip.disabled { opacity: .55; cursor: default; }
   .chips .hint { font-size: 12px; color: var(--muted); align-self: center; }
   .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  .opstatus { display: none; max-width: 820px; margin: 8px auto 0; width: 100%; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
   .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
   .cost { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
   .cost .c-g { color: var(--green); } .cost .c-y { color: #d97706; } .cost .c-r { color: var(--red); }
@@ -90,6 +91,7 @@
   <button class="primary" id="startBtn">开始访谈</button>
 </div>
 <footer id="footer" style="display:none">
+  <div class="opstatus" id="opstatus"></div>
   <div class="inputrow">
     <input id="input" placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
     <button id="send">发送</button>
@@ -151,6 +153,24 @@ function setBusy(on, label) {
 }
 
 const COST_RE = /^(本回合|会话累计)/
+// 引擎内部运行提示（限流等待、内容审查、成本等）——不进对话气泡，只在一条安静的状态条里显示；教研另有专门进度面板。
+const OP_OUT_RE = /^(?:tutor:\s*)?(等待渠道额度|渠道暂时|重新检查共享额度|按共享队列.*排队|正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|审查开销[ 　]|复用同一内容的|正在核对.*范围与正确性|[^\n]{0,12}核查中[：:]|资料审查达到)/
+const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度|按共享队列.*排队)/
+function cleanOp(text) {
+  return String(text ?? '').replace(/^tutor:\s*/, '').replace(/\s*；已保存的教研进度保留。?\s*$/, '').trim()
+}
+function noteOp(text) {
+  const t = cleanOp(text)
+  if (!t) return
+  const $op = document.getElementById('opstatus')
+  $op.textContent = '⏳ ' + t
+  $op.style.display = 'block'
+}
+function clearOp() {
+  const $op = document.getElementById('opstatus')
+  $op.textContent = ''
+  $op.style.display = 'none'
+}
 let pending = ''
 let bubble = null
 let bubbleText = ''
@@ -206,9 +226,11 @@ function handleLine(line) {
   if (trimmed === '>') {
     const closed = closeBubble()
     if (closed) maybeChips(closed)
+    clearOp()
     setBusy(false)
     return
   }
+  if (OP_OUT_RE.test(trimmed)) { noteOp(trimmed); return }
   if (COST_RE.test(line)) {
     closeBubble()
     let html = esc(line).replace(/¥([0-9.]+)/g, (m, n) => {
@@ -221,7 +243,7 @@ function handleLine(line) {
     return
   }
   if (trimmed === '') return
-  if (!bubble) { bubble = el('<div class="tutor"></div>'); $log.appendChild(bubble) }
+  if (!bubble) { clearOp(); bubble = el('<div class="tutor"></div>'); $log.appendChild(bubble) }
   bubbleText += (bubbleText ? '\n' : '') + line
   bubble.textContent = bubbleText
   scrollToEnd()
@@ -348,7 +370,7 @@ function resetSteps() {
   for (const el of $steps.querySelectorAll('.step')) el.classList.remove('active', 'done')
 }
 
-const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂' }
+const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂', 'audit-content': '内容审查' }
 
 async function startSse() {
   const es = flowClient.connect()
@@ -373,12 +395,13 @@ async function startSse() {
       return
     }
     if (msg.type === 'out') feed(msg.text)
-    else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
+    else if (msg.type === 'err') { if (OP_ERR_RE.test(msg.text)) noteOp(msg.text); else $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`)) }
     else if (msg.type === 'exit') {
       feed('')
       renderBubble()
       closeBubble()
       setBusy(false)
+      clearOp()
       $footer.style.display = 'none'
       document.getElementById('stopBtn').disabled = true
       if (msg.kind === 'new' && msg.code === 0) {
@@ -401,6 +424,18 @@ async function startSse() {
         markStep('plan', 'done')
         $log.appendChild(el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
         document.getElementById('gotoBtn').style.display = 'inline-block'
+      } else if (msg.kind === 'audit-content') {
+        // 内容重审：结束即可回课程详情查看结果；code 0=全部通过，2=仍有条目被拒。
+        const ok = msg.code === 0
+        $log.appendChild(el(`<div class="sysline">—— 内容重新审查${ok ? '全部通过' : '完成，仍有未通过条目'}（code ${msg.code}）——</div>`))
+        if (ok) {
+          markStep('new', 'done'); markStep('plan', 'done')
+          $log.appendChild(el('<div class="sysline">内容已通过当前审查，可以开始上课。</div>'))
+          nextStepChip('learn', '去上课 →')
+        } else {
+          $log.appendChild(el(`<div class="sysline"><a href="/?course=${encodeURIComponent(courseName)}">查看未通过的具体问题</a></div>`))
+          nextStepChip('audit-content', '重新审查 →')
+        }
       } else {
         $log.appendChild(el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
         if (msg.code !== 0) {
@@ -432,7 +467,8 @@ function rememberFlow(flow) {
 }
 
 function busyLabel(kind) {
-  return kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : kind === 'research' ? '联网教研进行中' : '等待模型回复'
+  return kind === 'assess' ? '准备并核对摸底题目' : kind === 'plan' ? '设计并核对学习计划' : kind === 'research' ? '联网教研进行中'
+    : kind === 'audit-content' ? '正在重新审查课程内容' : '等待模型回复'
 }
 
 async function startFlow(kind, nodeId = '') {
@@ -547,7 +583,7 @@ flowClient.state(entryParams.get('flowId')).then((state) => {
     document.getElementById('err').textContent = '知识点参数非法'
     return
   }
-  if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && ['assess', 'plan', 'research', 'new'].includes(resume)) {
+  if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && ['assess', 'plan', 'research', 'new', 'audit-content'].includes(resume)) {
     if (entryParams.has('flowId')) {
       currentKind = resume; courseName = course; showConsole()
       $footer.style.display = 'none'

@@ -76,6 +76,18 @@ describe('courseProgress', () => {
     assert.throws(() => courseProgress(store, 'nope'), /不存在/)
   })
 
+  it('contentReady：无地图按就绪；有地图但未过独立审查则为待审查', t => {
+    const store = makeStore()
+    t.after(() => fs.rmSync(store.root, { recursive: true, force: true }))
+    store.create('g', { goal: 'x' })
+    // 新课程、尚无地图 → 不被内容准入阻塞
+    assert.equal(courseProgress(store, 'g').contentReady, true)
+    store.write('g', 'knowledge-map', { verified: false, nodes: [{ id: 'a', title: 'A' }], edges: [], resources: [] })
+    // 有地图但没有 approved 记录 → 内容待重新审查（看板据此提示，不甩会 dead-end 的入口）
+    assert.equal(courseProgress(store, 'g').contentReady, false)
+    assert.equal(listCourseSummaries(store)[0].contentReady, false)
+  })
+
   it('教研进度区分尚未完成、已保存但来源不足和来源已验证', t => {
     const store = makeStore(), profile = { goal: '三节课' }
     t.after(() => fs.rmSync(store.root, { recursive: true, force: true }))

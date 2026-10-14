@@ -1,9 +1,11 @@
 import type { CourseStore } from './store.ts'
 import { dueReviews, type DueReview } from './review.ts'
 import { currentNode } from './lesson.ts'
-import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile } from './schema.ts'
+import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
 import type { MasteryStatusId } from './schema.ts'
 import { ResearchProgressStore } from './research.ts'
+import { QualityStore } from './quality-store.ts'
+import { mapContent, bankContent, planContent, type ContentInput } from './content-quality.ts'
 
 export interface ProgressNode {
   id: string
@@ -38,6 +40,9 @@ export interface CourseProgress {
   // 是否已生成实践任务（practice.yaml 存在）——决定看板给「去实践」还是「生成实践任务」入口。
   hasPractice: boolean
   hasPlan: boolean
+  // 已有知识地图是否通过独立内容审查。false = 地图在，但准入未过——上课/教研会在门前退出，需先修复重审。
+  // 仅反映地图这一主闸；个别节点题库/教案的准入另算（看板给总体提示，不逐节点判定）。
+  contentReady: boolean
   research?: { completed: number; verified: number; pending: number; total: number }
 }
 
@@ -55,6 +60,8 @@ export interface CourseListItem {
   total: number
   dueCount?: number
   stage: CourseStage
+  // 见 CourseProgress.contentReady：地图准入未过时看板提示"内容待重新审查"，不甩会 dead-end 的入口。
+  contentReady: boolean
 }
 
 export interface CourseReviewDue {
@@ -119,6 +126,13 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
     }
   })
 
+  // 地图主闸准入：地图在但未过审 → 上课/教研会在门前退出，看板据此提示而非甩死路入口。
+  // 查准入出任何意外都按"就绪"处理：宁可不提示也不误报，更不能拖垮看板。
+  let contentReady = true
+  try {
+    if (map && profile) contentReady = new QualityStore(store.root, id).approved(mapContent(map, profile))
+  } catch { contentReady = true }
+
   return {
     id,
     ...(profile?.goal !== undefined ? { goal: profile.goal } : {}),
@@ -130,6 +144,7 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
     totalNodes: nodes.length,
     hasPractice: store.has(id, 'practice'),
     hasPlan: !!plan,
+    contentReady,
     ...(map ? { research: {
       completed: nodes.filter(node => node.researchStatus === 'saved' || node.researchStatus === 'verified').length,
       verified: nodes.filter(node => node.researchStatus === 'verified').length,
@@ -158,11 +173,27 @@ export function listCourseSummaries(store: CourseStore, today = new Date().toISO
       total: progress.totalNodes,
       ...(dueCount > 0 ? { dueCount } : {}),
       stage,
+      contentReady: progress.contentReady,
     }
   })
 }
 
 // 跨课程到期汇总：仅返回有到期项的课程，按 (earliestDue, id) 排序
+// 当前课程里未通过内容审查的条目及具体问题（给 UI 显示"哪条没过"，而不是只甩证据文件路径）。
+// 按当前内容快照判定：修复后内容键会变、旧的被拒记录自然失配，不会误报已修好的内容。
+export function courseContentIssues(store: CourseStore, id: string): { kind: string; node?: string; issues: string[] }[] {
+  if (!store.exists(id)) return []
+  const profile = store.has(id, 'profile') ? (store.read(id, 'profile') as Profile) : undefined
+  const map = store.has(id, 'knowledge-map') ? (store.read(id, 'knowledge-map') as KnowledgeMap) : undefined
+  if (!profile || !map) return []
+  const plan = store.has(id, 'plan') ? (store.read(id, 'plan') as Plan) : undefined
+  const bank = store.has(id, 'question-bank') ? (store.read(id, 'question-bank') as QuestionBank) : undefined
+  const inputs: ContentInput[] = [mapContent(map, profile)]
+  if (plan) inputs.push(planContent(plan, profile, map))
+  if (bank) for (const node of map.nodes) if (bank[node.id]?.length) inputs.push(bankContent(bank, node.id, profile, map))
+  try { return new QualityStore(store.root, id).issuesFor(inputs) } catch { return [] }
+}
+
 export function listDueReviews(store: CourseStore, today: string): CourseReviewDue[] {
   const items: CourseReviewDue[] = []
   for (const id of store.list()) {

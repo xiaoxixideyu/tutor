@@ -138,6 +138,26 @@ export class QualityStore {
       return this.validApproval(record, input)
     } catch { return false }
   }
+  // 针对"当前"内容列出未过审条目及问题：调用方传入当前内容快照（inputs），只报"仍是当前内容、
+  // 未通过审查、且能在历史里找到被拒原因"的条目。修复后内容键会变，旧的被拒记录因键不匹配而自然排除。
+  issuesFor(inputs: ContentInput[]): { kind: string; node?: string; issues: string[] }[] {
+    const rejected = new Map<string, QualityRecord>()
+    for (const record of this.records()) {
+      if (record.policy !== QUALITY_POLICY || record.status !== 'rejected' || !record.issues?.length) continue
+      if (record.key !== contentKey(record.input)) continue
+      const prev = rejected.get(record.key)
+      if (!prev || (record.completedAt ?? record.startedAt) > (prev.completedAt ?? prev.startedAt)) rejected.set(record.key, record)
+    }
+    const out: { kind: string; node?: string; issues: string[] }[] = []
+    for (const input of inputs) {
+      if (this.approved(input)) continue
+      const record = rejected.get(contentKey(input))
+      if (!record?.issues?.length) continue
+      const nodes = [...new Set(input.units.map(unit => unit.node).filter((node): node is string => !!node))]
+      out.push({ kind: input.kind, ...(nodes.length === 1 ? { node: nodes[0] } : {}), issues: record.issues })
+    }
+    return out
+  }
   private records(): QualityRecord[] {
     const dir = path.join(this.directory, 'reviews')
     if (!fs.existsSync(dir)) return []

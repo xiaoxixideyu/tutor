@@ -262,3 +262,16 @@ it('实践和教研的知识点传给 runner 并参与流程身份；不同节�
     await events.wait((e) => e.type === 'exit')
   }
 })
+
+it('内容重审以 audit-content 流程运行，作为课程身份的一部分；非法 nodeId 不被接受', async (t) => {
+  const { base, post, store } = await fixture(t)
+  store.write('alpha', 'knowledge-map', { verified: false, nodes: [{ id: 'basics', title: '基础' }], edges: [] })
+  assert.equal((await post('/flow/start', { kind: 'audit-content', courseId: 'alpha', nodeId: 'basics' })).body.ok, false)
+  const flow = (await post('/flow/start', { kind: 'audit-content', courseId: 'alpha' })).body
+  assert.equal(flow.ok, true)
+  assert.equal(flow.kind, 'audit-content')
+  const events = await stream(t, base, flow.flowId)
+  await events.wait((e) => e.text?.includes('启动 audit-content alpha'))
+  await post('/flow/stop', { flowId: flow.flowId })
+  await events.wait((e) => e.type === 'exit')
+})

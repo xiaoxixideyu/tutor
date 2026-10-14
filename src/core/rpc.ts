@@ -1,6 +1,6 @@
 import { COURSE_ID_PATTERN, type CourseStore } from './store.ts'
 import { dueReviews, pickReviewQuestions, reviewAttemptId } from './review.ts'
-import { courseProgress, listCourseSummaries, listDueReviews } from './summary.ts'
+import { courseProgress, listCourseSummaries, listDueReviews, courseContentIssues } from './summary.ts'
 import { applyReviewResult, judgeQuizAnswer } from './assessment.ts'
 import type { DocKind, Mastery, Question, QuestionBank, ReviewResult } from './schema.ts'
 import { requireReviewedBank } from './quality-store.ts'
@@ -101,6 +101,12 @@ export function createRpcMethods(
       const id = asCourseId(params)
       requireCourse(store, id)
       return courseProgress(store, id)
+    },
+    // 当前未通过内容审查的条目及问题——供 UI 显示"具体哪条没过"，而不是只给证据文件路径。
+    contentIssues: (params) => {
+      const id = asCourseId(params)
+      requireCourse(store, id)
+      return courseContentIssues(store, id)
     },
     dueReviews: (params) => {
       if (params?.id === undefined) return listDueReviews(store, today())

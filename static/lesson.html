@@ -45,6 +45,7 @@
   .chips .hint { font-size: 12px; color: var(--muted); align-self: center; }
   .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
   .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  .opstatus { display: none; max-width: 860px; margin: 8px auto 0; width: 100%; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
   footer { border-top: 1px solid var(--border); background: var(--card); padding: 12px 20px; }
   .inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
   .inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; }
@@ -73,6 +74,7 @@
     <button data-cmd="/quiz">单元小测 /quiz</button>
     <button data-cmd="/check">内容核对 /check</button>
   </div>
+  <div class="opstatus" id="opstatus"></div>
   <div class="inputrow" style="margin-top:8px">
     <input id="input" placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
     <button id="send">发送</button>
@@ -122,6 +124,24 @@ function colorizeCost(text) {
 
 const COST_RE = /^(本回合|会话累计)/
 const PROMPT_RE = /^>$/
+// 引擎内部运行提示（限流等待、内容审查、备课、成本等）——学员视图不显示为教学气泡，只在一条安静的状态条里显示当前进度。
+const OP_OUT_RE = /^(正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|审查开销[ 　]|复用同一内容的|正在核对|[^\n]{0,12}核查中[：:]|资料审查达到|正在汇总本知识点|正在核对本知识点)/
+const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度)/
+function cleanOp(text) {
+  return String(text ?? '').replace(/^tutor:\s*/, '').replace(/\s*；已保存的教研进度保留。?\s*$/, '').trim()
+}
+function noteOp(text) {
+  const t = cleanOp(text)
+  if (!t) return
+  const $op = document.getElementById('opstatus')
+  $op.textContent = '⏳ ' + t
+  $op.style.display = 'block'
+}
+function clearOp() {
+  const $op = document.getElementById('opstatus')
+  $op.textContent = ''
+  $op.style.display = 'none'
+}
 
 let pending = ''
 let bubble = null
@@ -279,9 +299,11 @@ function handleLine(line) {
   if (trimmed === '>') {
     const closed = closeBubble()
     if (closed) maybeChips(closed)
+    clearOp()
     setBusy(false)
     return
   }
+  if (OP_OUT_RE.test(trimmed)) { noteOp(trimmed); return }
   if (COST_RE.test(line)) {
     closeBubble()
     $log.appendChild(colorizeCost(line))
@@ -289,6 +311,7 @@ function handleLine(line) {
   }
   if (trimmed === '') return
   if (!bubble) {
+    clearOp()
     bubble = el('<div class="tutor"></div>')
     $log.appendChild(bubble)
   }
@@ -365,12 +388,13 @@ async function startSse() {
       return
     }
     if (msg.type === 'out') feed(msg.text)
-    else if (msg.type === 'err') $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`))
+    else if (msg.type === 'err') { if (OP_ERR_RE.test(msg.text)) noteOp(msg.text); else $log.appendChild(el(`<div class="errline">${esc(msg.text)}</div>`)) }
     else if (msg.type === 'exit') {
       feed('')
       const closed = closeBubble()
       if (closed) maybeChips(closed)
       flowFinished = true
+      clearOp()
       setBusy(false)
       if (msg.kind === 'learn' && msg.code === 0) {
         // learn 每讲完一节 / 暂停都以 0 退出——给「继续上课 / 返回」入口，别让用户以为课程结束了
