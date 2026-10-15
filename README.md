@@ -3,7 +3,7 @@
 一个个性化教学 agent：从需求澄清、教研、摸底、规划，到讲授、检验、复习，全程因材施教。
 
 - **设计文档**：[docs/design.md](docs/design.md)
-- **技术基座**：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（插件组装 + 会话日志）
+- **技术形态**：单进程 Node 应用（内置模型运行时 + 会话日志），无外部 agent 基座；教研的搜索/抓取走 MCP
 - **设计参考**：Reasonix 的缓存优先循环、工具调用修复、成本控制；当前已实现按课组织上下文和成本估算，完整自定义循环与分级调度仍待实现
 - **模型接入**：OpenAI 兼容接口（base_url + api_key + model），不绑定单一供应商
 - **交互形态**：命令行 + 本地网页，单用户，可管理多门课程；网页同时运行一个教学流程
@@ -30,16 +30,16 @@ npm run trial -- --learner p01
 - [首轮微课验收](docs/course-acceptance-2026-10-08.md)：当时内容质量未通过，发现超纲和错误资料；[验收方法](docs/course-acceptance.md)。
 - [内容准入记录](docs/content-quality-2026-10-08.md)：加入题目盲解、反例检查、范围审查与有界修复；[准入及旧数据说明](docs/content-quality.md)。
 
-真人教学效果与正常使用的成本基线仍需试学积累；Harness 档案挂载继续等待官方扩展接口。
+真人教学效果与正常使用的成本基线仍需试学积累。
 
-核心规则位于 `src/core/`（不依赖 Harness 与命令行，含 JSON-RPC 方法表）；`src/plugin/` 编排模型调用并以 dsh 插件挂载；`src/server/` 提供可独立测试的 HTTP/SSE 宿主。课程当前状态存 YAML，对话留在 Harness 日志；暂未实现从日志完整重建课程状态。
+架构（2026-10-15 单进程重构）：核心规则位于 `src/core/`（纯逻辑，含 JSON-RPC 方法表）；`src/runtime/` 是内置模型运行时（OpenAI 兼容传输、工具循环、可靠性护栏、会话日志）；`src/flows/` 是各教学流程的纯函数编排；`src/server/` 提供可独立测试的 HTTP/SSE 宿主，网页与每条教学流程都在同一个进程内运行。课程当前状态存 YAML，对话留在会话日志（`data/sessions/`）；暂未实现从日志完整重建课程状态。
 
 说明：复习答错会把已 mastered 的知识点降级，下次 `learn` 时计划指针会指回该节点（补救课）——这是设计行为，不是进度丢失。
 
 ## 环境要求
 
-- **Node ≥ 22.19，建议 24 LTS**（Harness 依赖 `import.meta.main`，仅官方实测 22.19/24/26；Node 23 会静默失效）
-- Harness 锁定 `@deepseek-ai/dsh@0.1.5-rc.2`（开发预览期，升级需显式变更）
+- **Node ≥ 22.19**（源码直接运行 TypeScript，依赖原生类型剥离与 `zlib` zstd；CI 与建议版本为 24 LTS）
+- 运行时依赖：`yaml`、`tldts`、`@deepseek-ai/schemastery`（配置校验）、`@modelcontextprotocol/sdk`（联网教研的搜索 MCP）
 
 ## 快速开始
 
@@ -77,10 +77,10 @@ npm run agent -- "..."          # 一次性 agent 任务
 ```
 
 - 网页模型设置：[使用说明](docs/model-settings.md)；保存在本机 `data/model-config.json`，后续网页和 CLI 模型流程共用；服务仅本机访问，端口可设 `TUTOR_SERVER_PORT`
-- 模型接入模板：`config/settings.yaml`（由 `scripts/agent.mjs` 渲染为运行时副本）
+- 人格提示词：`config/persona/*.md`（各流程系统提示词，直接读取）
 - 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）
 - 联网教研（二期，可选）：`.env` 配置 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（MCP 搜索服务）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
-- 会话日志：`data/dsh-home/sessions/`（JSONL 压缩存储，勿手改）
+- 会话日志：`data/sessions/<工作目录编码>/session-<uuid>/`（多帧 zstd JSONL `session.v3.jsonl.zstd` + `messages.jsonl`，勿手改；可用 `TUTOR_SESSIONS_ROOT` 更换根目录）
 - 实践执行：目前在本机子进程运行，提供超时与输出限制；`sandbox/` 是任务工作目录，尚无操作系统级文件与网络隔离
 
 ## 相关仓库
