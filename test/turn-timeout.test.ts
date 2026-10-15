@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { ModelWaitClock, TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from '../src/plugin/turn-timeout.ts'
+import { ModelWaitClock, TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from '../src/runtime/timeouts.ts'
 
 describe('whenIdleWithin', () => {
   it('idle 先落地则正常返回', async () => {

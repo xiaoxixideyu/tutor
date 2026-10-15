@@ -20,9 +20,9 @@ it('实际 HTTP 观测仅记录指定模型请求元数据，不记录地址、�
   t.after(() => { server.closeAllConnections(); server.close() })
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`
   const trace = path.join(root, 'transport.jsonl')
-  const child = spawn(process.execPath, ['--import', new URL('../src/core/model-transport.ts', import.meta.url).href, '--input-type=module', '--eval',
-    "await fetch(process.env.TUTOR_LLM_BASE_URL + '/models'); await fetch(process.env.TUTOR_LLM_BASE_URL + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer PRIVATE_API_KEY' }, body: 'PRIVATE_REQUEST_BODY' })"],
-  { env: { ...process.env, TUTOR_LLM_BASE_URL: base, TUTOR_CHANNEL_TRACE_FILE: trace }, stdio: 'pipe' })
+  const child = spawn(process.execPath, ['--input-type=module', '--eval',
+    "const { startChannelTrace } = await import(process.env.TRANSPORT_MODULE); startChannelTrace(process.env.TUTOR_CHANNEL_TRACE_FILE, process.env.TUTOR_LLM_BASE_URL); await fetch(process.env.TUTOR_LLM_BASE_URL + '/models'); await fetch(process.env.TUTOR_LLM_BASE_URL + '/chat/completions', { method: 'POST', headers: { authorization: 'Bearer PRIVATE_API_KEY' }, body: 'PRIVATE_REQUEST_BODY' })"],
+  { env: { ...process.env, TRANSPORT_MODULE: new URL('../src/core/model-transport.ts', import.meta.url).href, TUTOR_LLM_BASE_URL: base, TUTOR_CHANNEL_TRACE_FILE: trace }, stdio: 'pipe' })
   let stderr = ''
   child.stderr.on('data', chunk => { stderr += String(chunk) })
   const [code] = await once(child, 'close')

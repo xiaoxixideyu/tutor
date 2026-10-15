@@ -1,5 +1,4 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +6,8 @@ import { CourseStore, COURSE_ID_PATTERN } from '../core/store.ts'
 import { handleRpcRequest, RPC_ERRORS, type RpcRequest } from '../core/rpc.ts'
 import type { KnowledgeMap } from '../core/schema.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
+import { FlowExit, createLineQueue, type FlowIO, type LineQueue } from '../flows/io.ts'
+import { runFlowInProcess } from '../flows/run.ts'
 
 export const FLOW_PROTOCOL_VERSION = 1
 const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice', 'audit-content'])
@@ -22,14 +23,18 @@ export interface FlowStart {
 
 interface Flow extends FlowStart {
   flowId: string
-  child: ChildProcessWithoutNullStreams
   status: 'running' | 'stopping' | 'completed' | 'failed'
   code?: number
   buffer: string[]
   bytes: number
   clients: Set<ServerResponse>
   guard?: ReturnType<typeof setTimeout>
+  queue: LineQueue
+  controller: AbortController
+  task: Promise<void>
 }
+
+export type FlowRunner = (input: FlowStart, io: FlowIO, env: NodeJS.ProcessEnv) => Promise<number>
 
 export interface TutorServerOptions {
   root: string
@@ -38,8 +43,8 @@ export interface TutorServerOptions {
   stopTimeoutMs?: number
   modelConfigFile?: string
   modelEnvironment?: NodeJS.ProcessEnv
-  // 注入确定性交互进程，测试真实 HTTP/SSE 而不调用模型。
-  launch?: (input: FlowStart, env: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams
+  // 注入确定性流程，测试真实 HTTP/SSE 而不调用模型。
+  runFlow?: FlowRunner
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -78,9 +83,9 @@ export function createTutorServer(options: TutorServerOptions) {
   const models = new ModelConfigStore(root, { file: options.modelConfigFile, env: options.modelEnvironment })
   const flows = new Map<string, Flow>()
   let active: Flow | null = null
-  const launch = options.launch ?? ((input: FlowStart, env: NodeJS.ProcessEnv) => spawn(process.execPath,
-    [path.join(root, 'scripts', 'agent.mjs'), input.kind, input.courseId, ...(input.milestoneId ? [input.milestoneId] : []), ...(input.nodeId ? ['--node', input.nodeId] : [])],
-    { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }))
+  const runFlow: FlowRunner = options.runFlow ?? ((input, io, env) => runFlowInProcess(
+    { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}) },
+    io, { root, env }))
 
   function broadcast(flow: Flow, event: Record<string, unknown>): void {
     const payload = `data: ${JSON.stringify({ ...snapshot(flow), ...event })}\n\n`
@@ -102,18 +107,13 @@ export function createTutorServer(options: TutorServerOptions) {
     broadcast(flow, { type: 'exit', code })
   }
 
-  function killTree(flow: Flow): void {
-    if (flow.child.pid) {
-      try { process.kill(-flow.child.pid, 'SIGKILL'); return } catch { /* 已退出或注入进程不是独立进程组 */ }
-    }
-    flow.child.kill('SIGKILL')
-  }
-
   function start(input: FlowStart) {
     if (!RUNNERS.has(input.kind)) return { ok: false, error: `未知流程 "${input.kind}"` }
     if (!COURSE_ID_PATTERN.test(input.courseId)) return { ok: false, error: `课程名 "${input.courseId}" 非法` }
     if (input.milestoneId && (input.kind !== 'exam' || !COURSE_ID_PATTERN.test(input.milestoneId))) return { ok: false, error: '里程碑参数非法' }
-    if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) return { ok: false, error: '知识点参数非法' }
+    if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) {
+      return { ok: false, error: '知识点参数非法' }
+    }
     if (active) {
       if (active.status === 'running' && active.kind === input.kind && active.courseId === input.courseId && active.milestoneId === input.milestoneId && active.nodeId === input.nodeId) {
         return { ok: true, resumed: true, ...snapshot(active) }
@@ -124,30 +124,41 @@ export function createTutorServer(options: TutorServerOptions) {
     if (input.nodeId && (!store.has(input.courseId, 'knowledge-map') || !(store.read(input.courseId, 'knowledge-map') as KnowledgeMap).nodes.some((node) => node.id === input.nodeId))) {
       return { ok: false, error: '所选知识点不在本课程知识地图中' }
     }
+    // 每次启动流程冻结模型配置；practice 为零模型流程，不要求已配置模型。
     const env = input.kind === 'practice' ? { ...(options.modelEnvironment ?? process.env) } : models.environment()
-    const child = launch(input, { ...env, TUTOR_COURSES_ROOT: store.root })
-    const flow: Flow = { ...input, flowId: randomUUID(), child, status: 'running', buffer: [], bytes: 0, clients: new Set() }
-    active = flow
-    flows.set(flow.flowId, flow)
-    // 保留最近 8 个流程的内存回放；跨服务重启的课程断点由 runner 持久化。
+    const queue = createLineQueue()
+    const controller = new AbortController()
+    const flow: Flow = { ...input, flowId: randomUUID(), status: 'running', buffer: [], bytes: 0, clients: new Set(), queue, controller,
+      task: Promise.resolve() }
+    const io: FlowIO = {
+      out: text => { if (flow.code === undefined) broadcast(flow, { type: 'out', text }) },
+      err: text => { if (flow.code === undefined) broadcast(flow, { type: 'err', text }) },
+      readLine: () => queue.read(),
+      closeInput: () => queue.close(),
+      signal: controller.signal,
+      tty: false,
+    }
+    // 保留最近 8 个流程的内存回放；跨服务重启的课程断点由课程状态持久化。
     while (flows.size > 8) {
       const oldest = flows.values().next().value!
       for (const client of oldest.clients) client.end()
       flows.delete(oldest.flowId)
     }
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (text: string) => broadcast(flow, { type: 'out', text }))
-    child.stderr.on('data', (text: string) => broadcast(flow, { type: 'err', text }))
-    child.stdin.on('error', (error) => {
-      if (flow.code === undefined) broadcast(flow, { type: 'err', text: `输入通道已关闭：${error.message}\n` })
-    })
-    child.once('error', (error) => {
-      broadcast(flow, { type: 'err', text: `流程启动失败：${error.message}\n` })
-      finish(flow, -1)
-    })
-    // 等输出排空再宣布完成，避免最后的成绩落在 exit 事件之后。
-    child.once('close', (code) => finish(flow, code ?? -1))
+    active = flow
+    flows.set(flow.flowId, flow)
+    flow.task = (async () => {
+      let code: number
+      try {
+        code = await runFlow(input, io, { ...env, TUTOR_COURSES_ROOT: store.root })
+      } catch (error) {
+        if (error instanceof FlowExit) code = error.code
+        else {
+          broadcast(flow, { type: 'err', text: `流程启动失败：${error instanceof Error ? error.message : String(error)}\n` })
+          code = -1
+        }
+      }
+      finish(flow, code)
+    })()
     return { ok: true, started: true, ...snapshot(flow) }
   }
 
@@ -175,7 +186,7 @@ export function createTutorServer(options: TutorServerOptions) {
         try { request = await body(req) } catch {
           json(res, 200, { jsonrpc: '2.0', id: null, error: RPC_ERRORS.parse }); return
         }
-        // runner 持有课程快照，同一课程的网页复习不能同时回写。
+        // 流程持有课程快照，同一课程的网页复习不能同时回写。
         const rpc = request as RpcRequest | null
         if (active && rpc?.params?.id === active.courseId && ['submitReview', 'applyReview'].includes(rpc?.method ?? '')) {
           json(res, 200, { jsonrpc: '2.0', id: rpc?.id ?? null, error: { code: -32602, message: '本课程有进行中的流程，请结束后提交复习' } }); return
@@ -208,18 +219,21 @@ export function createTutorServer(options: TutorServerOptions) {
         if (!active || input.flowId !== active.flowId) { json(res, 409, { ok: false, error: '流程已结束或已切换，请刷新页面后继续' }); return }
         const flow = active
         if (url.pathname === '/flow/input') {
-          if (flow.status !== 'running' || !flow.child.stdin.writable) { json(res, 409, { ok: false, error: '流程正在结束' }); return }
+          if (flow.status !== 'running' || flow.queue.closed) { json(res, 409, { ok: false, error: '流程正在结束' }); return }
           if (typeof input.line !== 'string' || /[\r\n]/.test(input.line)) { json(res, 400, { ok: false, error: '每次只能提交一行输入' }); return }
-          flow.child.stdin.write(`${input.line}\n`)
+          flow.queue.push(input.line)
         } else if (flow.status !== 'stopping') {
           flow.status = 'stopping'
           broadcast(flow, { type: 'state' })
-          if (flow.child.stdin.writable) {
-            const line = STOP_LINES[flow.kind]
-            if (line !== undefined) flow.child.stdin.write(`${line}\n`)
-            else flow.child.stdin.end()
-          }
-          flow.guard = setTimeout(() => killTree(flow), options.stopTimeoutMs ?? 8000)
+          const line = STOP_LINES[flow.kind]
+          if (line !== undefined) flow.queue.push(line)
+          else flow.queue.close()
+          flow.guard = setTimeout(() => {
+            // 流程未在时限内响应停止：中止在途请求并释放活动槽位。
+            flow.queue.close()
+            flow.controller.abort(new Error('流程停止超时'))
+            finish(flow, -1)
+          }, options.stopTimeoutMs ?? 8000)
         }
         json(res, 200, { ok: true, ...snapshot(flow) }); return
       }
@@ -243,7 +257,10 @@ export function createTutorServer(options: TutorServerOptions) {
       for (const flow of flows.values()) {
         if (flow.guard) clearTimeout(flow.guard)
         for (const client of flow.clients) client.end()
-        if (flow.code === undefined) killTree(flow)
+        if (flow.code === undefined) {
+          flow.queue.close()
+          flow.controller.abort(new Error('服务关闭'))
+        }
       }
       return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     },

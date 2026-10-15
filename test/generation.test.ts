@@ -1,6 +1,6 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
-import { generateTurn } from '../src/plugin/generation.ts'
+import { generateTurn } from '../src/flows/generation.ts'
 
 it('最后一次修正仍会被校验并返回，判分失败有界退出', async () => {
   let calls = 0

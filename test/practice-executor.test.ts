@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ensureStarterFiles, runTests } from '../src/plugin/practice-executor.ts'
+import { ensureStarterFiles, runTests } from '../src/flows/practice-executor.ts'
 import { validatePracticeTasks } from '../src/core/practice.ts'
 
 const task = { id: 'task', node: 'topic', title: '任务', prompt: '完成任务', tests: [{ name: 'check', command: 'true' }], starter_files: [{ path: 'README.md', content: '原要求' }] }

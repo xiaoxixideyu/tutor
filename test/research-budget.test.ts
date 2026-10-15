@@ -1,6 +1,6 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
-import { ResearchBudget, ResearchBudgetError, RESEARCH_LIMITS } from '../src/plugin/research-budget.ts'
+import { ResearchBudget, ResearchBudgetError, RESEARCH_LIMITS } from '../src/runtime/budget.ts'
 
 const search = 'mcp__searchix__search_proxy_tavily_search'
 const fallback = 'mcp__searchix__search_proxy_exa_search'

@@ -1,16 +1,13 @@
 #!/usr/bin/env node
-// 逐阶段交互验收：使用正式 runner、独立课程与 Harness 日志，保留全部失败尝试。
+// 逐阶段交互验收：使用正式 runner、独立课程与会话日志，保留全部失败尝试（单进程直跑）。
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import yaml from 'yaml'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { estimateCost, loadCostConfig, ratesForModel } from '../src/core/cost.ts'
-import { renderModelSettings } from '../src/core/model-settings.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
@@ -37,9 +34,8 @@ const run = values.run ? fs.realpathSync(path.resolve(values.run)) : fs.mkdtempS
 if (!run.startsWith(fs.realpathSync(evalRoot) + path.sep)) throw new Error('验收目录必须在 data/evals 下')
 const courseDir = path.join(run, courseId)
 const workspace = path.join(courseDir, 'workspace')
-const dshHome = path.join(courseDir, 'dsh-home')
 const courses = path.join(courseDir, 'courses')
-for (const dir of [workspace, dshHome, courses, path.join(workspace, 'config')]) fs.mkdirSync(dir, { recursive: true })
+for (const dir of [workspace, courses, path.join(workspace, 'config')]) fs.mkdirSync(dir, { recursive: true })
 fs.copyFileSync(path.join(root, 'config/cost.yaml'), path.join(workspace, 'config/cost.yaml'))
 const stages = path.join(courseDir, 'stages')
 fs.mkdirSync(stages, { recursive: true })
@@ -49,40 +45,14 @@ if (fs.existsSync(path.join(root, '.env'))) for (const line of fs.readFileSync(p
   const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
   if (match && !(match[1] in env)) env[match[1]] = match[2].replace(/^["']|["']$/g, '')
 }
-const require = createRequire(import.meta.url)
 let args
 if (modes[mode]) {
   for (const key of ['TUTOR_LLM_BASE_URL', 'TUTOR_LLM_API_KEY', 'TUTOR_LLM_MODEL']) if (!env[key]) throw new Error(`缺少 ${key}`)
-  const settings = fs.readFileSync(path.join(root, 'config/settings.yaml'), 'utf8').replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_raw, key) => {
-    if (!env[key]) throw new Error(`缺少 ${key}`)
-    return key === 'TUTOR_LLM_BASE_URL' ? env[key].replace(/\/+$/, '') : env[key]
-  })
-  fs.writeFileSync(path.join(dshHome, 'settings.yaml'), renderModelSettings(settings, env))
-  const [runner, persona] = modes[mode]
-  const insert = [
-    { id: 'course-state', name: path.join(root, 'src/plugin/course-state.ts'), config: { root: courses } },
-    { id: 'tutor-course-observer', name: path.join(root, 'src/eval/course-observer.ts'),
-      config: { outputFile: path.join(stageDir, 'attempts.jsonl'), research: mode === 'research' } },
-    { id: `tutor-${runner}-runner`, name: path.join(root, `src/plugin/${runner}-runner.ts`),
-      config: { courseId, ...(values.node ? { nodeId: values.node } : {}), ...(values.milestone ? { milestoneId: values.milestone } : {}) } },
-  ]
-  if (mode === 'research') {
-    if (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN) throw new Error('教研需要配置搜索 MCP')
-    // 令牌仅从子进程环境读取，不写入验收产物。
-    const template = fs.readFileSync(path.join(root, 'config/search.patch.yml'), 'utf8')
-    const mcpPatch = path.join(stageDir, 'mcp.patch.yml')
-    fs.writeFileSync(mcpPatch, template.replace('${TUTOR_MCP_SEARCH_URL}', env.TUTOR_MCP_SEARCH_URL))
-  }
-  const patch = [
-    ...['headless-runner', 'headless-startup', 'session-title-llm', 'agent-instructions', 'skill-filesystem'].map(id => ({ id, disabled: true })),
-    { id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false,
-      personaPrefix: fs.readFileSync(path.join(root, `config/persona/${persona}.md`), 'utf8').trim(), personaSuffix: '' } },
-    { id: 'tools', config: { mode: 'native' } }, { insert },
-  ]
-  const patchFile = path.join(stageDir, 'runner.patch.yml')
-  fs.writeFileSync(patchFile, yaml.stringify(patch))
-  args = [require.resolve('@deepseek-ai/dsh/lib/bin.js'), '--profile', 'headless', '--patch', patchFile,
-    ...(mode === 'research' ? ['--patch', path.join(stageDir, 'mcp.patch.yml')] : [])]
+  if (mode === 'research' && (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN)) throw new Error('教研需要配置搜索 MCP')
+  const optionsFile = path.join(stageDir, 'options.json')
+  fs.writeFileSync(optionsFile, JSON.stringify({ kind: mode, courseId, workspace, observerFile: path.join(stageDir, 'attempts.jsonl'),
+    ...(values.node ? { nodeId: values.node } : {}), ...(values.milestone ? { milestoneId: values.milestone } : {}) }, null, 2) + '\n')
+  args = [path.join(root, 'scripts/eval-runner.mjs'), 'course', optionsFile]
 } else {
   args = [path.join(root, `scripts/${mode === 'status' ? 'view' : mode}.mjs`), mode, courseId, ...(values.node ? ['--node', values.node] : [])]
 }
@@ -90,12 +60,13 @@ const report = { version: 1, courseId, stage: mode, model: env.TUTOR_LLM_MODEL, 
   run, status: 'running', runtime: { node: process.versions.node, platform: process.platform }, limits: { timeoutMs, maxRequests: 24, maxTokens: 8192 },
   settings: { officialRunner: true, titleGeneration: false, thinking: env.TUTOR_LLM_THINKING ?? 'provider-default', tools: mode === 'research' ? 'search-and-fetch' : 'none' } }
 report.sourceHashes = Object.fromEntries([
-  'scripts/eval-course.mjs', 'src/eval/course-observer.ts', 'src/plugin/agent-chat.ts', 'src/plugin/generation.ts', 'config/cost.yaml',
-  'src/plugin/content-gate.ts',
+  'scripts/eval-course.mjs', 'scripts/eval-runner.mjs', 'src/runtime/chat.ts', 'src/runtime/llm.ts', 'src/flows/generation.ts', 'config/cost.yaml',
+  'src/flows/content-gate.ts',
   ...fs.readdirSync(path.join(root, 'src/core')).filter(file => file.endsWith('.ts')).map(file => `src/core/${file}`),
-  ...(modes[mode] ? [`src/plugin/${modes[mode][0]}-runner.ts`, `config/persona/${modes[mode][1]}.md`] : []),
+  ...fs.readdirSync(path.join(root, 'src/runtime')).filter(file => file.endsWith('.ts')).map(file => `src/runtime/${file}`),
+  ...(modes[mode] ? [`src/flows/${modes[mode][0] === 'audit-content' ? 'audit-content' : modes[mode][0]}.ts`, `config/persona/${modes[mode][1]}.md`] : []),
   ...(!modes[mode] ? [`scripts/${mode === 'status' ? 'view' : mode}.mjs`] : []),
-  ...(mode === 'practice' ? ['src/plugin/practice-executor.ts'] : []),
+  ...(mode === 'practice' ? ['src/flows/practice-executor.ts'] : []),
 ].map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex')]))
 const save = () => fs.writeFileSync(path.join(stageDir, 'report.json'), JSON.stringify(report, null, 2) + '\n')
 save()
@@ -103,7 +74,7 @@ console.log(`验收目录：${run}\n阶段记录：${stageDir}`)
 const log = fs.createWriteStream(path.join(stageDir, 'runner.log'))
 const inputLog = fs.createWriteStream(path.join(stageDir, 'input.txt'))
 const child = spawn(process.execPath, args, { cwd: workspace, detached: true,
-  env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1', TUTOR_COURSES_ROOT: courses }, stdio: ['pipe', 'pipe', 'pipe'] })
+  env: { ...env, TUTOR_SESSIONS_ROOT: path.join(courseDir, 'sessions'), TUTOR_WORKSPACE: workspace, TUTOR_COURSES_ROOT: courses }, stdio: ['pipe', 'pipe', 'pipe'] })
 process.stdin.on('data', chunk => { inputLog.write(chunk); child.stdin.write(chunk) })
 process.stdin.on('end', () => child.stdin.end())
 child.stdin.on('error', () => {})
@@ -134,7 +105,7 @@ child.once('close', code => {
   const cost = loadCostConfig(fs.readFileSync(path.join(root, 'config/cost.yaml'), 'utf8'))
   const rates = ratesForModel(cost, env.TUTOR_LLM_MODEL)
   report.cost = { currency: cost.currency, rates, estimated: estimateCost(report.usage, rates), actualBill: null,
-    basis: 'Harness 已报告用量，包含失败尝试；未报告用量与实际网关账单未知。首块延迟可能是推理或元数据，不等于用户可见首字。' }
+    basis: '已报告用量，包含失败尝试；未报告用量与实际网关账单未知。首块延迟可能是推理或元数据，不等于用户可见首字。' }
   if (fs.existsSync(path.join(courses, courseId))) fs.cpSync(path.join(courses, courseId), path.join(stageDir, 'course-snapshot'), { recursive: true, filter: source => !source.includes(`${path.sep}sandbox`) })
   save()
   console.log(`\n阶段结束：${report.status}，${report.elapsedMs} ms，估算 ${cost.currency}${report.cost.estimated.toFixed(4)}\n记录：${stageDir}/report.json`)

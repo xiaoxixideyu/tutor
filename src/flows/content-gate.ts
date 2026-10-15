@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import type { Context } from '@deepseek-ai/cordis'
 import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, MAP_NODE_REVIEW_CONTRACT, MAP_OUTLINE_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, mapTeachingTime, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
   requiredAssertions, teachingContent, validateContentInput, type ApprovedTeachingTurn, type ContentInput } from '../core/content-quality.ts'
 import type { KnowledgeMap, Profile } from '../core/schema.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
-import { createAgentChat, OutputLimitError, type AgentChat } from './agent-chat.ts'
-import { TurnTimeoutError } from './turn-timeout.ts'
+import { OutputLimitError, type AgentChat } from '../runtime/chat.ts'
+import { TurnTimeoutError } from '../runtime/timeouts.ts'
 import { generateTurn, parseJsonBlock, type ParseResult } from './generation.ts'
 import { formatTurnCost } from '../core/cost.ts'
 import { loadCostConfigFromRepo } from './cost-line.ts'
-import { researchStatus } from './research-status.ts'
+import type { FlowDeps } from './deps.ts'
 
 export interface ContentVerdict { approved: boolean; issues: string[]; cached: boolean; evidenceFile?: string }
 export class ContentReviewError extends Error {
@@ -192,38 +191,36 @@ export class ContentGate {
   }
 }
 
-export function createContentGate(ctx: Context, store: { root: string }, courseId: string): ContentGate {
+export function createContentGate(deps: FlowDeps, courseId: string): ContentGate {
   const labels: Record<ContentInput['kind'], string> = { map: '课程地图', plan: '学习计划', bank: '摸底题目', lesson: '教案', practice: '实践任务', exam: '试卷', teaching: '讲授' }
-  return new ContentGate(new QualityStore(store.root, courseId), async (_role, systemPrompt) => {
-    const chat = await createAgentChat(ctx, { isolatedSystemPrompt: systemPrompt, ...CONTENT_REVIEW_LIMITS })
-    if (!chat) throw new Error('无法创建独立审查会话')
-    return chat
+  return new ContentGate(new QualityStore(deps.store.root, courseId), async (_role, systemPrompt) => {
+    return deps.createChat({ isolatedSystemPrompt: systemPrompt, ...CONTENT_REVIEW_LIMITS })
   }, record => {
-    const out = process.stdout
-    out.write(`内容审查 ${record.input.kind}：${record.status === 'approved' ? '通过' : record.status === 'rejected' ? `拦截 ${record.issues?.length ?? 0} 处问题` : '未完成'}（记录已保存）。\n`)
-    const cost = loadCostConfigFromRepo()
+    const out = deps.io.out
+    out(`内容审查 ${record.input.kind}：${record.status === 'approved' ? '通过' : record.status === 'rejected' ? `拦截 ${record.issues?.length ?? 0} 处问题` : '未完成'}（记录已保存）。\n`)
+    const cost = loadCostConfigFromRepo(deps.workspace)
     const reused = record.calls.filter(call => call.reusedFrom).length
-    if (reused) out.write(`复用同一内容的 ${reused} 项已完成检查，原始证据与费用保留；本次不重复计费。\n`)
-    for (const call of record.calls) if (call.model && !call.reusedFrom) out.write(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, out.isTTY === true)}\n`)
+    if (reused) out(`复用同一内容的 ${reused} 项已完成检查，原始证据与费用保留；本次不重复计费。\n`)
+    for (const call of record.calls) if (call.model && !call.reusedFrom) out(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, deps.io.tty)}\n`)
   }, {
     onStart: record => {
       const message = `正在核对${labels[record.input.kind]}的范围与正确性…`
-      process.stdout.write(message + '\n')
-      researchStatus({ phase: 'review', message })
+      deps.io.out(message + '\n')
+      deps.status({ phase: 'review', message })
     },
     onProgress: (record, call) => {
       if (call.reusedFrom) return
       const completed = record.calls.filter(item => item.elapsedMs !== undefined && !item.reusedFrom && !item.error).length
       const reused = record.calls.filter(item => item.reusedFrom).length
       const message = `${labels[record.input.kind]}核查中：已完成 ${completed} 项新检查${reused ? `，复用 ${reused} 项已有检查` : ''}。`
-      process.stdout.write(message + '\n')
-      researchStatus({ phase: 'review', message })
+      deps.io.out(message + '\n')
+      deps.status({ phase: 'review', message })
     },
   })
 }
 
 export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial<Pick<AgentChat, 'flush'>>, prompt: string, parse: (text: string) => ParseResult | Promise<ParseResult>,
-  gate: ContentGate, content: (value: T) => ContentInput, options: { reviewLimitRepair?: string } = {}): Promise<T> {
+  gate: ContentGate, content: (value: T) => ContentInput, options: { reviewLimitRepair?: string; out?: (text: string) => void } = {}): Promise<T> {
   const rejected = new Map<string, ContentVerdict>()
   const reviewLimits = new Map<string, string>()
   const saved = gate.store.candidate(prompt)
@@ -255,7 +252,7 @@ export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial
         const issue = `${options.reviewLimitRepair}\n${error.message}`
         reviewLimits.set(key, issue)
         gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'review-limit', issues: [issue] })
-        process.stdout.write('资料审查达到时限或输出上限，正在精简本知识点资料后重新核查…\n')
+        options.out?.('资料审查达到时限或输出上限，正在精简本知识点资料后重新核查…\n')
         return { ok: false, error: issue }
       }
       if (!verdict.approved) {

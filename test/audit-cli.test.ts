@@ -16,7 +16,7 @@ it('正式 audit 只统计已发布事件、保留拒绝稿成本，并从课堂
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-audit-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const workspace = path.join(root, 'workspace')
-  const dshHome = path.join(root, 'dsh-home')
+  const sessionsRoot = path.join(root, 'sessions')
   fs.mkdirSync(workspace)
   const store = new CourseStore(path.join(root, 'courses'))
   const profile = { goal: '学习 goroutine' }
@@ -31,7 +31,7 @@ it('正式 audit 只统计已发布事件、保留拒绝稿成本，并从课堂
   quality.publish(content, sessionId, 7)
   quality.publish(content, sessionId, 7)
   assert.equal(quality.published(sessionId).length, 1)
-  const dir = path.join(dshHome, 'sessions', `-${workspace.replaceAll('/', '-')}--`, sessionId)
+  const dir = path.join(sessionsRoot, `-${workspace.replaceAll('/', '-')}--`, sessionId)
   fs.mkdirSync(dir, { recursive: true })
   const events = [
     { type: 'session', id: sessionId },
@@ -41,7 +41,7 @@ it('正式 audit 只统计已发布事件、保留拒绝稿成本，并从课堂
   ]
   fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'), zlib.zstdCompressSync(Buffer.from(events.map(e => JSON.stringify(e)).join('\n') + '\n')))
   const run = () => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/audit.mjs', import.meta.url)), 'audit', 'audit-fixture', '--json'],
-    { cwd: workspace, env: { ...process.env, DSH_HOME: dshHome, TUTOR_COURSES_ROOT: store.root, TUTOR_AUDITS_ROOT: path.join(root, 'audits') }, encoding: 'utf8' })
+    { cwd: workspace, env: { ...process.env, TUTOR_SESSIONS_ROOT: sessionsRoot, TUTOR_COURSES_ROOT: store.root, TUTOR_AUDITS_ROOT: path.join(root, 'audits') }, encoding: 'utf8' })
   const result = run()
   assert.equal(result.status, 0, result.stderr)
   const report = JSON.parse(result.stdout)

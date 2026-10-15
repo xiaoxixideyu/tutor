@@ -43,7 +43,7 @@ export interface ModelRequestWait {
   requestsPerMinute: number
 }
 
-// SQLite 事务让网页子进程、独立 DSH_HOME 和审查会话共用额度。
+// SQLite 事务让网页服务、独立试学实例和审查会话共用额度。
 // 不预订未来名额：排队取消不会消耗一次请求，进程退出也不会留下死锁。
 export class ModelRateLimiter {
   private readonly file: string

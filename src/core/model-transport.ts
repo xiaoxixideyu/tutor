@@ -2,10 +2,13 @@ import fs from 'node:fs'
 import { channel } from 'node:diagnostics_channel'
 
 // 仅在显式指定诊断文件时启用。请求正文、响应正文、URL 和认证头均不进入记录。
-const output = process.env.TUTOR_CHANNEL_TRACE_FILE
-const configured = process.env.TUTOR_LLM_BASE_URL
-if (output && configured) {
-  const url = new URL(configured)
+// 观察的是 Node undici（全局 fetch）的 HTTP 层；模型客户端走 fetch 时有效。
+let started = false
+
+export function startChannelTrace(output: string, configuredBaseUrl: string): void {
+  if (started || !output || !configuredBaseUrl) return
+  started = true
+  const url = new URL(configuredBaseUrl)
   const expectedPath = url.pathname.replace(/\/+$/, '') + '/chat/completions'
   const requests = new WeakMap<object, string>()
   let count = 0

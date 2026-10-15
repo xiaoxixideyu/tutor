@@ -15,7 +15,7 @@ export function safeStarterPath(file: string): boolean {
 }
 
 // 实践任务（三期）：学员在 workdir 写代码 → 跑规则化测试 → 判分联动掌握度。
-// 判分与 prompt 构建是纯核心；执行在壳/执行器（见 src/plugin/practice-executor.ts）。
+// 判分与 prompt 构建是纯核心；执行在壳/执行器（见 src/flows/practice-executor.ts）。
 
 function requirePracticeNode(map: KnowledgeMap, node: string): string {
   if (!map.nodes.some((item) => item.id === node)) throw new Error(`知识点 "${node}" 不在本课程知识地图中`)

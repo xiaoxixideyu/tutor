@@ -2,10 +2,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
-import yaml from 'yaml'
 import { validateGradingFixtures } from '../src/eval/grading.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -37,33 +35,16 @@ for (const key of ['TUTOR_LLM_BASE_URL', 'TUTOR_LLM_API_KEY', 'TUTOR_LLM_MODEL']
 const runsRoot = path.join(root, 'data/evals')
 fs.mkdirSync(runsRoot, { recursive: true })
 const dir = fs.mkdtempSync(path.join(runsRoot, `grading-${new Date().toISOString().replace(/[:.]/g, '-')}-`))
-const dshHome = path.join(dir, 'dsh-home')
 const workspace = path.join(dir, 'workspace')
-fs.mkdirSync(dshHome)
 fs.mkdirSync(workspace)
 const outputFile = path.join(dir, 'report.json')
-const settings = fs.readFileSync(path.join(root, 'config/settings.yaml'), 'utf8').replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_raw, key) => {
-  if (!env[key]) throw new Error(`缺少配置变量 ${key}`)
-  return key === 'TUTOR_LLM_BASE_URL' ? env[key].replace(/\/+$/, '') : env[key]
-})
-fs.writeFileSync(path.join(dshHome, 'settings.yaml'), settings)
-// 只复用模型适配器和 AgentChat；不加载课程状态、MCP、项目指令与自动标题生成。
-const patch = [
-  ...['headless-runner', 'headless-startup', 'session-title-llm', 'agent-instructions', 'skill-filesystem'].map(id => ({ id, disabled: true })),
-  { id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: '', personaSuffix: '' } },
-  { id: 'tools', config: { mode: 'native' } },
-  { insert: [{ id: 'tutor-grading-eval', name: path.join(root, 'src/eval/grading-runner.ts'),
-    inject: ['agentDefaultModel', 'agents', 'sessions', 'systemPrompt', 'tools'],
-    config: { fixtureFile, outputFile, repeats, maxTokens,
-      personaFile: path.join(root, 'config/persona/exam-grade.md'), costFile: path.join(root, 'config/cost.yaml') } }] },
-]
-const patchFile = path.join(dir, 'eval.patch.yml')
-fs.writeFileSync(patchFile, yaml.stringify(patch))
+const optionsFile = path.join(dir, 'options.json')
+fs.writeFileSync(optionsFile, JSON.stringify({ fixtureFile, outputFile, repeats, maxTokens,
+  personaFile: path.join(root, 'config/persona/exam-grade.md'), costFile: path.join(root, 'config/cost.yaml') }, null, 2) + '\n')
 fs.writeFileSync(outputFile, JSON.stringify({ status: 'starting', startedAt: new Date().toISOString() }, null, 2) + '\n')
 console.log(`评测目录：${dir}`)
-const require = createRequire(import.meta.url)
-const child = spawn(process.execPath, [require.resolve('@deepseek-ai/dsh/lib/bin.js'), '--profile', 'headless', '--patch', patchFile], {
-  cwd: workspace, env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1', TUTOR_LLM_TIMEOUT_MS: '90000', TUTOR_COURSES_ROOT: path.join(workspace, 'courses') },
+const child = spawn(process.execPath, [path.join(root, 'scripts/eval-runner.mjs'), 'grading', optionsFile], {
+  cwd: workspace, env: { ...env, TUTOR_SESSIONS_ROOT: path.join(dir, 'sessions'), TUTOR_WORKSPACE: workspace },
   stdio: ['ignore', 'pipe', 'pipe'], detached: true,
 })
 const log = fs.createWriteStream(path.join(dir, 'runner.log'))

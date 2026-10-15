@@ -22,7 +22,7 @@ if (!fs.existsSync(manifest)) fs.writeFileSync(manifest, JSON.stringify({ learne
   purpose: '真人试学记录；未复制任何验收课程、作答或掌握度。' }, null, 2) + '\n')
 console.log(`试学者：${values.learner}\n学习记录：${directory}\n关闭后用同一条命令继续；新试学者请使用不同的 --learner 标识。`)
 const child = spawn(process.execPath, [path.join(root, 'scripts/agent.mjs'), 'serve'], { cwd: root, stdio: 'inherit', detached: true,
-  env: { ...process.env, DSH_HOME: path.join(directory, 'dsh-home'), TUTOR_WORKSPACE: workspace,
+  env: { ...process.env, TUTOR_WORKSPACE: workspace, TUTOR_SESSIONS_ROOT: path.join(directory, 'sessions'),
     TUTOR_COURSES_ROOT: path.join(directory, 'courses'), TUTOR_AUDITS_ROOT: path.join(directory, 'audits') } })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   try { process.kill(-child.pid, signal) } catch { /* 子进程已经退出 */ }

@@ -1,5 +1,5 @@
 import { extractProfileJson } from '../core/interview.ts'
-import type { AgentChat } from './agent-chat.ts'
+import type { AgentChat } from '../runtime/chat.ts'
 
 export type ParseResult = { ok: true; value: unknown } | { ok: false; error: string }
 

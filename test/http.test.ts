@@ -8,9 +8,34 @@ import { spawn } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'
 import { request as httpRequest } from 'node:http'
 import { CourseStore } from '../src/core/store.ts'
-import { createTutorServer } from '../src/server/http.ts'
+import { createTutorServer, type FlowStart } from '../src/server/http.ts'
+import type { FlowIO } from '../src/flows/io.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+// 确定性流程壳：模拟交互协议（启动行、回显、最终结果、静默或挂起的停止行为）。
+function fakeFlow(input: FlowStart, io: FlowIO, broken: boolean): Promise<number> {
+  return (async () => {
+    if (broken) throw new Error('spawn missing-bin ENOENT')
+    io.out(`启动 ${input.kind} ${input.courseId}${input.nodeId ? ' ' + input.nodeId : ''}\n`)
+    if (input.kind === 'practice-gen') { io.out('实践任务生成完成\n'); return 0 }
+    if (input.kind === 'plan') {
+      // 停止后仍不响应：验证宿主在超时后中止并释放活动流程。
+      await new Promise<void>(resolve => io.signal.addEventListener('abort', () => resolve(), { once: true }))
+      return 1
+    }
+    io.out(input.kind === 'practice' ? '回车运行测试（r 重跑，q 中止保存进度）> ' : '> ')
+    for (;;) {
+      const line = await io.readLine()
+      if (line === null) return 0
+      if (line === '/exit' || line === 'q' || line === 'finish' || line === '') {
+        io.out('最终结果：进度已保存\n')
+        return 0
+      }
+      io.out(`收到：${line}\n> `)
+    }
+  })()
+}
 
 async function fixture(t: TestContext, broken = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-http-'))
@@ -20,9 +45,7 @@ async function fixture(t: TestContext, broken = false) {
   const modelConfigFile = path.join(dir, 'model-config.json')
   const app = createTutorServer({ root, coursesRoot: dir, modelConfigFile, stopTimeoutMs: 100, today: () => '2026-10-08',
     modelEnvironment: { TUTOR_LLM_BASE_URL: 'https://first.invalid/v1', TUTOR_LLM_MODEL: 'deepseek-fixture', TUTOR_LLM_API_KEY: 'fixture-private-key' },
-    launch: (input, env) => { launches.push(env); return spawn(broken ? path.join(dir, 'missing-bin') : process.execPath,
-      [path.join(root, 'test/fixtures/flow-runner.mjs'), input.kind, input.courseId, input.nodeId],
-      { stdio: ['pipe', 'pipe', 'pipe'], detached: true }) },
+    runFlow: (input, io, env) => { launches.push(env); return fakeFlow(input, io, broken) },
   })
   app.server.listen(0, '127.0.0.1')
   await once(app.server, 'listening')
@@ -156,8 +179,9 @@ it('未配置模型和搜索密钥也能通过正式启动器打开网页设置'
     cwd: root, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, TUTOR_LLM_BASE_URL: '', TUTOR_LLM_MODEL: '', TUTOR_LLM_API_KEY: '',
       TUTOR_MCP_SEARCH_URL: '', TUTOR_MCP_SEARCH_TOKEN: '', TUTOR_SERVER_PORT: '0',
-      TUTOR_MODEL_CONFIG_FILE: path.join(directory, 'model-config.json'), DSH_HOME: path.join(directory, 'dsh-home'),
-      TUTOR_WORKSPACE: path.join(directory, 'workspace'), TUTOR_COURSES_ROOT: path.join(directory, 'courses') },
+      TUTOR_MODEL_CONFIG_FILE: path.join(directory, 'model-config.json'),
+      TUTOR_SESSIONS_ROOT: path.join(directory, 'sessions'), TUTOR_WORKSPACE: path.join(directory, 'workspace'),
+      TUTOR_COURSES_ROOT: path.join(directory, 'courses') },
   })
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -181,7 +205,6 @@ it('未配置模型和搜索密钥也能通过正式启动器打开网页设置'
   assert.equal((await fetch(base + '/settings.html')).status, 200)
   const response: any = await (await fetch(base + '/api/model-config')).json()
   assert.equal(response.config.configured, false)
-  assert.equal(fs.existsSync(path.join(directory, 'dsh-home/settings.yaml')), false)
   const refused = await fetch(base + '/flow/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'new', courseId: 'empty-config' }) })
   assert.equal(refused.status, 400)
   assert.match((await refused.json() as any).error, /模型设置/)
@@ -225,7 +248,7 @@ it('不同里程碑不是同一场考试；进行中的课程禁止并发复习�
   assert.match(review.body.error.message, /进行中的流程/)
 })
 
-it('超时停止会终止整个进程组，释放活动流程', async (t) => {
+it('停止超时后中止在途流程并释放活动槽位', async (t) => {
   const { base, post } = await fixture(t)
   const flow = (await post('/flow/start', { kind: 'plan', courseId: 'alpha' })).body
   const events = await stream(t, base, flow.flowId)
@@ -236,7 +259,7 @@ it('超时停止会终止整个进程组，释放活动流程', async (t) => {
   assert.equal(state.active, null)
 })
 
-it('子进程启动失败会清理活动流程并留下失败事件', async (t) => {
+it('流程启动失败会清理活动流程并留下失败事件', async (t) => {
   const { base, post } = await fixture(t, true)
   const flow = (await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body
   const events = await stream(t, base, flow.flowId)

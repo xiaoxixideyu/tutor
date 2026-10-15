@@ -2,12 +2,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
 import { spawn } from 'node:child_process'
-import yaml from 'yaml'
 import { validateContentFixtures } from '../src/eval/content.ts'
-import { renderModelSettings } from '../src/core/model-settings.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { values } = parseArgs({ options: { live: { type: 'boolean' }, help: { type: 'boolean' }, fixtures: { type: 'string' },
@@ -37,29 +34,16 @@ for (const key of ['TUTOR_LLM_BASE_URL', 'TUTOR_LLM_API_KEY', 'TUTOR_LLM_MODEL']
 const runsRoot = path.join(root, 'data/evals')
 fs.mkdirSync(runsRoot, { recursive: true })
 const outputDir = fs.mkdtempSync(path.join(runsRoot, `content-${new Date().toISOString().replace(/[:.]/g, '-')}-`))
-const dshHome = path.join(outputDir, 'dsh-home')
 const workspace = path.join(outputDir, 'workspace')
-fs.mkdirSync(dshHome); fs.mkdirSync(workspace)
-const settings = fs.readFileSync(path.join(root, 'config/settings.yaml'), 'utf8').replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_raw, key) => {
-  if (!env[key]) throw new Error(`缺少配置变量 ${key}`)
-  return key === 'TUTOR_LLM_BASE_URL' ? env[key].replace(/\/+$/, '') : env[key]
-})
-fs.writeFileSync(path.join(dshHome, 'settings.yaml'), renderModelSettings(settings, env))
-const patch = [
-  ...['headless-runner', 'headless-startup', 'session-title-llm', 'agent-instructions', 'skill-filesystem'].map(id => ({ id, disabled: true })),
-  { id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: '', personaSuffix: '' } },
-  { id: 'tools', config: { mode: 'native' } },
-  { insert: [{ id: 'tutor-content-eval', name: path.join(root, 'src/eval/content-runner.ts'),
-    config: { fixtureFile, outputDir, repeats, maxTokens, cases, costFile: path.join(root, 'config/cost.yaml') } }] },
-]
-const patchFile = path.join(outputDir, 'eval.patch.yml')
-fs.writeFileSync(patchFile, yaml.stringify(patch))
+fs.mkdirSync(workspace)
+const optionsFile = path.join(outputDir, 'options.json')
+fs.writeFileSync(optionsFile, JSON.stringify({ fixtureFile, outputDir, repeats, maxTokens, cases,
+  costFile: path.join(root, 'config/cost.yaml') }, null, 2) + '\n')
 const outputFile = path.join(outputDir, 'report.json')
 fs.writeFileSync(outputFile, JSON.stringify({ status: 'starting', startedAt: new Date().toISOString() }, null, 2) + '\n')
 console.log(`评测目录：${outputDir}`)
-const require = createRequire(import.meta.url)
-const child = spawn(process.execPath, [require.resolve('@deepseek-ai/dsh/lib/bin.js'), '--profile', 'headless', '--patch', patchFile], {
-  cwd: workspace, env: { ...env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: '1' },
+const child = spawn(process.execPath, [path.join(root, 'scripts/eval-runner.mjs'), 'content', optionsFile], {
+  cwd: workspace, env: { ...env, TUTOR_SESSIONS_ROOT: path.join(outputDir, 'sessions'), TUTOR_WORKSPACE: workspace },
   stdio: ['ignore', 'pipe', 'pipe'], detached: true,
 })
 const log = fs.createWriteStream(path.join(outputDir, 'runner.log'))
@@ -71,8 +55,8 @@ const stop = reason => {
   if (stopReason) return
   stopReason = reason
   if (child.pid) {
-    try { process.kill(-child.pid, 'SIGTERM') } catch {}
-    forceTimer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch {} }, 5000)
+    try { process.kill(-child.pid, 'SIGTERM') } catch { /* 已退出 */ }
+    forceTimer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch { /* 已退出 */ } }, 5000)
   }
 }
 const timer = setTimeout(() => stop('评测超过 10 分钟上限'), 600_000)

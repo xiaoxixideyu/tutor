@@ -15,7 +15,7 @@ import { QualityStore } from '../src/core/quality-store.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = process.stdout
-const sessionsRoot = path.join(process.env.DSH_HOME ?? path.join(root, 'data', 'dsh-home'), 'sessions')
+const sessionsRoot = process.env.TUTOR_SESSIONS_ROOT ?? path.join(root, 'data', 'sessions')
 const workspace = path.resolve(process.env.TUTOR_AUDIT_WORKSPACE ?? process.cwd())
 const WORKSPACE_DIR = `-${workspace.replaceAll('/', '-')}--`
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])

@@ -1,32 +1,15 @@
-import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { EXAM_PASS_SCORE, ExamPaperSchema, examAdmission, gradeObjective, nextMilestone, paperTotalPoints, paperValid, validateSubjectiveGradings, type ExamGrading, type ExamPaper, type ExamQuestion } from '../core/exam.ts'
 import { applyExamAttempt, ExamAttemptStore, newExamAttempt } from '../core/exam-attempt.ts'
 import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
 import { formatChoice } from '../core/assessment.ts'
-import { createAgentChat } from './agent-chat.ts'
 import { printSessionTotal } from './cost-line.ts'
-import { createLineReader } from './line-reader.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 import { contentKey, examContent, mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
-
-const name = 'tutor-exam-runner'
-const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required(), milestoneId: z.string() })
-
-interface StoreView {
-  root: string
-  exists(id: string): boolean
-  has(id: string, kind: string): boolean
-  read(id: string, kind: string): unknown
-  write(id: string, kind: string, data: unknown): void
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+import type { FlowDeps } from './deps.ts'
+import { FlowExit } from './io.ts'
+import { today } from './deps.ts'
 
 function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap, profile: Profile): string {
   const nodeLines = milestone.nodes.map((id) => {
@@ -70,39 +53,33 @@ export function buildExamGradingPrompt(questions: ExamQuestion[], answers: Map<s
   return lines.join('\n')
 }
 
-async function run(ctx: Context, config: { courseId: string; milestoneId: string }): Promise<void> {
-  const courseState = ctx.get('courseState') as { store: StoreView } | undefined
-  if (!courseState) throw new Error('tutor: 核心服务未就绪')
-  const store = courseState.store
-  const exit = ctx.get('appExit') as unknown as (code: number) => void
-  const out = process.stdout
-  const readAnswer = createLineReader(process.stdin)
+export async function runExam(deps: FlowDeps, config: { courseId: string; milestoneId?: string }): Promise<void> {
+  const { store, io } = deps
+  const milestoneIdInput = config.milestoneId ?? ''
   if (!store.exists(config.courseId)) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在\n`)
-    process.stdin.destroy()
-    exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 不存在\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
-  const gate = createContentGate(ctx, store, config.courseId)
+  const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
   await gate.require(planContent(plan, profile, map))
   const mastery = store.has(config.courseId, 'mastery') ? (store.read(config.courseId, 'mastery') as Mastery) : undefined
   const attempts = new ExamAttemptStore(store.root, config.courseId)
   const saved = attempts.read()
   let attempt = saved?.status !== 'completed' ? saved : undefined
-  const milestoneId = config.milestoneId || attempt?.paper.milestone
+  const milestoneId = milestoneIdInput || attempt?.paper.milestone
   // 显式指定里程碑也必须过准入闸（全掌握+未通过）；只有断点续考沿用原试卷的里程碑不做重复判定。
   let milestone: { id: string; title: string; nodes: string[] } | null = null
   if (milestoneId && !(attempt && attempt.paper.milestone === milestoneId)) {
     const admission = examAdmission(plan, mastery ?? {}, milestoneId)
     if ('error' in admission) {
-      process.stderr.write(`tutor: ${admission.error}\n`)
-      process.stdin.destroy()
-      exit(1)
-      return
+      io.err(`tutor: ${admission.error}\n`)
+      io.closeInput()
+      throw new FlowExit(1)
     }
     milestone = admission.milestone
   } else {
@@ -111,15 +88,13 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
       : nextMilestone(plan, mastery ?? {})
   }
   if (!milestone) {
-    process.stderr.write('tutor: 没有可考的里程碑（需全部节点已掌握且未通过过大考）。先完成学习与单元小测。\n')
-    process.stdin.destroy()
-    exit(1)
-    return
+    io.err('tutor: 没有可考的里程碑（需全部节点已掌握且未通过过大考）。先完成学习与单元小测。\n')
+    io.closeInput()
+    throw new FlowExit(1)
   }
-  out.write(`里程碑大考：${milestone.id}「${milestone.title}」\n覆盖 ${milestone.nodes.length} 个知识点。\n`)
+  io.out(`里程碑大考：${milestone.id}「${milestone.title}」\n覆盖 ${milestone.nodes.length} 个知识点。\n`)
 
-  const chat = await createAgentChat(ctx)
-  if (!chat) throw new Error('tutor: 模型会话创建失败')
+  const chat = await deps.createChat()
   if (attempt) {
     if (attempt.paper.milestone !== milestone.id) throw new Error(`已有未完成的 ${attempt.paper.milestone} 考试，请先继续该考试`)
     const invalid = paperValid(attempt.paper, milestone.nodes)
@@ -127,9 +102,9 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
     const input = examContent(attempt.paper, profile, map, milestone)
     if (!(await gate.review(input)).approved) throw new Error('已保存试卷未通过当前审查，作答保留，成绩与掌握度未修改')
     attempt.contentKey = contentKey(input); attempts.save(attempt)
-    out.write(`恢复考试：已保存 ${Object.keys(attempt.answers).length}/${attempt.paper.questions.length} 题作答，继续未完成的作答或阅卷。\n`)
+    io.out(`恢复考试：已保存 ${Object.keys(attempt.answers).length}/${attempt.paper.questions.length} 题作答，继续未完成的作答或阅卷。\n`)
   } else {
-    out.write('正在生成试卷…\n')
+    io.out('正在生成试卷…\n')
     const paper = await generateApproved<ExamPaper>(chat, buildExamPrompt(milestone, map, profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
@@ -139,14 +114,14 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
       const invalid = paperValid(schemaResult.value as ExamPaper, milestone.nodes)
       if (invalid) return { ok: false as const, error: invalid }
       return schemaResult
-    }, gate, value => examContent(value, profile, map, milestone))
+    }, gate, value => examContent(value, profile, map, milestone), { out: io.out })
     attempt = newExamAttempt(paper, contentKey(examContent(paper, profile, map, milestone)))
     attempts.save(attempt)
   }
   const paper = attempt.paper
 
   const totalPoints = paperTotalPoints(paper)
-  out.write(`试卷就绪：${paper.questions.length} 题，满分 ${totalPoints}（客观题规则判分，主观题模型判分）。\n\n`)
+  io.out(`试卷就绪：${paper.questions.length} 题，满分 ${totalPoints}（客观题规则判分，主观题模型判分）。\n\n`)
   const gradings: ExamGrading[] = attempt.status === 'graded' ? attempt.gradings! : []
   const subjectiveAnswers = new Map<string, string>()
   let index = 0
@@ -159,40 +134,38 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
       }
       continue
     }
-    out.write(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
-    for (const [i, choice] of (question.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
-    // 与 learn-runner 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
+    io.out(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
+    for (const [i, choice] of (question.choices ?? []).entries()) io.out(`  ${formatChoice(choice, i)}\n`)
+    // 与 learn 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
     // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
-    out.write('\n> ')
-    const answer = await readAnswer()
+    io.out('\n> ')
+    const answer = await io.readLine()
     if (!answer || !answer.trim() || answer.trim() === '/exit') {
-      out.write('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
-      process.stdin.destroy()
-      exit(0)
-      return
+      io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+      io.closeInput()
+      throw new FlowExit(0)
     }
     if (question.type === 'objective') {
       attempt.answers[question.id] = answer.trim()
       attempts.save(attempt)
       const grading = gradeObjective(question, answer)
       gradings.push(grading)
-      out.write(grading.correct ? '✓ 正确\n' : `✗ 错误（正确答案：${(question.choices?.length ?? 0) > 0 ? question.answer.toUpperCase() : question.answer}）\n`)
+      io.out(grading.correct ? '✓ 正确\n' : `✗ 错误（正确答案：${(question.choices?.length ?? 0) > 0 ? question.answer.toUpperCase() : question.answer}）\n`)
       continue
     }
     // 主观题答案（如完整程序）天然多行：持续读取直到出现单独一行 `.`（提交）或 `/exit`（暂停）。
     // 单行输入者不受影响——立即以 `.` 提交即可；此前"每行覆盖、判分只见最后一行/第一行"是判分重大失真。
-    out.write('（可逐行输入多行；输入单独一行 . 提交，/exit 暂停）\n')
+    io.out('（可逐行输入多行；输入单独一行 . 提交，/exit 暂停）\n')
     const lines: string[] = [answer.trim()]
     for (;;) {
-      out.write('\n> ')
-      const extra = await readAnswer()
+      io.out('\n> ')
+      const extra = await io.readLine()
       if (extra === null || extra.trim() === '/exit') {
         attempt.answers[question.id] = lines.join('\n')
         attempts.save(attempt)
-        out.write('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
-        process.stdin.destroy()
-        exit(0)
-        return
+        io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        io.closeInput()
+        throw new FlowExit(0)
       }
       if (extra?.trim() === '.') break
       if (extra !== undefined && extra !== '') lines.push(extra)
@@ -201,11 +174,11 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
     attempt.answers[question.id] = merged
     attempts.save(attempt)
     subjectiveAnswers.set(question.id, merged)
-    out.write('已记录，稍后统一判分。\n')
+    io.out('已记录，稍后统一判分。\n')
   }
 
   if (subjectiveAnswers.size > 0) {
-    out.write('\n主观题判分中…\n')
+    io.out('\n主观题判分中…\n')
     const subjectiveQuestions = paper.questions.filter((q) => q.type === 'subjective')
     try {
       const validated = await generateTurn(chat, buildExamGradingPrompt(subjectiveQuestions, subjectiveAnswers), (text) => {
@@ -222,28 +195,16 @@ async function run(ctx: Context, config: { courseId: string; milestoneId: string
 
   attempt.gradings = gradings
   const { score, passed, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, today())
-  out.write(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
+  io.out(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''
     const points = paper.questions.find((q) => q.id === grading.questionId)!.points
-    out.write(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
+    io.out(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
   }
 
-  out.write(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
-  out.write(after.plan.current ? `计划指针：${after.plan.current}\n` : '课程完成。\n')
-  printSessionTotal(chat, out)
-  process.stdin.destroy()
-  exit(passed ? 0 : 1)
+  io.out(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
+  io.out(after.plan.current ? `计划指针：${after.plan.current}\n` : '课程完成。\n')
+  printSessionTotal(chat, deps)
+  io.closeInput()
+  throw new FlowExit(passed ? 0 : 1)
 }
-
-export function apply(ctx: Context, config: { courseId: string; milestoneId: string }): void {
-  const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
-  if (!exit) throw new Error('tutor-exam-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
-  run(ctx, config).catch((error) => {
-    process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    process.stdin.destroy()
-    exit(1)
-  })
-}
-
-export { name, inject, Config }

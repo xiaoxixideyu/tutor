@@ -1,32 +1,17 @@
-import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
 import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
-import { createAgentChat, permanentModelError } from './agent-chat.ts'
+import { permanentModelError } from '../runtime/chat.ts'
 import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../core/research.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
-import { researchStatus } from './research-status.ts'
-
-const name = 'tutor-research-runner'
-const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required(), nodeId: z.string() })
-
-interface StoreView {
-  root: string
-  exists(id: string): boolean
-  has(id: string, kind: string): boolean
-  read(id: string, kind: string): unknown
-  write(id: string, kind: string, data: unknown): void
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+import type { FlowDeps } from './deps.ts'
+import { FlowExit } from './io.ts'
+import { today } from './deps.ts'
 
 interface BatchResult {
   nodes: { id: string; title?: string; summary?: string; verified?: boolean }[]
@@ -101,14 +86,14 @@ async function checkUrl(url: string): Promise<string | null> {
 
 async function pruneDeadResources(
   resources: { node: string; title: string; url?: string; note?: string; material?: string }[],
-  out: NodeJS.WriteStream
+  out: (text: string) => void
 ): Promise<void> {
   const withUrl = resources.filter((r) => r.url !== undefined)
   const verdicts = await Promise.all(withUrl.map((r) => checkUrl(r.url!)))
   for (let i = withUrl.length - 1; i >= 0; i--) {
     const resource = withUrl[i]
     if (verdicts[i]) { resource.url = verdicts[i]!; continue }
-    out.write(`  ⚠ 来源暂无法访问，未计入本次资料：${resource.title}（${resource.url}）\n`)
+    out(`  ⚠ 来源暂无法访问，未计入本次资料：${resource.title}（${resource.url}）\n`)
     const index = resources.indexOf(resource)
     if (index >= 0) resources.splice(index, 1)
   }
@@ -156,45 +141,38 @@ const BatchSchema = z.object({
     .default([]),
 }) as unknown as Schema<unknown, BatchResult>
 
-async function run(ctx: Context, config: { courseId: string; nodeId?: string }): Promise<void> {
-  const courseState = ctx.get('courseState') as { store: StoreView } | undefined
-  if (!courseState) throw new Error('tutor: 核心服务未就绪')
-  const store = courseState.store
-  const exit = ctx.get('appExit') as unknown as (code: number) => void
-  const out = process.stdout
+export async function runResearch(deps: FlowDeps, config: { courseId: string; nodeId?: string }): Promise<void> {
+  const { store, io } = deps
   if (!store.exists(config.courseId)) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    process.stdin.destroy()
-  exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   if (!store.has(config.courseId, 'profile')) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 缺少课程档案\n`)
-    process.stdin.destroy()
-  exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 缺少课程档案\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   const profile = store.read(config.courseId, 'profile') as Profile
-  const gate = createContentGate(ctx, store, config.courseId)
+  const gate = createContentGate(deps, config.courseId)
   const progress = new ResearchProgressStore(store.root, config.courseId)
   // 骨架无须联网；每个知识点另建会话，避免累积整门课的抓取正文。
-  const chat = await createAgentChat(ctx, { tools: 'none' })
-  if (!chat) throw new Error('tutor: 模型会话创建失败')
+  const chat = await deps.createChat({ tools: 'none' })
 
   let map: KnowledgeMap
   if (store.has(config.courseId, 'knowledge-map')) {
     map = enforceSourceVerification(store.read(config.courseId, 'knowledge-map') as KnowledgeMap)
-    out.write(`已有知识地图（${map.nodes.length} 个知识点），继续教研。\n`)
+    io.out(`已有知识地图（${map.nodes.length} 个知识点），继续教研。\n`)
   } else {
-    out.write('正在构思知识地图骨架…\n')
+    io.out('正在构思知识地图骨架…\n')
     map = await generateApproved<KnowledgeMap>(chat, skeletonPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       return trySchema(KnowledgeMapSchema, data.value)
-    }, gate, value => mapContent(value, profile))
+    }, gate, value => mapContent(value, profile), { out: io.out })
     map.researched_at = today()
     store.write(config.courseId, 'knowledge-map', map)
-    out.write(`骨架完成：${map.nodes.length} 个知识点。\n`)
+    io.out(`骨架完成：${map.nodes.length} 个知识点。\n`)
   }
 
   // verified 只代表来源数量；旧地图仍需独立内容审查。修复通过前保留原文件。
@@ -208,7 +186,7 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
       JSON.stringify(map), `独立审查发现：${previousReview.issues.join('\n')}`].join('\n'), text => {
       const data = parseJsonBlock(text)
       return data.ok ? trySchema(KnowledgeMapSchema, data.value) : data
-    }, gate, value => mapContent(value, profile))
+    }, gate, value => mapContent(value, profile), { out: io.out })
     store.write(config.courseId, 'knowledge-map', map)
   }
 
@@ -216,24 +194,22 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
   const pending = config.nodeId ? [config.nodeId] : pendingResearchNodes(map, profile, progress)
   if (pending.length === 0) {
     const unverified = map.nodes.filter(node => !node.verified).length
-    out.write(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个仍待来源交叉验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
+    io.out(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个仍待来源交叉验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
     await chat.flush()
-    process.stdin.destroy()
-  exit(0)
-    return
+    io.closeInput()
+    throw new FlowExit(0)
   }
 
   const order = topoOrder(map)
   const queue = order.filter((id) => pending.includes(id))
-  if (!config.nodeId && queue.length < map.nodes.length) out.write(`保留并跳过 ${map.nodes.length - queue.length} 个已有教研结果。\n`)
-  out.write(`待教研 ${queue.length} 个知识点，逐个执行、逐个保存；每个知识点使用独立会话。\n`)
+  if (!config.nodeId && queue.length < map.nodes.length) io.out(`保留并跳过 ${map.nodes.length - queue.length} 个已有教研结果。\n`)
+  io.out(`待教研 ${queue.length} 个知识点，逐个执行、逐个保存；每个知识点使用独立会话。\n`)
   const result = await researchNodes(map, queue, {
     research: async (current, id) => {
       const node = current.nodes.find(node => node.id === id)!
       // 推理模型的 max_tokens 包含推理用量；正文长度由 validateBatch 独立约束。
-      const nodeChat = await createAgentChat(ctx, { tools: 'research', maxTokens: 8192, retryOnLength: false,
-        onProgress: message => out.write(`  ${message}\n`) })
-      if (!nodeChat) throw new Error('无法创建本知识点的教研会话')
+      const nodeChat = await deps.createChat({ tools: 'research', maxTokens: 8192, retryOnLength: false,
+        onProgress: message => io.out(`  ${message}\n`) })
       try {
         return await generateApproved<KnowledgeMap>(nodeChat, nodePrompt(profile, node), async (text) => {
           const data = parseJsonBlock(text)
@@ -241,13 +217,14 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
           const validated = validateBatch(data.value, new Set([id]))
           if (!validated.ok) return validated
           const batch = validated.value as BatchResult
-          if (batch.resources?.length) await pruneDeadResources(batch.resources, out)
+          if (batch.resources?.length) await pruneDeadResources(batch.resources, io.out)
           // 教研补充摘要和资料，课程标题由已有骨架决定；无需为同义改写重跑模型。
           return { ok: true, value: { ...mergeResearchBatch(current, batch, { preserveTitles: true }), researched_at: today() } }
         }, gate, value => mapContent(value, profile), {
           reviewLimitRepair: '本知识点资料太长，独立审查达到预算。请只保留原课程要求的核心事实，summary 缩至 100 字以内，每条 material 缩至 150 字以内，note 一句话；去掉无关的章节编号和冗长方法清单。保留已取得的真实来源链接，不新增搜索，不扩大课程，不改变节点 id。返回原结构的完整 JSON，仍须接受完整内容审查。',
+          out: io.out,
         })
-      } finally { await nodeChat.flush(); printSessionTotal(nodeChat, out) }
+      } finally { await nodeChat.flush(); printSessionTotal(nodeChat, deps) }
     },
     save: (next, node) => {
       store.write(config.courseId, 'knowledge-map', next); map = next
@@ -257,14 +234,14 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
     permanentError: permanentModelError,
     report: event => {
       const completed = map.nodes.length - pendingResearchNodes(map, profile, progress).length
-      researchStatus({ phase: event.type === 'saved' ? 'saved' : 'node', node: event.node,
+      deps.status({ phase: event.type === 'saved' ? 'saved' : 'node', node: event.node,
         title: map.nodes.find(node => node.id === event.node)?.title, completed, total: map.nodes.length,
         message: event.type === 'start' ? '正在教研当前知识点。' : event.type === 'saved' ? '当前知识点已通过审查并保存，继续下一点。' : '当前知识点尚未完成，已保存进度保留。' })
-      if (event.type === 'start') out.write(`\n第 ${event.index}/${event.total} 个知识点教研中（${event.node}）…\n`)
-      else if (event.type === 'failed') out.write(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
+      if (event.type === 'start') io.out(`\n第 ${event.index}/${event.total} 个知识点教研中（${event.node}）…\n`)
+      else if (event.type === 'failed') io.out(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
       else {
         const verified = map.nodes.find(node => node.id === event.node)?.verified
-        out.write(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源待交叉验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
+        io.out(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源待交叉验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
       }
     },
   })
@@ -273,21 +250,9 @@ async function run(ctx: Context, config: { courseId: string; nodeId?: string }):
 
   const verifiedTotal = map.nodes.filter((n) => n.verified).length
   const remaining = pendingResearchNodes(map, profile, progress).length
-  out.write(`\n本次教研已保存：${map.nodes.length - remaining}/${map.nodes.length} 个知识点已完成资料检查，${verifiedTotal} 个已联网验证，来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
+  io.out(`\n本次教研已保存：${map.nodes.length - remaining}/${map.nodes.length} 个知识点已完成资料检查，${verifiedTotal} 个已联网验证，来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
   await chat.flush()
-  printSessionTotal(chat, out)
-  process.stdin.destroy()
-  exit(0)
+  printSessionTotal(chat, deps)
+  io.closeInput()
+  throw new FlowExit(0)
 }
-
-export function apply(ctx: Context, config: { courseId: string; nodeId?: string }): void {
-  const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
-  if (!exit) throw new Error('tutor-research-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
-  run(ctx, config).catch((error) => {
-    process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    process.stdin.destroy()
-  exit(1)
-  })
-}
-
-export { name, inject, Config }

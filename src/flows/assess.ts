@@ -1,32 +1,14 @@
-import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { AssessmentEngine, formatChoice } from '../core/assessment.ts'
 import { topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
-import { createAgentChat } from './agent-chat.ts'
-import { createLineReader } from './line-reader.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { bankContent, mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
-
-const name = 'tutor-assess-runner'
-const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required() })
-
-interface StoreView {
-  root: string
-  exists(id: string): boolean
-  has(id: string, kind: string): boolean
-  read(id: string, kind: string): unknown
-  write(id: string, kind: string, data: unknown): void
-  remove(id: string, kind: string): void
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+import type { FlowDeps } from './deps.ts'
+import { FlowExit } from './io.ts'
+import { today } from './deps.ts'
 
 function mapPrompt(profile: Profile): string {
   return [
@@ -86,10 +68,9 @@ function answerText(q: Question): string {
   return text ? formatChoice(text, idx) : letter
 }
 
-async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEngine, map: KnowledgeMap,
+async function runQuiz(deps: FlowDeps, courseId: string, engine: AssessmentEngine, map: KnowledgeMap,
   prepareNode: (node: string) => Promise<void>): Promise<void> {
-  const out = process.stdout
-  const readAnswer = createLineReader(process.stdin)
+  const { store, io } = deps
   const titles = new Map(map.nodes.map((n) => [n.id, n.title]))
   for (const node of engine.state.node_order) {
     if (node in engine.state.scores) continue
@@ -97,32 +78,32 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
     await prepareNode(node)
     engine.state.current_node = node
     store.write(courseId, 'assessment', engine.state)
-    out.write(`\n【知识点：${node} · ${titles.get(node) ?? ''}】\n`)
+    io.out(`\n【知识点：${node} · ${titles.get(node) ?? ''}】\n`)
     while (true) {
       const current = engine.nextQuestion()
       if (!current) break
       const q = current.question
-      out.write(`\n（难度 ${q.difficulty}，第 ${current.askedCount + 1} 题）${q.question}\n`)
+      io.out(`\n（难度 ${q.difficulty}，第 ${current.askedCount + 1} 题）${q.question}\n`)
       if (q.type === 'choice') {
         // 带定位字母（A/B/C…，与题库里 answer 的字母语义一致）：CLI 端看得清，Web 端才能把这些行解析成可点选项。
-        for (const [i, choice] of (q.choices ?? []).entries()) out.write(`  ${formatChoice(choice, i)}\n`)
-        out.write('（回答选项字母，如 A）\n')
+        for (const [i, choice] of (q.choices ?? []).entries()) io.out(`  ${formatChoice(choice, i)}\n`)
+        io.out('（回答选项字母，如 A）\n')
       }
-      out.write('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
+      io.out('\n> ') // 轮到学员作答：前端靠这个提示符收起忙态、把选项渲染成可点选项
       // 空行不等于「没作答」：可能是多按了一次回车，或共享的流程桥上别的页面（如 practice 的
       // 「运行测试」发空行）把一个空 /flow/input 打到了当前 assess 子进程。这种情况重新提示即可，
-      // 绝不能把整轮摸底判死。只有 stdin 真正 EOF（answer===null，如 CLI 下 Ctrl-D）才存档退出。
-      let answer = await readAnswer()
+      // 绝不能把整轮摸底判死。只有输入真正 EOF（answer===null，如 CLI 下 Ctrl-D）才存档退出。
+      let answer = await io.readLine()
       while (answer !== null && !answer.trim()) {
-        out.write('（请输入选项字母，如 A；要中断请按 Ctrl-C）\n> ')
-        answer = await readAnswer()
+        io.out('（请输入选项字母，如 A；要中断请按 Ctrl-C）\n> ')
+        answer = await io.readLine()
       }
       if (answer === null) {
         store.write(courseId, 'assessment', engine.state)
         throw new Error('未收到作答——进度已保存，重新运行 assess 即可继续')
       }
       const { correct } = engine.submitAnswer(answer)
-      out.write(correct ? '✓ 正确\n' : `✗ 错误（正确答案：${answerText(q)}）\n`)
+      io.out(correct ? '✓ 正确\n' : `✗ 错误（正确答案：${answerText(q)}）\n`)
       store.write(courseId, 'assessment', engine.state)
     }
     engine.finalizeNode()
@@ -130,24 +111,18 @@ async function runQuiz(store: StoreView, courseId: string, engine: AssessmentEng
   }
 }
 
-async function run(ctx: Context, config: { courseId: string }): Promise<void> {
-  const courseState = ctx.get('courseState') as { store: StoreView } | undefined
-  if (!courseState) throw new Error('tutor: 核心服务未就绪')
-  const store = courseState.store
-  const exit = ctx.get('appExit') as unknown as (code: number) => void
-  const out = process.stdout
+export async function runAssess(deps: FlowDeps, config: { courseId: string }): Promise<void> {
+  const { store, io } = deps
   if (!store.exists(config.courseId)) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    process.stdin.destroy()
-  exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   const profile = store.read(config.courseId, 'profile') as Profile
-  const gate = createContentGate(ctx, store, config.courseId)
+  const gate = createContentGate(deps, config.courseId)
   if (!store.has(config.courseId, 'knowledge-map')) {
-    const chat = await createAgentChat(ctx)
-    if (!chat) throw new Error('tutor: 模型会话创建失败')
-    out.write('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
+    const chat = await deps.createChat()
+    io.out('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
     const mapValue = await generateApproved<KnowledgeMap>(chat, mapPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
@@ -155,12 +130,12 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     }, gate, value => mapContent(value, profile))
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
-    out.write('知识地图生成开销：')
-    printSessionTotal(chat, out)
+    io.out('知识地图生成开销：')
+    printSessionTotal(chat, deps)
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   await gate.require(mapContent(map, profile))
-  out.write(`知识地图就绪：${map.nodes.length} 个知识点。\n`)
+  io.out(`知识地图就绪：${map.nodes.length} 个知识点。\n`)
 
   // 按作答进度准备题目；只有当前节点通过准入后才提问，保留已完成的题库和作答。
   const bank: QuestionBank = store.has(config.courseId, 'question-bank')
@@ -169,9 +144,8 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     const node = map.nodes.find(item => item.id === nodeId)
     if (!node) throw new Error(`摸底进度中的知识点 "${nodeId}" 不在当前课程地图中，原作答已保留`)
     if (!validateBank(bank, [node.id]) && (await gate.review(bankContent(bank, node.id, profile, map))).approved) return
-    out.write(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
-    const bankChat = await createAgentChat(ctx)
-    if (!bankChat) throw new Error('tutor: 出题会话创建失败')
+    io.out(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
+    const bankChat = await deps.createChat()
     const nodeMap = { ...map, nodes: [node], edges: [] }
     const bankValue = await generateApproved<QuestionBank>(bankChat, bankPrompt(nodeMap, profile), (text) => {
       const data = parseJsonBlock(text)
@@ -185,33 +159,21 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     bank[node.id] = (bankValue as QuestionBank)[node.id]
     store.write(config.courseId, 'question-bank', bank)
     await bankChat.flush()
-    out.write('该知识点出题开销：')
-    printSessionTotal(bankChat, out)
+    io.out('该知识点出题开销：')
+    printSessionTotal(bankChat, deps)
   }
 
   const resumed = store.has(config.courseId, 'assessment')
   const state = resumed ? (store.read(config.courseId, 'assessment') as AssessmentState) : AssessmentEngine.create(topoOrder(map))
   const engine = new AssessmentEngine(bank, state)
-  out.write(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；随时 Ctrl-C 中断，进度已保存）。\n')
-  await runQuiz(store, config.courseId, engine, map, prepareNode)
+  io.out(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；随时 Ctrl-C 中断，进度已保存）。\n')
+  await runQuiz(deps, config.courseId, engine, map, prepareNode)
 
   const learner = engine.buildLearnerProfile(today())
   store.write(config.courseId, 'learner-profile', learner)
   store.write(config.courseId, 'mastery', engine.buildMastery())
   store.remove(config.courseId, 'assessment')
-  out.write(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
-  process.stdin.destroy()
-  exit(0)
+  io.out(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
+  io.closeInput()
+  throw new FlowExit(0)
 }
-
-export function apply(ctx: Context, config: { courseId: string }): void {
-  const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
-  if (!exit) throw new Error('tutor-assess-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
-  run(ctx, config).catch((error) => {
-    process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    process.stdin.destroy()
-  exit(1)
-  })
-}
-
-export { name, inject, Config }

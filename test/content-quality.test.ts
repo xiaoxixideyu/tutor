@@ -7,11 +7,11 @@ import { evaluateRational, sameRational } from '../src/core/rational.ts'
 import { bankContent, blindQuestions, contentIssues, contentKey, lessonContent, mapContent, parseBlindSolutions, parseContentReview,
   planContent, practiceContent, replayApprovedReply, requiredAssertions, teachingContent, parseFactChecks, type ContentInput, type ContentReview } from '../src/core/content-quality.ts'
 import { QualityStore, type QualityRecord } from '../src/core/quality-store.ts'
-import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/plugin/content-gate.ts'
-import { OutputLimitError, type AgentChat } from '../src/plugin/agent-chat.ts'
-import { TurnTimeoutError } from '../src/plugin/turn-timeout.ts'
+import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/flows/content-gate.ts'
+import { OutputLimitError, type AgentChat } from '../src/runtime/chat.ts'
+import { TurnTimeoutError } from '../src/runtime/timeouts.ts'
 import type { KnowledgeMap, LessonDraft, Profile, QuestionBank } from '../src/core/schema.ts'
-import { parseJsonBlock } from '../src/plugin/generation.ts'
+import { parseJsonBlock } from '../src/flows/generation.ts'
 
 const profile: Profile = { goal: '只学习一次掷一枚公平六面骰子，排除多次试验', daily_minutes: 15 }
 const map: KnowledgeMap = { verified: false, nodes: [{ id: 'die', title: '一次掷骰', summary: '秘密资料摘要' }], edges: [] }
@@ -23,8 +23,9 @@ const reviewFor = (content: ContentInput): ContentReview => ({ units: content.un
 
 function mockChat(reply: (prompt: string) => string, id: string): AgentChat {
   let last = ''
-  return { sessionId: id, model: 'test', ask: async prompt => (last = reply(prompt)), flush: async () => {}, lastReply: () => last,
-    totalUsage: () => ({ inputTokens: 10, outputTokens: 10 }), lastTurnUsage: () => ({ inputTokens: 10, outputTokens: 10 }) }
+  let seq = 0
+  return { sessionId: id, model: 'test', ask: async prompt => { last = reply(prompt); seq += 2; return last }, flush: async () => {}, lastReply: () => last,
+    lastReplySeq: () => seq, totalUsage: () => ({ inputTokens: 10, outputTokens: 10 }), lastTurnUsage: () => ({ inputTokens: 10, outputTokens: 10 }) }
 }
 function setup(t: TestContext, reviewer: (content: ContentInput) => unknown = reviewFor) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-quality-'))

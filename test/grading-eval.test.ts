@@ -2,7 +2,7 @@ import { it } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { gradingInputs, summarizeGrading, validateGradingFixtures, type GradingRun } from '../src/eval/grading.ts'
-import { buildExamGradingPrompt } from '../src/plugin/exam-runner.ts'
+import { buildExamGradingPrompt } from '../src/flows/exam.ts'
 
 const fixtures = validateGradingFixtures(JSON.parse(fs.readFileSync(new URL('../evals/grading.json', import.meta.url), 'utf8')))
 const passingRuns = (): GradingRun[] => Array.from({ length: 3 }, (_, repeat) => fixtures.suites.map(suite => ({

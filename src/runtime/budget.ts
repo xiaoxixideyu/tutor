@@ -1,4 +1,7 @@
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+export interface TextContentBlock {
+  type: 'text'
+  text: string
+}
 
 export const RESEARCH_LIMITS = {
   searches: 3, fetches: 2, toolRounds: 3, modelRequests: 5,
@@ -69,7 +72,7 @@ export class ResearchBudget {
     return undefined
   }
 
-  result(name: string, content: ContentBlock[], isError: boolean): ContentBlock[] {
+  result(name: string, content: TextContentBlock[], isError: boolean): TextContentBlock[] {
     if (isError && this.kind(name) === 'search') {
       this.unavailable.add(name)
       this.progress('该搜索服务本次不可用，保留失败记录并使用剩余检索预算。')

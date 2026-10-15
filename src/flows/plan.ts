@@ -1,17 +1,12 @@
-import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, validateMilestoneDraft } from '../core/plan.ts'
 import type { KnowledgeMap, LearnerProfile, Mastery, Plan, Profile } from '../core/schema.ts'
-import { createAgentChat } from './agent-chat.ts'
 import { parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
 import { topoOrder } from '../core/knowledge.ts'
 import { mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
-
-const name = 'tutor-plan-runner'
-const inject = ['agentDefaultModel', 'agents', 'sessions', 'courseState']
-const Config = z.object({ courseId: z.string().required() })
+import type { FlowDeps } from './deps.ts'
+import { FlowExit } from './io.ts'
 
 interface StoreView {
   root: string
@@ -31,31 +26,25 @@ function masteredNodes(store: StoreView, courseId: string): Set<string> {
   return new Set()
 }
 
-async function run(ctx: Context, config: { courseId: string }): Promise<void> {
-  const courseState = ctx.get('courseState') as { store: StoreView } | undefined
-  if (!courseState) throw new Error('tutor: 核心服务未就绪')
-  const store = courseState.store
-  const exit = ctx.get('appExit') as unknown as (code: number) => void
-  const out = process.stdout
+export async function runPlan(deps: FlowDeps, config: { courseId: string }): Promise<void> {
+  const { store, io } = deps
   if (!store.exists(config.courseId)) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
-    process.stdin.destroy()
-  exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   if (!store.has(config.courseId, 'knowledge-map')) {
-    process.stderr.write(`tutor: 课程 "${config.courseId}" 缺少知识地图，请先运行 npm run agent -- assess ${config.courseId}\n`)
-    process.stdin.destroy()
-  exit(1)
-    return
+    io.err(`tutor: 课程 "${config.courseId}" 缺少知识地图，请先运行 npm run agent -- assess ${config.courseId}\n`)
+    io.closeInput()
+    throw new FlowExit(1)
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
-  const gate = createContentGate(ctx, store, config.courseId)
+  const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
   const mastered = masteredNodes(store, config.courseId)
   const hasProfile = store.has(config.courseId, 'learner-profile')
-  if (!hasProfile) out.write('提示：尚未摸底，按零基础全量规划（可先运行 assess）。\n')
+  if (!hasProfile) io.out('提示：尚未摸底，按零基础全量规划（可先运行 assess）。\n')
 
   const path = buildPlanPath(map, mastered)
   const titles = new Map(map.nodes.map((n) => [n.id, n.title]))
@@ -63,10 +52,9 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     const plan = assemblePlan([], [], topoOrder(map))
     await gate.require(planContent(plan, profile, map))
     store.write(config.courseId, 'plan', plan)
-    out.write('所有知识点均已掌握，无需生成教学路径。\n')
-    process.stdin.destroy()
-  exit(0)
-    return
+    io.out('所有知识点均已掌握，无需生成教学路径。\n')
+    io.closeInput()
+    throw new FlowExit(0)
   }
 
   const masteryView = store.has(config.courseId, 'mastery')
@@ -78,10 +66,9 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
     const score = profileView?.nodes[node]?.score
     return `- ${node}（${titles.get(node) ?? node}${score !== undefined ? `，摸底 ${score}` : ''}，当前：${status}）`
   })
-  out.write(`教学路径：${path.length} 个知识点待学。正在设计里程碑…\n`)
+  io.out(`教学路径：${path.length} 个知识点待学。正在设计里程碑…\n`)
 
-  const chat = await createAgentChat(ctx)
-  if (!chat) throw new Error('tutor: 模型会话创建失败')
+  const chat = await deps.createChat()
   const prompt = [
     '任务：为下列教学路径设计里程碑。',
     `学员原始档案（目标、范围和排除项优先）：${JSON.stringify(profile)}`,
@@ -101,26 +88,14 @@ async function run(ctx: Context, config: { courseId: string }): Promise<void> {
   const plan: Plan = assemblePlan(path, milestones, topoOrder(map))
   store.write(config.courseId, 'plan', plan)
 
-  out.write(`\n教学计划已生成（${store.root}/${config.courseId}/plan.yaml）：\n`)
-  out.write(`路径：${plan.path.join(' → ')}\n`)
+  io.out(`\n教学计划已生成（${store.root}/${config.courseId}/plan.yaml）：\n`)
+  io.out(`路径：${plan.path.join(' → ')}\n`)
   for (const milestone of plan.milestones) {
-    out.write(`- ${milestone.id}：${milestone.title}（${milestone.nodes.join('、')}）\n`)
+    io.out(`- ${milestone.id}：${milestone.title}（${milestone.nodes.join('、')}）\n`)
   }
-  out.write(`当前指针：${plan.current ?? '（无）'}\n`)
+  io.out(`当前指针：${plan.current ?? '（无）'}\n`)
   await chat.flush()
-  printSessionTotal(chat, out)
-  process.stdin.destroy()
-  exit(0)
+  printSessionTotal(chat, deps)
+  io.closeInput()
+  throw new FlowExit(0)
 }
-
-export function apply(ctx: Context, config: { courseId: string }): void {
-  const exit = ctx.get('appExit') as unknown as ((code: number) => void) | undefined
-  if (!exit) throw new Error('tutor-plan-runner: 需要 ctx.appExit（仅支持经 dsh 启动）')
-  run(ctx, config).catch((error) => {
-    process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
-    process.stdin.destroy()
-  exit(1)
-  })
-}
-
-export { name, inject, Config }

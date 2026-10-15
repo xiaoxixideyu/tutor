@@ -1,6 +1,6 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
-import { validateBatch } from '../src/plugin/research-runner.ts'
+import { validateBatch } from '../src/flows/research.ts'
 
 it('教研稿超过正文与摘要长度时先拒绝校验，保留限定条件供模型完整改写', () => {
   const ids = new Set(['model-choice'])
