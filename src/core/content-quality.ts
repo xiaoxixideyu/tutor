@@ -256,7 +256,9 @@ export function parseContentReview(value: unknown, input: ContentInput): Content
       return { id: assertion.id as string, verdict: assertion.verdict as UnitReview['scope'], explanation: nonempty(assertion.explanation, 'assertion.explanation') }
     })
     return { id: item.id as string, scope: item.scope as UnitReview['scope'], correctness: item.correctness as UnitReview['correctness'],
-      explanation: nonempty(item.explanation, 'explanation'), arithmetic: arithmetic(item.arithmetic), assertions }
+      // 契约要求"无运算时为 []"，但模型经常整字段省略；未提供时按无运算处理，
+      // 不让一个省略字段把整份审查报废（verdict/explanation 缺失仍严格拒绝）。
+      explanation: nonempty(item.explanation, 'explanation'), arithmetic: item.arithmetic === undefined ? [] : arithmetic(item.arithmetic), assertions }
   }) }
 }
 function arithmeticIssues(id: string, checks: ArithmeticCheck[]): string[] {
