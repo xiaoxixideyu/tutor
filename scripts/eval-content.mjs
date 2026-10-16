@@ -24,7 +24,7 @@ if (cases.some(id => !fixtures.cases.some(item => item.id === id)) || new Set(ca
 console.log(`固定内容样本 ${cases.length || fixtures.cases.length} 个，${repeats} 轮；预期标签不会进入模型请求。`)
 if (!values.live) { console.log('样本校验通过，未调用模型。'); process.exit(0) }
 const [major, minor] = process.versions.node.split('.').map(Number)
-if (major !== 24 && major !== 26 && !(major === 22 && minor >= 19)) throw new Error('真实评测请使用 Node 24 LTS（或受支持的 22.19+/26）')
+if (major < 22 || (major === 22 && minor < 19)) throw new Error('真实评测需要 Node ≥ 22.19（源码直跑依赖原生类型剥离与 zlib zstd）')
 const env = { ...process.env }
 if (fs.existsSync(path.join(root, '.env'))) for (const line of fs.readFileSync(path.join(root, '.env'), 'utf8').split('\n')) {
   const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)

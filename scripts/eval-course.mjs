@@ -23,7 +23,7 @@ if (!values.live) {
   process.exit(0)
 }
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
-if (nodeMajor !== 24 && nodeMajor !== 26 && !(nodeMajor === 22 && nodeMinor >= 19)) throw new Error('真实课程验收请使用 Node 24 LTS（或受支持的 22.19+/26）')
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 19)) throw new Error('真实课程验收需要 Node ≥ 22.19（源码直跑依赖原生类型剥离与 zlib zstd）')
 if (!COURSE_ID_PATTERN.test(courseId ?? '') || (!modes[mode] && !['practice', 'review', 'status'].includes(mode))) throw new Error('课程名或阶段非法')
 const timeoutMs = Number(values['timeout-ms'])
 if (!Number.isInteger(timeoutMs) || timeoutMs < 60_000 || timeoutMs > 1_200_000) throw new Error('timeout-ms 必须为 60000–1200000 的整数')

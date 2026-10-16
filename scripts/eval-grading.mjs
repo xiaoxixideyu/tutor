@@ -22,8 +22,8 @@ const fixtures = validateGradingFixtures(JSON.parse(fs.readFileSync(fixtureFile,
 const samples = fixtures.suites.reduce((sum, suite) => sum + suite.cases.length, 0)
 console.log(`固定样本 ${samples} 个，领域 ${fixtures.suites.length} 个；${repeats} 轮共 ${samples * repeats} 次判分、${fixtures.suites.length * repeats} 个独立会话。`)
 if (!values.live) { console.log('样本校验通过，未调用模型。'); process.exit(0) }
-const major = Number(process.versions.node.split('.')[0])
-if (major !== 24 && major !== 26 && !(major === 22 && Number(process.versions.node.split('.')[1]) >= 19)) throw new Error('真实评测请使用 Node 24 LTS（或受支持的 22.19+/26）')
+const [major, minor] = process.versions.node.split('.').map(Number)
+if (major < 22 || (major === 22 && minor < 19)) throw new Error('真实评测需要 Node ≥ 22.19（源码直跑依赖原生类型剥离与 zlib zstd）')
 
 const env = { ...process.env }
 const envFile = path.join(root, '.env')
