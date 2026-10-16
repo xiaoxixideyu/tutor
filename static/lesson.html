@@ -80,6 +80,7 @@
     <button id="send">发送</button>
   </div>
 </footer>
+<script src="/md.js"></script>
 <script src="/flow-client.js"></script>
 <script>
 const flowClient = new TutorFlowClient((message) => {
@@ -178,44 +179,9 @@ function setBusy(on, label) {
   }
 }
 
-function mdToHtml(src) {
-  const escHtml = (t) => esc(t)
-  const blocks = []
-  // 1) 抽出 fenced code 块
-  const text = src.replace(/```(\w*)\n([\s\S]*?)(?:```|$)/g, (_, lang, code) => {
-    blocks.push(`<pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre>`)
-    return `\u0000CODE${blocks.length - 1}\u0000`
-  })
-  // 2) 逐行处理剩余 md
-  const lines = text.split('\n')
-  const out = []
-  let listType = null
-  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null } }
-  for (const raw of lines) {
-    const line = escHtml(raw)
-    if (/^\u0000CODE\d+\u0000$/.test(line.trim())) { closeList(); out.push(line.trim()); continue }
-    const heading = line.match(/^(#{1,4})\s+(.*)$/)
-    if (heading) { closeList(); out.push(`<h3>${inline(heading[2])}</h3>`); continue }
-    const ul = line.match(/^\s*[-*]\s+(.*)$/)
-    if (ul) { if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul' } out.push(`<li>${inline(ul[1])}</li>`); continue }
-    const ol = line.match(/^\s*\d+\.\s+(.*)$/)
-    if (ol) { if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol' } out.push(`<li>${inline(ol[1])}</li>`); continue }
-    closeList()
-    if (line.trim() === '') { out.push('<p></p>'); continue }
-    out.push(`<p>${inline(line)}</p>`)
-  }
-  closeList()
-  let html = out.join('\n')
-  // 3) 行内元素：**粗体**、`行内码`、[资料:n] 高亮
-  function inline(t) {
-    return t
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\[资料[:：](\d+)\]/g, '<span style="color:var(--accent)">[资料:$1]</span>')
-  }
-  html = html.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => blocks[Number(i)])
-  return html
-}
+// 共享实现见 static/md.js（课堂/考试/复习三页共用同一渲染器）
+const mdToHtml = window.TutorMd.toHtml
+
 
 function renderBubble() {
   if (!bubble || !bubbleText) return

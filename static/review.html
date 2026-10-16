@@ -21,8 +21,14 @@
   .nodehead { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
   .progress { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
   .q { margin: 14px 0; }
-  .q .qtext { font-size: 14px; line-height: 1.6; margin-bottom: 8px; }
-  .q .qtext .idx { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .q .qtext { font-size: 14px; line-height: 1.6; margin-bottom: 8px; display: flex; gap: 6px; }
+  .q .qtext .idx { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+  .q .qtext .qbody { flex: 1; min-width: 0; }
+  .q .qtext .qbody p { margin: 4px 0; }
+  .q .qtext .qbody p:first-child { margin-top: 0; }
+  .q .qtext pre { background: #0d1117; color: #e6edf3; border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 8px 0; white-space: pre; }
+  .q .qtext code { background: #eef1f5; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+  .q .qtext pre code { background: none; padding: 0; }
   .choices { display: flex; flex-direction: column; gap: 8px; }
   .choice { border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; text-align: left; font-family: inherit; }
   .choice:hover { background: #eef2ff; }
@@ -52,7 +58,7 @@
   <span class="state" id="state"></span>
 </header>
 <main id="main"></main>
-<!-- SCRIPT_PLACEHOLDER -->
+<script src="/md.js"></script>
 <script>
 const params = new URLSearchParams(location.search)
 const courseId = params.get('course')
@@ -123,12 +129,13 @@ function renderNode() {
   card.appendChild(el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
   item.questions.forEach((q, qi) => {
     const qDiv = el('<div class="q"></div>')
-    qDiv.appendChild(el(`<div class="qtext"><span class="idx">${qi + 1}.</span>${esc(q.question)}</div>`))
+    // 题干可能是含代码块的 Markdown（题库原文），必须渲染而不是转义成纯文本。
+    qDiv.appendChild(el(`<div class="qtext"><span class="idx">${qi + 1}.</span><div class="qbody">${TutorMd.toHtml(q.question)}</div></div>`))
     if (q.type === 'choice' && Array.isArray(q.choices)) {
       const wrap = el('<div class="choices"></div>')
       q.choices.forEach((choiceText, ci) => {
         const letter = LETTERS[ci]
-        const btn = el(`<button class="choice">${esc(choiceText)}</button>`)
+        const btn = el(`<button class="choice">${TutorMd.inlineText(choiceText)}</button>`)
         btn.addEventListener('click', () => {
           if (btn.classList.contains('disabled')) return
           answers[qi] = letter
@@ -179,7 +186,7 @@ function showResult(card, item, out) {
       const idx = LETTERS.indexOf(String(pq.answer).trim().toUpperCase())
       if (idx >= 0 && q.choices[idx]) answerText = q.choices[idx]
     }
-    const tail = pq.correct ? '' : `　<span class="ans">正确答案：${esc(answerText)}</span>`
+    const tail = pq.correct ? '' : `　<span class="ans">正确答案：${TutorMd.inlineText(answerText)}</span>`
     const v = el(`<div class="verdict ${pq.correct ? 'ok' : 'no'}">${pq.correct ? '✓ 正确' : '✗ 错误'}${tail}</div>`)
     if (qDivs[i]) qDivs[i].appendChild(v)
   })
