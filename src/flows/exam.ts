@@ -7,6 +7,8 @@ import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 import { contentKey, examContent, mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
+import { LearnerNotesStore } from '../core/learner-notes.ts'
+import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { today } from './deps.ts'
@@ -194,7 +196,33 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   await chat.flush()
 
   attempt.gradings = gradings
-  const { score, passed, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, today())
+  const { score, passed, date, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, today())
+  // 事件流与错因档案：按节点记录成绩、客观题错答留档；辅助数据失败不影响成绩展示（事件按 key 去重）。
+  try {
+    const notes = new LearnerNotesStore(store.root, config.courseId)
+    const byNode = new Map<string, { earned: number; possible: number }>()
+    for (const question of paper.questions) {
+      const grading = gradings.find((item) => item.questionId === question.id)
+      if (!grading) continue
+      const total = byNode.get(question.node) ?? { earned: 0, possible: 0 }
+      total.earned += grading.score * question.points
+      total.possible += question.points
+      byNode.set(question.node, total)
+    }
+    for (const [nodeId, total] of byNode) {
+      appendMasteryEvent(store.root, config.courseId, { key: `exam:${attempt.id}:${nodeId}`, at: date, node: nodeId, kind: 'exam', score: Math.round(total.earned / total.possible * 100) / 100, passed })
+    }
+    const wrongByNode = new Map<string, { question: string; your: string; answer: string }[]>()
+    for (const question of paper.questions) {
+      const grading = gradings.find((item) => item.questionId === question.id)
+      if (!grading || grading.correct || question.type !== 'objective') continue
+      const list = wrongByNode.get(question.node) ?? []
+      const correctAnswer = (question.choices?.length ?? 0) > 0 ? question.answer.toUpperCase() : question.answer
+      list.push({ question: question.question, your: attempt.answers[question.id] ?? '', answer: correctAnswer })
+      wrongByNode.set(question.node, list)
+    }
+    for (const [nodeId, items] of wrongByNode) notes.recordErrors(nodeId, items, date, 'exam')
+  } catch { /* 辅助数据写入失败忽略 */ }
   io.out(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''

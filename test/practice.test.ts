@@ -118,7 +118,8 @@ describe('applyPracticeResult', () => {
     const updated = applyPracticeResult(mastery, 'a', 1, '2026-09-20')
     assert.equal(updated.a.status, 'mastered')
     assert.equal(updated.a.score, 0.8)
-    assert.equal(updated.a.review_due, '2026-09-21')
+    // good 通过：1.5 × 1.8 = 2.7 → 3 天
+    assert.equal(updated.a.review_due, '2026-09-23')
     assert.equal(updated.a.review_stage, 1)
   })
 

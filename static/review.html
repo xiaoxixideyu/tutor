@@ -115,7 +115,12 @@ function renderNode() {
   const answers = new Array(item.questions.length).fill('')
   const card = el('<div class="card"></div>')
   card.appendChild(el(`<div class="nodehead">${esc(title)}</div>`))
-  card.appendChild(el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题</div>`))
+  // 记忆状态：逾期天数与保留率估计（旧数据无锚点时只显示题量）。
+  const memory = [
+    item.overdue_days > 0 ? `逾期 ${item.overdue_days} 天` : '',
+    item.retention !== undefined ? `预计保留 ≈${Math.round(item.retention * 100)}%` : '',
+  ].filter(Boolean).join(' · ')
+  card.appendChild(el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
   item.questions.forEach((q, qi) => {
     const qDiv = el('<div class="q"></div>')
     qDiv.appendChild(el(`<div class="qtext"><span class="idx">${qi + 1}.</span>${esc(q.question)}</div>`))

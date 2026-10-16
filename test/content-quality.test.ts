@@ -322,6 +322,17 @@ it('遗漏、重复、未知单元和只给一个结论不能视为审查通过'
   assert.throws(() => parseBlindSolutions({ solutions: [] }, input))
 })
 
+it('盲解空答案：uncertain 合法放行并按不确定拦截；solved 空答案按不一致拦截而非解析错误', () => {
+  // 真实模型对“题干歧义”的题返回 status=uncertain 且 answer 为空：不能把整份审查判成 error 绕过修复循环。
+  const uncertain = parseBlindSolutions({ solutions: [{ id: 'q1', status: 'uncertain', answer: '', reasoning: '题干歧义，无法确定', arithmetic: [] }] }, input)
+  assert.equal(uncertain[0].answer, '')
+  assert.match(contentIssues(input, uncertain, reviewFor(input)).join(''), /不确定/)
+  const missing = parseBlindSolutions({ solutions: [{ id: 'q1', status: 'uncertain', reasoning: '题干歧义', arithmetic: [] }] }, input)
+  assert.equal(missing[0].answer, '')
+  const emptySolved = parseBlindSolutions({ solutions: [{ id: 'q1', status: 'solved', answer: '', reasoning: '忘了填答案', arithmetic: [] }] }, input)
+  assert.match(contentIssues(input, emptySolved, reviewFor(input)).join(''), /不一致|无法唯一映射/)
+})
+
 it('独立答案不一致、模型不确定、模型误判通过的算式都会拦截', () => {
   const solutions = parseBlindSolutions({ solutions: [{ id: 'q1', status: 'solved', answer: 'B', reasoning: '解答', arithmetic: [] }] }, input)
   assert.match(contentIssues(input, solutions, reviewFor(input)).join(''), /不一致/)

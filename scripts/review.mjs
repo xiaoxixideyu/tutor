@@ -9,6 +9,8 @@ import { dueReviews, pickReviewQuestions, postponeReview } from '../src/core/rev
 import { listDueReviews } from '../src/core/summary.ts'
 import { applyReviewResult, formatChoice, judgeQuizAnswer } from '../src/core/assessment.ts'
 import { requireReviewedBank } from '../src/core/quality-store.ts'
+import { LearnerNotesStore } from '../src/core/learner-notes.ts'
+import { appendMasteryEvent } from '../src/core/events.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
@@ -65,12 +67,18 @@ async function reviewCourse(courseId) {
   const mastery = store.read(courseId, 'mastery')
   const due = dueReviews(mastery, today())
   if (due.length === 0) {
-    out.write('没有到期的复习。到期后会在这里出现（间隔 1/3/7/14 天阶梯）。\n')
+    out.write('没有到期的复习。到期后会在这里出现（按记忆稳定性动态排期：答对越久间隔越长）。\n')
     return 0
   }
   const hasBank = store.has(courseId, 'question-bank')
   const bank = hasBank ? store.read(courseId, 'question-bank') : {}
-  out.write(`今日复习 ${due.length} 个知识点（${due.map((d) => d.node).join('、')}）。每点 2 题，规则判分。\n`)
+  const describe = (item) => {
+    const overdue = item.overdue_days > 0 ? `逾期 ${item.overdue_days} 天` : ''
+    const retention = item.retention !== undefined ? `预计保留 ≈${Math.round(item.retention * 100)}%` : ''
+    const detail = [overdue, retention].filter(Boolean).join('，')
+    return detail ? `${item.node}（${detail}）` : item.node
+  }
+  out.write(`今日复习 ${due.length} 个知识点（${due.map(describe).join('、')}）。每点 2 题，规则判分。\n`)
 
   let done = 0
   for (const review of due) {
@@ -86,6 +94,7 @@ async function reviewCourse(courseId) {
     requireReviewedBank(store, courseId, bank, review.node)
     out.write(`\n【${review.node}】\n`)
     let correct = 0
+    const wrongItems = []
     for (const [index, question] of questions.entries()) {
       out.write(`\n复习题 ${index + 1}/${questions.length}：${question.question}\n`)
       for (const [index, choice] of (question.choices ?? []).entries()) out.write(`  ${formatChoice(choice, index)}\n`)
@@ -97,6 +106,7 @@ async function reviewCourse(courseId) {
       }
       const ok = judgeQuizAnswer(question, answer)
       correct += ok ? 1 : 0
+      if (!ok) wrongItems.push({ question: question.question, your: answer.trim(), answer: answerText(question) })
       out.write(ok ? '✓ 正确\n' : `✗ 错误（正确答案：${answerText(question)}）\n`)
     }
     const score = Math.round((correct / questions.length) * 100) / 100
@@ -107,6 +117,11 @@ async function reviewCourse(courseId) {
       `→ ${review.node}：${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，下次复习 ${entry.review_due}` : ''}\n`
     )
     store.write(courseId, 'mastery', mastery)
+    // 观察记录与事件流是辅助数据：写失败不阻塞复习。
+    try {
+      if (wrongItems.length > 0) new LearnerNotesStore(store.root, courseId).recordErrors(review.node, wrongItems, today(), 'review')
+      appendMasteryEvent(store.root, courseId, { key: `review:cli:${courseId}:${review.node}:${today()}`, at: today(), node: review.node, kind: 'review', score, passed: score >= 0.5 })
+    } catch { /* 辅助数据写入失败忽略 */ }
     done += 1
   }
   return done

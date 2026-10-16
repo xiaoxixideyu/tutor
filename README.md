@@ -36,6 +36,10 @@ npm run trial -- --learner p01
 
 说明：复习答错会把已 mastered 的知识点降级，下次 `learn` 时计划指针会指回该节点（补救课）——这是设计行为，不是进度丢失。
 
+记忆调度（2026-10-16）：每个知识点记录 `last_touched_at`（实测锚点）/ `stability`（稳定性，天）/ `lapses`（遗忘次数）；`R(t)=0.9^(t/S)` 按目标保留率 90% 反推复习间隔，隔得越久成功回忆加成越大、答错则衰减并次日重试。`learn` 会对到期或低保留的前置先做一次规则判分的回忆热身（零模型成本），并把"距上次实测 X 天、预计保留 ≈N%"注入备课与讲授上下文。旧课程数据无锚点时按原 1/3/7/14 阶梯迁移，不推测保留率。
+
+学员观察（2026-10-16，零模型规则）：小测与复习的错答按节点记入 `learner-notes.json`（错因档案，下次备课 prompt 引用）；小测前自评把握，偏差 ≥15 点写入校准记录；课堂中"没听懂/太快"与"懂了"信号自动留痕，一并注入备课。小测末尾固定一道已掌握节点的旧知识回访（交错练习；失败按复习对待，可能回退计划指针）；前置明显生疏时开课前给出软门提醒，可输入 `c` 越权继续（随后仍会热身）。学习事件追加到 `mastery-events.jsonl`，课程详情页展示近 30 天活动柱与每节点成绩轨迹（旧课程从启用后开始积累）。
+
 ## 环境要求
 
 - **Node ≥ 22.19**（源码直接运行 TypeScript，依赖原生类型剥离与 `zlib` zstd；CI 与建议版本为 24 LTS）
@@ -61,8 +65,8 @@ npm run agent -- status golang  # 进度看板（知识点掌握状态/里程碑
 npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
-npm run agent -- learn golang   # 开始/继续本节课（备课→对话式讲授；/quiz 课后小测→判分→更新掌握度与计划指针；中断后重跑自动续学）
-npm run agent -- review golang  # 复习到期知识点（SM-2 简化阶梯 1/3/7/14 天；答错回退一级不清队列；掌握度差节点指针留原地=补救课）
+npm run agent -- learn golang   # 开始/继续本节课（前置新鲜度软门→备课→回忆热身→对话式讲授；/quiz 小测→自评校准→旧知识回访→更新掌握度与指针；中断后重跑自动续学）
+npm run agent -- review golang  # 复习到期知识点（FSRS-lite 记忆调度：稳定性随答对增长、逾期后成功回忆加成；答错衰减并次日重试）
 npm run agent -- review --all   # 跨课程到期汇总复习（多课程）
 npm run agent -- practice-gen golang # 生成实践任务（每知识点 1 个动手任务 + 规则化测试，需模型）
 npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 写代码 → 回车跑测试（零模型规则判分；通过则掌握度保底 0.8）

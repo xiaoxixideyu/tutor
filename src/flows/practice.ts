@@ -5,6 +5,7 @@ import { judgePracticeTask, buildPracticeIntro, applyPracticeResult, selectPract
 import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, PracticeTaskState } from '../core/schema.ts'
 import { runTests, ensureStarterFiles } from './practice-executor.ts'
 import { requireReviewedPractice } from '../core/quality-store.ts'
+import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { today } from './deps.ts'
@@ -136,6 +137,9 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
     }
     const updatedMastery = applyPracticeResult(mastery ?? {}, node, judge.score, today())
     store.write(courseId, 'mastery', updatedMastery)
+    try {
+      appendMasteryEvent(store.root, courseId, { key: `practice:${task.id}:${taskKey}`, at: today(), node, kind: 'practice', score: judge.score, passed: true })
+    } catch { /* 辅助数据写入失败忽略 */ }
     const entry = updatedMastery[node]
     io.out(
       `\n实践完成！掌握度更新：${node} → ${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，复习到期 ${entry.review_due}` : ''}\n`

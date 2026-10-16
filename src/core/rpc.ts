@@ -2,6 +2,8 @@ import { COURSE_ID_PATTERN, type CourseStore } from './store.ts'
 import { dueReviews, pickReviewQuestions, reviewAttemptId } from './review.ts'
 import { courseProgress, listCourseSummaries, listDueReviews, courseContentIssues } from './summary.ts'
 import { applyReviewResult, judgeQuizAnswer } from './assessment.ts'
+import { LearnerNotesStore } from './learner-notes.ts'
+import { appendMasteryEvent, dailyActivity, learningPace, nodeTrails, readMasteryEvents } from './events.ts'
 import type { DocKind, Mastery, Question, QuestionBank, ReviewResult } from './schema.ts'
 import { requireReviewedBank } from './quality-store.ts'
 
@@ -100,7 +102,7 @@ export function createRpcMethods(
     courseStatus: (params) => {
       const id = asCourseId(params)
       requireCourse(store, id)
-      return courseProgress(store, id)
+      return courseProgress(store, id, today())
     },
     // 当前未通过内容审查的条目及问题——供 UI 显示"具体哪条没过"，而不是只给证据文件路径。
     contentIssues: (params) => {
@@ -123,6 +125,15 @@ export function createRpcMethods(
       }
       return store.read(id, kind as DocKind)
     },
+    // 学习曲线数据：事件流聚合的日活跃量与每节点成绩轨迹（旧课程无事件流时返回空）。
+    masteryHistory: (params) => {
+      const id = asCourseId(params)
+      requireCourse(store, id)
+      const days = typeof params?.days === 'number' && Number.isFinite(params.days)
+        ? Math.max(1, Math.min(90, Math.round(params.days))) : 30
+      const events = readMasteryEvents(store.root, id)
+      return { id, days, activity: dailyActivity(events, days, today()), pace: learningPace(events, 14, today()), nodes: nodeTrails(events) }
+    },
     applyReview: (params) => {
       const id = asCourseId(params)
       const node = asString(params?.node, 'node')
@@ -141,6 +152,10 @@ export function createRpcMethods(
       }
       const updated = applyReviewResult(mastery, node, score, day)
       store.write(id, 'mastery', updated)
+      // 旧入口无逐题信息：只记事件流；辅助数据失败不回滚已提交的掌握度。
+      try {
+        appendMasteryEvent(store.root, id, { key: `review:legacy:${id}:${node}:${day}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
+      } catch { /* 辅助数据写入失败忽略 */ }
       return updated[node]
     },
     // 取到期复习题（判分留服务端，故下发抹掉答案）。返回每个到期节点及其题目；题库缺失的节点 questions 为空，
@@ -156,6 +171,8 @@ export function createRpcMethods(
         node: due.node,
         stage: due.stage,
         review_due: due.review_due,
+        overdue_days: due.overdue_days,
+        ...(due.retention !== undefined ? { retention: due.retention } : {}),
         attemptId: reviewAttemptId(id, due.node, mastery[due.node], pickReviewQuestions(bank, due.node)),
         questions: pickReviewQuestions(bank, due.node).map(stripAnswer),
       }))
@@ -214,6 +231,12 @@ export function createRpcMethods(
       const result: ReviewResult = { score, correct, total, perQuestion, entry: { ...updated[node] } }
       updated[node].last_review = { attempt_id: attemptId, answers: [...answers], result }
       store.write(id, 'mastery', updated)
+      // 回执已落盘后追加观察记录与事件流；写失败不影响本次复习结果。
+      try {
+        const wrong = perQuestion.filter((item) => !item.correct).map((item) => ({ question: item.question, your: item.your, answer: item.answer }))
+        if (wrong.length > 0) new LearnerNotesStore(store.root, id).recordErrors(node, wrong, day, 'review')
+        appendMasteryEvent(store.root, id, { key: `review:${attemptId}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
+      } catch { /* 辅助数据写入失败忽略 */ }
       return result
     },
   }

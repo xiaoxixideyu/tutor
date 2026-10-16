@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, prerequisiteIds, resourcesForNode, validateLessonDraft } from '../src/core/lesson.ts'
+import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, memoryNotes, prerequisiteIds, resourcesForNode, selectInterleaveQuestion, selectWarmupQuestions, stalePrerequisites, validateLessonDraft } from '../src/core/lesson.ts'
 import { judgeQuizAnswer, statusForScore, updateMasteryForNode } from '../src/core/assessment.ts'
 import { CourseStore } from '../src/core/store.ts'
-import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile } from '../src/core/schema.ts'
+import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile, QuestionBank } from '../src/core/schema.ts'
 
 const map: KnowledgeMap = {
   verified: false,
@@ -165,13 +165,17 @@ describe('statusForScore / updateMasteryForNode', () => {
     assert.equal(statusForScore(0.2), 'weak')
   })
 
-  it('weak 清除复习到期，learning/mastered 设置并递增间隔', () => {
+  it('weak 清除复习到期，learning/mastered 按记忆稳定性排期', () => {
     const first = updateMasteryForNode(undefined, 'goroutines', 0.6, '2026-09-17')
     assert.equal(first.goroutines.status, 'learning')
-    assert.equal(first.goroutines.review_due, '2026-09-18')
+    // 首学 hard：1.5 × 1.4 = 2.1 天
+    assert.equal(first.goroutines.review_due, '2026-09-19')
+    assert.equal(first.goroutines.stability, 2.1)
+    assert.equal(first.goroutines.last_touched_at, '2026-09-17')
     const mastered = updateMasteryForNode(first, 'goroutines', 1, '2026-09-20')
     assert.equal(mastered.goroutines.status, 'mastered')
-    assert.equal(mastered.goroutines.review_due, '2026-09-23')
+    // 隔 3 天 easy 且逾期加成：2.1 × 2.4 × 1.13 ≈ 5.69 → 6 天
+    assert.equal(mastered.goroutines.review_due, '2026-09-26')
     const backToWeak = updateMasteryForNode(mastered, 'goroutines', 0.2, '2026-09-25')
     assert.equal(backToWeak.goroutines.status, 'weak')
     assert.equal('review_due' in (backToWeak.goroutines ?? {}), false)
@@ -258,5 +262,125 @@ describe('资料注入与引用核对（二期）', () => {
     assert.match(prompt, /【资料】/)
     assert.match(prompt, /--- 第2段 ---/)
     assert.match(prompt, /第二段发言/)
+  })
+})
+
+describe('记忆状态注入与开课热身（FSRS-lite）', () => {
+  const today = '2026-09-18'
+  // goroutines 距上次实测 30 天、稳定性 7 天 → 保留率约 64%（低保留，应热身）
+  const masteryWithMemory: Mastery = {
+    goroutines: { status: 'mastered', score: 1, review_stage: 3, stability: 7, last_touched_at: '2026-08-19' },
+  }
+
+  it('备课 prompt 注入最近学习与前置保留率，并提示低保留先重建', () => {
+    const prompt = buildPrepPrompt({ courseId: 'golang', node: 'channels', map, plan: { path: ['channels'], milestones: [], current: 'channels' }, profile, mastery: masteryWithMemory, today })
+    assert.match(prompt, /最近一次学习\/复习：2026-08-19（距今 30 天）/)
+    assert.match(prompt, /goroutines（Goroutine）：mastered 1（距上次实测 30 天，预计保留 ≈/)
+    assert.match(prompt, /建议先回忆热身/)
+    assert.match(prompt, /保留率低的前置：开场先用类比或最小例子重建/)
+  })
+
+  it('无实测锚点的旧数据不注入记忆注记', () => {
+    const prompt = buildPrepPrompt({ courseId: 'golang', node: 'channels', map, plan: { path: ['channels'], milestones: [], current: 'channels' }, profile, mastery: { goroutines: { status: 'mastered', score: 1, review_stage: 3 } }, today })
+    assert.doesNotMatch(prompt, /距上次实测/)
+    assert.doesNotMatch(prompt, /最近一次学习/)
+  })
+
+  it('selectWarmupQuestions 只挑低保留/到期的前置，最多 2 个，优先 d2', () => {
+    const bank: QuestionBank = {
+      goroutines: [
+        { id: 'g1', difficulty: 1, type: 'choice', question: 'q1', choices: ['A', 'B'], answer: 'A' },
+        { id: 'g2', difficulty: 2, type: 'choice', question: 'q2', choices: ['A', 'B'], answer: 'A' },
+      ],
+    }
+    const picks = selectWarmupQuestions(map, masteryWithMemory, bank, 'channels', today)
+    assert.deepEqual(picks.map((p) => p.node), ['goroutines'])
+    assert.equal(picks[0].question.id, 'g2')
+    const fresh: Mastery = { goroutines: { status: 'mastered', score: 1, stability: 30, last_touched_at: '2026-09-17' } }
+    assert.deepEqual(selectWarmupQuestions(map, fresh, bank, 'channels', today), [])
+    const due: Mastery = { goroutines: { status: 'mastered', score: 1, review_due: '2026-09-10', review_stage: 2 } }
+    assert.equal(selectWarmupQuestions(map, due, bank, 'channels', today).length, 1)
+    assert.deepEqual(selectWarmupQuestions(map, masteryWithMemory, {}, 'channels', today), [])
+  })
+
+  it('memoryNotes 给出记忆卡；教学首消息注入记忆与热身结果', () => {
+    const notes = memoryNotes(map, masteryWithMemory, 'channels', today)
+    assert.deepEqual(notes.map((n) => n.node), ['goroutines'])
+    assert.equal(notes[0].elapsedDays, 30)
+    const intro = buildTeachingIntro({
+      courseId: 'golang', node: 'channels', plan: { path: ['channels'], milestones: [], current: 'channels' }, profile,
+      mastery: masteryWithMemory, draft: { ...draft, node: 'channels', title: 'Channel' },
+      memory: notes, warmup: [{ node: 'goroutines', question: 'q2', correct: false }],
+    })
+    assert.match(intro, /【学员记忆状态】/)
+    assert.match(intro, /预计保留 ≈/)
+    assert.match(intro, /【开课热身】/)
+    assert.match(intro, /✗ 答错/)
+    assert.match(intro, /热身有答错/)
+  })
+})
+
+describe('交错回访与前置新鲜度软门', () => {
+  const today = '2026-09-18'
+  const bank: QuestionBank = {
+    goroutines: [
+      { id: 'g1', difficulty: 1, type: 'choice', question: 'g1?', choices: ['A', 'B'], answer: 'A' },
+      { id: 'g2', difficulty: 2, type: 'choice', question: 'g2?', choices: ['A', 'B'], answer: 'A' },
+    ],
+  }
+  // goroutines 距上次实测 30 天、稳定性 7 天 → 保留率低，是回访首选
+  const lowRetention: Mastery = { goroutines: { status: 'mastered', score: 1, review_stage: 3, stability: 7, last_touched_at: '2026-08-19' } }
+
+  it('selectInterleaveQuestion：保留率最低优先、优先 d2、可排除热身题、无候选返回 null', () => {
+    const pick = selectInterleaveQuestion(map, lowRetention, bank, 'channels', today)
+    assert.equal(pick?.node, 'goroutines')
+    assert.equal(pick?.question.id, 'g2')
+    const fallback = selectInterleaveQuestion(map, lowRetention, bank, 'channels', today, ['g2'])
+    assert.equal(fallback?.question.id, 'g1')
+    assert.equal(selectInterleaveQuestion(map, lowRetention, bank, 'goroutines', today), null)
+    assert.equal(selectInterleaveQuestion(map, { goroutines: { status: 'learning' } }, bank, 'channels', today), null)
+    assert.equal(selectInterleaveQuestion(map, lowRetention, {}, 'channels', today), null)
+  })
+
+  it('selectInterleaveQuestion：到期无锚点旧数据比新鲜节点优先', () => {
+    const mastery: Mastery = {
+      goroutines: { status: 'mastered', score: 1, review_due: '2026-09-10', review_stage: 2 },
+      channels: { status: 'mastered', score: 1, stability: 30, last_touched_at: '2026-09-17' },
+    }
+    const bankTwo: QuestionBank = { ...bank, channels: [{ id: 'c1', difficulty: 2, type: 'choice', question: 'c1?', choices: ['A', 'B'], answer: 'A' }] }
+    const pick = selectInterleaveQuestion(map, mastery, bankTwo, 'other', today)
+    assert.equal(pick?.node, 'goroutines')
+  })
+
+  it('stalePrerequisites：低保留与严重逾期报警，非 mastered 与新鲜节点不报', () => {
+    const stale = stalePrerequisites(map, lowRetention, 'channels', today)
+    assert.deepEqual(stale.map((item) => item.node), ['goroutines'])
+    assert.ok((stale[0].retention ?? 1) < 0.75)
+    assert.equal(stale[0].elapsedDays, 30)
+    const due: Mastery = { goroutines: { status: 'mastered', score: 1, review_due: '2026-09-01', review_stage: 2 } }
+    assert.equal(stalePrerequisites(map, due, 'channels', today).length, 1)
+    const fresh: Mastery = { goroutines: { status: 'mastered', score: 1, stability: 30, last_touched_at: '2026-09-17' } }
+    assert.deepEqual(stalePrerequisites(map, fresh, 'channels', today), [])
+    const learning: Mastery = { goroutines: { status: 'learning', score: 0.5, review_due: '2026-08-01' } }
+    assert.deepEqual(stalePrerequisites(map, learning, 'channels', today), [])
+  })
+
+  it('备课 prompt 注入错因、校准与课堂反馈；缺省不注入', () => {
+    const prompt = buildPrepPrompt({
+      courseId: 'golang', node: 'channels', map, plan: { path: ['channels'], milestones: [], current: 'channels' }, profile, mastery: lowRetention, today,
+      errors: [{ node: 'goroutines', question: '这道题的问题', your: '我答错的内容' }],
+      calibration: { at: '2026-09-17', predicted: 90, actual: 0.5 },
+      styleNotes: [{ at: '2026-09-15', kind: 'confused', detail: '太快了' }],
+    })
+    assert.match(prompt, /【学员常见错误】/)
+    assert.match(prompt, /我答错的内容/)
+    assert.match(prompt, /【自我评估校准】/)
+    assert.match(prompt, /高估/)
+    assert.match(prompt, /【课堂反馈】/)
+    assert.match(prompt, /放慢节奏/)
+    const plain = buildPrepPrompt({ courseId: 'golang', node: 'channels', map, plan: { path: ['channels'], milestones: [], current: 'channels' }, profile, mastery: lowRetention, today })
+    assert.doesNotMatch(plain, /【学员常见错误】/)
+    assert.doesNotMatch(plain, /【自我评估校准】/)
+    assert.doesNotMatch(plain, /【课堂反馈】/)
   })
 })

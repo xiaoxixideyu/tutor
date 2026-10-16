@@ -69,7 +69,8 @@ describe('大考评分与掌握度边界', () => {
     assert.equal(first.a.score, 0.5)
     assert.equal(first.a.status, 'learning')
     assert.equal(first.b.review_stage, 2)
-    assert.equal(first.b.review_due, '2026-10-11')
+    // 旧数据 stage 1 → 稳定性 1 天；easy ×2.4 = 2.4 → 2 天
+    assert.equal(first.b.review_due, '2026-10-10')
     assert.equal(mastery.b.review_stage, 1)
   })
 

@@ -237,7 +237,10 @@ export function validateContentInput(input: ContentInput): void {
 export function parseBlindSolutions(value: unknown, input: ContentInput): BlindSolution[] {
   return covered(object(value).solutions, blindQuestions(input).map(q => q.id)).map(item => {
     if (item.status !== 'solved' && item.status !== 'uncertain') throw new Error('独立解答状态缺失或非法')
-    return { id: item.id as string, status: item.status, answer: nonempty(item.answer, 'answer'),
+    // uncertain 合法地可能没有确定答案（“不猜答案”）：空/缺 answer 不判为解析错误。
+    // solved 的空答案会在 contentIssues 按“不一致/无法映射”拦截并进入修复循环，而不是把整份审查拖成 error。
+    const answer = typeof item.answer === 'string' ? item.answer : ''
+    return { id: item.id as string, status: item.status, answer,
       reasoning: nonempty(item.reasoning, 'reasoning'), arithmetic: arithmetic(item.arithmetic) }
   })
 }

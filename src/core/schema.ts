@@ -50,6 +50,11 @@ export interface MasteryEntry {
   score?: number
   review_due?: string
   review_stage?: number
+  // 记忆状态（FSRS-lite 调度）：实测锚点 + 稳定性（天）+ 遗忘次数。
+  // 旧数据无这些字段时由 scheduler 按 review_stage 迁移，不影响原有排期读取。
+  last_touched_at?: string
+  stability?: number
+  lapses?: number
   last_review?: { attempt_id: string; answers: string[]; result: ReviewResult }
 }
 
@@ -123,6 +128,9 @@ const masteryFields = {
   score: z.number().min(0).max(1),
   review_due: dateStr,
   review_stage: z.number().min(1).max(4),
+  last_touched_at: dateStr,
+  stability: z.number().min(0.1).max(3650),
+  lapses: z.number().min(0),
 }
 
 const MasteryEntrySchema = z.object({

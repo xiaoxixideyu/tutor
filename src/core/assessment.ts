@@ -1,5 +1,6 @@
 import type { AssessmentState, LearnerProfile, LessonPractice, Mastery, Question, QuestionBank } from './schema.ts'
 import { matchesRuleAnswer, normalizeRuleText } from './rule-grading.ts'
+import { addDays, daysBetween, gradeForScore, intervalDays, nextStability, RETRY_INTERVAL_DAYS, stabilityOf } from './scheduler.ts'
 
 export const MAX_QUESTIONS_PER_NODE = 3
 
@@ -195,12 +196,6 @@ export function statusForScore(score: number): 'mastered' | 'learning' | 'weak' 
   return 'weak'
 }
 
-export function addDays(isoDate: string, days: number): string {
-  const date = new Date(`${isoDate}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
 export function judgeQuizAnswer(item: LessonPractice, raw: string): boolean {
   const question: Question =
     (item.choices?.length ?? 0) > 0
@@ -209,13 +204,14 @@ export function judgeQuizAnswer(item: LessonPractice, raw: string): boolean {
   return judgeAnswer(question, raw)
 }
 
-export const REVIEW_INTERVALS = [1, 3, 7, 14]
+export const MAX_REVIEW_STAGE = 4
 
 // 复习阶梯推进：通过 stage+1 封顶 4；失败 stage-1 不低于 1。
+// 阶梯现在只用于展示与旧数据迁移；排期由 scheduler 的稳定性驱动。
 // 旧数据无 review_stage 时：通过按首次复习（新 stage=1），失败停在第 1 阶。
 export function stepReviewStage(previous: Mastery[string] | undefined, passed: boolean): number {
   const stage = previous?.review_stage
-  return passed ? Math.min((stage ?? 0) + 1, REVIEW_INTERVALS.length) : Math.max((stage ?? 2) - 1, 1)
+  return passed ? Math.min((stage ?? 0) + 1, MAX_REVIEW_STAGE) : Math.max((stage ?? 2) - 1, 1)
 }
 
 // 兼容旧名：新建复习条目时的下一阶段（等价于"通过"路径）
@@ -223,41 +219,56 @@ export function nextReviewStage(previous: Mastery[string] | undefined): number {
   return stepReviewStage(previous, true)
 }
 
+// 单元小测/大考/实践共用：实测分数更新掌握度与记忆状态。
+// 排期由 stability 驱动（隔得越久、表现越好，下次间隔越长）；weak 不进复习队列，由计划指针补救。
 export function updateMasteryForNode(mastery: Mastery | undefined, node: string, quizScore: number, today: string): Mastery {
   const previous = mastery?.[node]
   const status = statusForScore(quizScore)
   if (status === 'weak') {
     return {
       ...mastery,
-      [node]: { status, score: quizScore },
+      [node]: { status, score: quizScore, last_touched_at: today },
     }
   }
   const stage = nextReviewStage(previous)
+  const grade = gradeForScore(quizScore)
+  const elapsed = previous?.last_touched_at !== undefined ? daysBetween(previous.last_touched_at, today) : undefined
+  const stability = nextStability(stabilityOf(previous), grade, elapsed)
   return {
     ...mastery,
     [node]: {
       status,
       score: quizScore,
-      review_due: addDays(today, REVIEW_INTERVALS[stage - 1]),
+      review_due: addDays(today, intervalDays(stability)),
       review_stage: stage,
+      stability,
+      last_touched_at: today,
+      ...(previous?.lapses !== undefined ? { lapses: previous.lapses } : {}),
     },
   }
 }
 
-// 复习小测结果（SM-2 简化版）：答对升阶，答错回退一级但保留在复习队列里（按新 stage 重新排期）
+// 复习小测结果：答对按评分扩张间隔，答错衰减稳定性并次日重试（保留在复习队列里，不清队列）。
 export function applyReviewResult(mastery: Mastery, node: string, quizScore: number, today: string): Mastery {
   const previous = mastery[node]
   const passed = quizScore >= 0.5
   const score = passed ? Math.max(previous.score ?? 0, quizScore) : quizScore
   const status = statusForScore(score)
   const stage = stepReviewStage(previous, passed)
+  const grade = gradeForScore(quizScore)
+  const elapsed = previous.last_touched_at !== undefined ? daysBetween(previous.last_touched_at, today) : undefined
+  const stability = nextStability(stabilityOf(previous), grade, elapsed)
+  const lapses = grade === 'again' ? (previous.lapses ?? 0) + 1 : previous.lapses
   return {
     ...mastery,
     [node]: {
       status,
       score,
-      review_due: addDays(today, REVIEW_INTERVALS[stage - 1]),
+      review_due: addDays(today, passed ? intervalDays(stability) : RETRY_INTERVAL_DAYS),
       review_stage: stage,
+      stability,
+      last_touched_at: today,
+      ...(lapses !== undefined ? { lapses } : {}),
     },
   }
 }

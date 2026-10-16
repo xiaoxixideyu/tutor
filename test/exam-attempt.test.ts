@@ -75,7 +75,7 @@ it('掌握度写入后计划写入中断，恢复只推进一次复习阶梯并�
   assert.equal(result.date, '2026-10-08')
   assert.equal(result.score, 1)
   assert.equal(result.after.mastery.topic.review_stage, 2)
-  assert.equal(result.after.mastery.topic.review_due, '2026-10-11')
+  assert.equal(result.after.mastery.topic.review_due, '2026-10-10')
   assert.equal((store.read('alpha', 'plan') as Plan).milestones[0].exam_passed, true)
   const completed = attempts.read()!
   assert.equal(completed.status, 'completed')

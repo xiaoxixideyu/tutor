@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { CourseStore } from '../src/core/store.ts'
 import { createRpcMethods, handleRpcRequest, type RpcRequest } from '../src/core/rpc.ts'
+import { appendMasteryEvent, readMasteryEvents } from '../src/core/events.ts'
 import type { KnowledgeMap, Mastery, Profile, QuestionBank, ReviewResult } from '../src/core/schema.ts'
 import { bankContent } from '../src/core/content-quality.ts'
 import { approveFixture } from './fixtures/quality.ts'
@@ -221,6 +222,46 @@ describe('复习 RPC：reviewQuestions / submitReview', () => {
     assert.throws(() => methods.applyReview({ id: 'alpha', node: 'a1', score: NaN }), /0-1/)
     methods.applyReview({ id: 'alpha', node: 'a1', score: 1 })
     assert.throws(() => methods.applyReview({ id: 'alpha', node: 'a1', score: 1, today: '2099-01-01' }), /尚未到/)
+  })
+
+  it('submitReview 写错因档案与事件流；重复提交不重复记录', () => {
+    const store = makeStore()
+    seedReview(store)
+    const params = { id: 'alpha', node: 'a1', attemptId: attemptId(store), answers: ['B', '错'] }
+    createRpcMethods(store, today).submitReview(params)
+    const notesFile = path.join(store.root, 'alpha', 'learner-notes.json')
+    const notes = JSON.parse(fs.readFileSync(notesFile, 'utf8')) as { errors: Record<string, { your: string }[]> }
+    assert.equal(notes.errors.a1.length, 2)
+    const events = readMasteryEvents(store.root, 'alpha')
+    assert.equal(events.length, 1)
+    assert.equal(events[0].kind, 'review')
+    assert.equal(events[0].passed, false)
+    createRpcMethods(store, today).submitReview(params)
+    const again = JSON.parse(fs.readFileSync(notesFile, 'utf8')) as { errors: Record<string, unknown[]> }
+    assert.equal(again.errors.a1.length, 2)
+    assert.equal(readMasteryEvents(store.root, 'alpha').length, 1)
+  })
+
+  it('masteryHistory 聚合事件流；旧课程优雅降级为空', () => {
+    const store = makeStore()
+    seedStore(store)
+    const methods = createRpcMethods(store, today)
+    const empty = methods.masteryHistory({ id: 'alpha' }) as { activity: { count: number }[]; nodes: unknown[] }
+    assert.equal(empty.activity.length, 30)
+    assert.equal(empty.nodes.length, 0)
+    appendMasteryEvent(store.root, 'alpha', { key: 'quiz:s1', at: '2026-09-18', node: 'a1', kind: 'quiz', score: 1, passed: true })
+    const history = methods.masteryHistory({ id: 'alpha', days: 7 }) as {
+      activity: { date: string; count: number }[]
+      pace: { sessions: number }
+      nodes: { node: string }[]
+    }
+    assert.equal(history.activity.length, 7)
+    assert.equal(history.activity.at(-1)!.date, '2026-09-19')
+    assert.equal(history.activity.at(-1)!.count, 0)
+    assert.equal(history.activity.at(-2)!.date, '2026-09-18')
+    assert.equal(history.activity.at(-2)!.count, 1)
+    assert.equal(history.pace.sessions, 1)
+    assert.deepEqual(history.nodes.map((item) => item.node), ['a1'])
   })
 })
 

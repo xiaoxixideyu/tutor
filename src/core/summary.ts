@@ -5,6 +5,7 @@ import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile, QuestionBa
 import type { MasteryStatusId } from './schema.ts'
 import { ResearchProgressStore } from './research.ts'
 import { QualityStore } from './quality-store.ts'
+import { memoryCard } from './scheduler.ts'
 import { mapContent, bankContent, planContent, type ContentInput } from './content-quality.ts'
 
 export interface ProgressNode {
@@ -13,6 +14,8 @@ export interface ProgressNode {
   status: MasteryStatusId
   score?: number
   review_due?: string
+  // 今日记忆保留率估计（仅在存有实测锚点时给出）：看板据此提示"可能已生锈"。
+  retention?: number
   practiceCount: number
   researchStatus?: 'pending' | 'saved' | 'verified'
 }
@@ -72,7 +75,7 @@ export interface CourseReviewDue {
 
 const EMPTY_COUNTS: Record<MasteryStatusId, number> = { mastered: 0, learning: 0, weak: 0, unknown: 0 }
 
-export function courseProgress(store: CourseStore, id: string): CourseProgress {
+export function courseProgress(store: CourseStore, id: string, today = new Date().toISOString().slice(0, 10)): CourseProgress {
   if (!store.exists(id)) throw new Error(`课程 "${id}" 不存在`)
   const profile = store.has(id, 'profile') ? (store.read(id, 'profile') as Profile) : undefined
   const map = store.has(id, 'knowledge-map') ? (store.read(id, 'knowledge-map') as KnowledgeMap) : undefined
@@ -98,6 +101,7 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
     const entry = mastery?.[nodeId]
     const mapNode = map?.nodes.find(node => node.id === nodeId)
     const researchStatus = mapNode && map && profile ? research.status(map, profile, nodeId) : undefined
+    const card = entry ? memoryCard(entry, today) : undefined
     return {
       id: nodeId,
       ...(titles.has(nodeId) ? { title: titles.get(nodeId) } : {}),
@@ -106,6 +110,7 @@ export function courseProgress(store: CourseStore, id: string): CourseProgress {
       ...(researchStatus ? { researchStatus } : {}),
       ...(entry?.score !== undefined ? { score: entry.score } : {}),
       ...(entry?.review_due !== undefined ? { review_due: entry.review_due } : {}),
+      ...(card !== undefined ? { retention: card.retention } : {}),
     }
   })
   const counts = { ...EMPTY_COUNTS }

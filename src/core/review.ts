@@ -1,4 +1,4 @@
-import { addDays } from './assessment.ts'
+import { addDays, daysBetween, memoryCard, stabilityOf } from './scheduler.ts'
 import { createHash } from 'node:crypto'
 import type { Mastery, MasteryEntry, Question, QuestionBank } from './schema.ts'
 
@@ -11,12 +11,27 @@ export interface DueReview {
   node: string
   stage: number
   review_due: string
+  // 逾期天数与今日可提取性估计（仅在有实测锚点时给出），供提醒、界面与调度参考。
+  overdue_days: number
+  stability?: number
+  retention?: number
 }
 
 export function dueReviews(mastery: Mastery, today: string): DueReview[] {
   return Object.entries(mastery)
     .filter(([, entry]) => entry.review_due !== undefined && entry.review_due <= today)
-    .map(([node, entry]) => ({ node, stage: entry.review_stage ?? 1, review_due: entry.review_due! }))
+    .map(([node, entry]) => {
+      const stability = stabilityOf(entry)
+      const card = memoryCard(entry, today)
+      return {
+        node,
+        stage: entry.review_stage ?? 1,
+        review_due: entry.review_due!,
+        overdue_days: Math.max(0, daysBetween(entry.review_due!, today)),
+        ...(stability !== undefined ? { stability } : {}),
+        ...(card !== undefined ? { retention: card.retention } : {}),
+      }
+    })
     .sort((a, b) => a.review_due.localeCompare(b.review_due))
 }
 
