@@ -42,4 +42,6 @@ func Clone(src []int) []int {
 
 CSV 中实际经过时间和额外复习都照实记录。原始答案、页面问题与错误事实的截图存到本人的 `data/trials/<代号>/observations/`。评估者提示的题目在 `hints` 记录题号和内容；未参加跨日测量标为缺测，不补成 0 分或推断通过。
 
+课堂观察列（`self_assessment_pct`、`quiz_score_pct`、`warmup_correct/total`、`interleave_correct/total`、`soft_gate_choice`）在 `measurement=lesson-1|lesson-2` 行填写，测试行留空：自评把握取学员小测前自己填的 0–100 数字（系统提示"回车跳过"时未填记缺测），小测得分用系统得分；热身与旧知识回访记录答对/总数；软门选择记录 `先复习` 或 `c继续`。自评与实际偏差是校准数据，不用于给参加者打分。
+
 各次得分至少 6/8 且没有把切片赋值当独立复制、或把补集写成有重叠的事件，可作为下一轮试学的探索性目标。报告必须同时展示每道题和关键概念错误；不能仅凭系统 mastered、流程跑完或总分上升宣称教学有效。
