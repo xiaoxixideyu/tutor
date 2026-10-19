@@ -12,6 +12,9 @@ interface ModelConfig {
   contextWindow: number
   researchDeadlineMs: number
   requestsPerMinute: number
+  // 教研搜索（可选）：MCP over HTTP 地址与访问令牌。留空表示未在网页配置，回退 .env/环境变量。
+  searchMcpUrl: string
+  searchToken: string
 }
 
 interface SavedModelConfig extends ModelConfig {
@@ -43,6 +46,17 @@ function baseUrl(value: unknown): string {
   return url.toString().replace(/\/+$/, '')
 }
 
+function optionalSearchUrl(value: unknown): string {
+  if (value === undefined || value === null || value === '') return ''
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048) throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址')
+  let url: URL
+  try { url = new URL(value.trim()) } catch { throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址') }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new ModelConfigError('搜索服务地址仅支持 HTTP/HTTPS，不能包含账号、密码、查询参数或片段')
+  }
+  return url.toString().replace(/\/+$/, '')
+}
+
 function validate(value: Record<string, unknown>): ModelConfig {
   const url = baseUrl(value.baseUrl)
   if (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256 || /[\s\x00-\x1f\x7f]/.test(value.model.trim())) {
@@ -68,7 +82,11 @@ function validate(value: Record<string, unknown>): ModelConfig {
   if (typeof requestsPerMinute !== 'number' || !Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 600) {
     throw new ModelConfigError('每分钟请求数必须是 1–600 之间的整数')
   }
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs, requestsPerMinute }
+  const searchMcpUrl = optionalSearchUrl(value.searchMcpUrl)
+  const searchToken = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
+  if (searchToken.length > 8192 || /[\s\x00-\x1f\x7f]/.test(searchToken)) throw new ModelConfigError('搜索服务 Token 不合法')
+  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs, requestsPerMinute,
+    searchMcpUrl, searchToken }
 }
 
 export class ModelConfigStore {
@@ -88,6 +106,8 @@ export class ModelConfigStore {
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
       researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
       requestsPerMinute: Number(this.env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
+      searchMcpUrl: (this.env.TUTOR_MCP_SEARCH_URL ?? '').replace(/\/+$/, ''),
+      searchToken: this.env.TUTOR_MCP_SEARCH_TOKEN ?? '',
     }
   }
 
@@ -98,9 +118,13 @@ export class ModelConfigStore {
       throw new ModelConfigError('无法读取已保存的模型设置，请检查本机文件权限')
     }
     try {
-      const saved = JSON.parse(text) as SavedModelConfig
+      const saved = JSON.parse(text) as SavedModelConfig & { searchMcpUrl?: string; searchToken?: string }
       if (!saved || saved.version !== 1 || typeof saved.updatedAt !== 'string') throw new Error('invalid version')
-      return { config: validate({ ...saved }), source: 'saved', updatedAt: saved.updatedAt }
+      // 旧版保存文件没有搜索字段；空值视为"未在网页配置"，回填环境变量里的搜索配置，
+      // 让网页始终显示实际生效的搜索服务（清空网页字段即回退 .env）。
+      return { config: validate({ ...saved,
+        searchMcpUrl: saved.searchMcpUrl || this.defaults.searchMcpUrl,
+        searchToken: saved.searchToken || this.defaults.searchToken }), source: 'saved', updatedAt: saved.updatedAt }
     } catch {
       // JSON/YAML 解析错误可能带原文，不把含密钥的配置片段返回给页面。
       throw new ModelConfigError('已保存的模型设置损坏，未回退到其他渠道；请检查本机配置文件')
@@ -110,7 +134,8 @@ export class ModelConfigStore {
   publicConfig() {
     const { config, source, updatedAt } = this.read()
     return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow, researchDeadlineMs: config.researchDeadlineMs, requestsPerMinute: config.requestsPerMinute,
-      apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt }
+      apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt,
+      searchMcpUrl: config.searchMcpUrl, searchTokenSet: Boolean(config.searchToken), searchConfigured: Boolean(config.searchMcpUrl && config.searchToken) }
   }
 
   save(input: unknown) {
@@ -123,7 +148,15 @@ export class ModelConfigStore {
     let previousUrl = previous.baseUrl
     try { if (previousUrl) previousUrl = baseUrl(previousUrl) } catch { /* 旧环境地址可由网页修正 */ }
     if (!replacement && nextUrl !== previousUrl) throw new ModelConfigError('更换服务地址时，请填写新渠道的 API Key；不会沿用旧渠道的密钥')
+    // 搜索服务同样处理换址：留空 Token 只在地址未变时沿用旧令牌。
+    const nextSearchUrl = value.searchMcpUrl === undefined ? previous.searchMcpUrl : optionalSearchUrl(value.searchMcpUrl)
+    const searchTokenInput = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
+    if (!searchTokenInput && nextSearchUrl && nextSearchUrl !== previous.searchMcpUrl) {
+      throw new ModelConfigError('更换搜索服务地址时，请填写新服务的 Token；不会沿用旧服务的令牌')
+    }
+    const searchToken = searchTokenInput || (nextSearchUrl === previous.searchMcpUrl ? previous.searchToken : '')
     const config = validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
+      searchMcpUrl: nextSearchUrl, searchToken,
       researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs,
       requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute })
     const saved: SavedModelConfig = { version: 1, ...config, updatedAt: new Date().toISOString() }
@@ -140,7 +173,7 @@ export class ModelConfigStore {
     return this.publicConfig()
   }
 
-  // 每次启动流程重新读取；复制为子进程环境，后续保存不会改动正在运行的模型会话。
+  // 每次调用重新读取文件：模型渠道与教研搜索在运行中按回合热更新（见 ChatRuntime.resolveModel / resolveSearch）。
   environment(): NodeJS.ProcessEnv {
     const current = this.read().config
     if (!current.baseUrl || !current.model || !current.apiKey) throw new ModelConfigError('请先在“模型设置”中填写服务地址、模型名称和 API Key')
@@ -148,6 +181,8 @@ export class ModelConfigStore {
     return { ...this.env, TUTOR_LLM_BASE_URL: config.baseUrl, TUTOR_LLM_MODEL: config.model,
       TUTOR_LLM_API_KEY: config.apiKey, TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
       TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs),
-      TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute), TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile, TUTOR_MODEL_CONFIG_RESOLVED: '1' }
+      TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute), TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile, TUTOR_MODEL_CONFIG_RESOLVED: '1',
+      // 网页配置过搜索服务时覆盖环境变量；清空后回退 .env/环境变量的搜索配置。
+      ...(config.searchMcpUrl && config.searchToken ? { TUTOR_MCP_SEARCH_URL: config.searchMcpUrl, TUTOR_MCP_SEARCH_TOKEN: config.searchToken } : {}) }
   }
 }

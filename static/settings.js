@@ -21,6 +21,22 @@ function updateKeyHint() {
     : current.apiKeySet ? '已配置密钥；留空继续使用，输入新值可更换。已保存的密钥不会回显。' : '密钥保存在本机，保存后不会回显到页面。'
 }
 
+function updateSearchHint() {
+  if (!current) return
+  let nextUrl = $('searchMcpUrl').value.trim().replace(/\/+$/, '')
+  try { nextUrl = new URL(nextUrl).toString().replace(/\/+$/, '') } catch { /* 输入中，保存时校验 */ }
+  let previousUrl = current.searchMcpUrl
+  try { previousUrl = new URL(previousUrl).toString().replace(/\/+$/, '') } catch { /* 尚未配置 */ }
+  const changed = nextUrl !== previousUrl
+  $('searchKeyState').hidden = changed || !current.searchTokenSet
+  $('searchToken').placeholder = changed ? '填写新搜索服务的 Token'
+    : current.searchTokenSet ? '留空继续使用已配置的 Token' : '填写该搜索服务的 Token（如 th-…）'
+  $('searchKeyHint').textContent = changed
+    ? '搜索服务地址已修改，请填写新服务的 Token；留空表示不修改搜索配置。'
+    : current.searchTokenSet ? '已配置搜索 Token；留空继续使用，输入新值可更换。保存后在下一回合生效。'
+      : 'Tavily Hikari 使用 th- 开头的访问令牌；密钥保存在本机，保存后不会回显。'
+}
+
 function populate(config) {
   current = config
   $('baseUrl').value = config.baseUrl
@@ -32,8 +48,13 @@ function populate(config) {
   $('apiKey').value = ''
   $('apiKey').placeholder = config.apiKeySet ? '留空继续使用已配置的密钥' : '填写该渠道的 API Key'
   $('keyState').hidden = !config.apiKeySet
+  $('searchMcpUrl').value = config.searchMcpUrl ?? ''
+  $('searchToken').value = ''
+  $('searchToken').placeholder = config.searchTokenSet ? '留空继续使用已配置的 Token' : '填写该搜索服务的 Token（如 th-…）'
+  $('searchKeyState').hidden = !config.searchTokenSet
   $('saved').textContent = config.updatedAt ? `上次保存：${new Date(config.updatedAt).toLocaleString()}` : config.configured ? '已读取当前服务配置' : '请先配置模型服务'
   updateKeyHint()
+  updateSearchHint()
 }
 
 async function request(options) {
@@ -46,11 +67,13 @@ async function request(options) {
 }
 
 $('baseUrl').addEventListener('input', updateKeyHint)
+$('searchMcpUrl').addEventListener('input', updateSearchHint)
 $('form').addEventListener('submit', async (event) => {
   event.preventDefault()
   const config = { baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
     thinking: $('thinking').value, contextWindow: Number($('contextWindow').value), requestsPerMinute: Number($('requestsPerMinute').value),
-    researchDeadlineMs: Number($('researchMinutes').value) * 60000 }
+    researchDeadlineMs: Number($('researchMinutes').value) * 60000,
+    searchMcpUrl: $('searchMcpUrl').value.trim(), searchToken: $('searchToken').value.trim() }
   $('fields').disabled = true
   $('save').textContent = '保存中…'
   try {

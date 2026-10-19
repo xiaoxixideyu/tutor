@@ -58,6 +58,16 @@
         <input id="apiKey" type="password" placeholder="填写该渠道的 API Key" autocomplete="new-password" spellcheck="false" maxlength="8192">
         <p id="keyHint" class="hint">密钥保存在本机，保存后不会回显到页面。</p>
       </div>
+      <div class="field">
+        <label for="searchMcpUrl">教研搜索 MCP 地址（可选）</label>
+        <input id="searchMcpUrl" type="url" placeholder="https://tavily.ivanli.cc/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
+        <p class="hint">联网教研的搜索服务（MCP over HTTP）。Tavily Hikari 填 <code>https://&lt;host&gt;/mcp</code>；留空沿用 .env 的 TUTOR_MCP_SEARCH_URL。</p>
+      </div>
+      <div class="field">
+        <label for="searchToken">搜索服务 Token <span id="searchKeyState" class="key-state" hidden>已配置</span></label>
+        <input id="searchToken" type="password" placeholder="填写该搜索服务的 Token" autocomplete="new-password" spellcheck="false" maxlength="8192">
+        <p id="searchKeyHint" class="hint">Tavily Hikari 使用 th- 开头的访问令牌；密钥保存在本机，保存后不会回显。</p>
+      </div>
       <details>
         <summary>高级设置</summary>
         <div class="field">

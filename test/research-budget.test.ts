@@ -62,3 +62,19 @@ it('同一步的传输恢复不消耗内容轮数，也不提前剥夺工具；�
   budget.startRequest('2:1')
   assert.throws(() => budget.checkRequest('2:2'), ResearchBudgetError)
 })
+
+it('兼容连字符命名：Tavily Hikari 的 search/extract 计入预算，未知工具不暴露', () => {
+  const budget = new ResearchBudget()
+  budget.startRequest()
+  assert.equal(budget.claim('mcp__searchix__tavily-search'), undefined)
+  assert.equal(budget.searches, 1)
+  assert.equal(budget.claim('mcp__searchix__tavily-extract'), undefined)
+  assert.equal(budget.fetches, 1)
+  // extract 与 web_fetch 共用抓取预算
+  assert.equal(budget.claim('web_fetch'), undefined)
+  assert.equal(budget.fetches, 2)
+  assert.ok(budget.claim('web_fetch'))
+  // crawl 等未分类工具不暴露
+  assert.equal(budget.available('mcp__searchix__tavily-crawl'), false)
+  assert.ok(budget.claim('mcp__searchix__tavily-crawl'))
+})

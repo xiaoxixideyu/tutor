@@ -8,7 +8,7 @@ import { ModelWaitClock, ModelWaitTimeoutError, TurnTimeoutError, turnTimeoutMs,
 import { ResearchBudget } from './budget.ts'
 import { SessionLog } from './session.ts'
 import { openaiTransport, type ApiMessage, type ApiToolCall, type ApiToolDef, type LlmFailure, type LlmRequest, type LlmResult, type LlmTransport } from './llm.ts'
-import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, webFetch, type ResearchTools } from './tools.ts'
+import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings } from './tools.ts'
 import type { ResearchStatusSink } from './status.ts'
 
 export interface ModelSettings {
@@ -98,6 +98,9 @@ export interface ChatRuntimeOptions {
   transportFactory?: (settings: ModelSettings) => LlmTransport
   limiterFactory?: (settings: ModelSettings) => ModelRateLimiter
   researchTools?: ResearchTools
+  // 教研搜索同样按回合解析：保存新搜索服务后，教研流程下一步即可用（缺省沿用启动环境快照）。
+  resolveSearch?: () => SearchSettings | undefined
+  researchToolsFactory?: (settings: SearchSettings) => ResearchTools
   signal?: AbortSignal
   observe?: (event: AttemptObservation) => void
   maxModelRequests?: number
@@ -153,6 +156,11 @@ export class ChatRuntime {
     return this.channel(settings).limiter
   }
 
+  // 当前搜索服务：宿主注入 resolveSearch 时每回合读取最新设置，否则用启动环境快照。
+  searchNow(): SearchSettings | undefined {
+    return this.options.resolveSearch ? this.options.resolveSearch() : searchSettingsFromEnv(this.env)
+  }
+
   async createChat(options: CreateChatOptions = {}): Promise<AgentChat | null> {
     if (options.resumeSessionId && options.isolatedSystemPrompt) throw new Error('独立审查禁止恢复历史会话')
     if (options.resumeSessionId) {
@@ -174,7 +182,7 @@ class Chat implements AgentChat {
   private readonly maxWaitMs: number
   private readonly waiting = new ModelWaitClock()
   private readonly research?: ResearchBudget
-  private readonly researchTools?: ResearchTools
+  private toolsCache?: { key: string; tools: ResearchTools }
   private readonly fetchImpl: typeof fetch
   private streamTicks = 0
   private turn = 0
@@ -195,9 +203,6 @@ class Chat implements AgentChat {
     this.deadline = requestDeadline(chatOptions, runtime.env)
     this.maxWaitMs = chatOptions.maxWaitMs ?? MODEL_RECOVERY_LIMITS.waitingMs
     this.research = chatOptions.tools === 'research' && !chatOptions.isolatedSystemPrompt ? new ResearchBudget(message => this.progress(message)) : undefined
-    this.researchTools = this.research
-      ? options.researchTools ?? createResearchTools(runtime.env, message => this.progress(message))
-      : undefined
     this.fetchImpl = fetch
     for (const event of this.log.events) {
       if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') continue
@@ -245,16 +250,31 @@ class Chat implements AgentChat {
     this.turnUsage = addUsage(this.turnUsage, normalized)
   }
 
+  // 搜索工具按当前搜索设置解析：设置变化时重建（下一步即用新服务），旧连接丢弃。
+  private researchToolsNow(): ResearchTools | undefined {
+    if (!this.research) return undefined
+    if (this.options.researchTools) return this.options.researchTools
+    const settings = this.runtime.searchNow()
+    if (!settings) return undefined
+    const key = `${settings.url}\n${settings.token}`
+    if (this.toolsCache?.key !== key) {
+      void this.toolsCache?.tools.close().catch(() => {})
+      this.toolsCache = { key, tools: this.options.researchToolsFactory?.(settings) ?? createResearchTools(settings, message => this.progress(message)) }
+    }
+    return this.toolsCache.tools
+  }
+
   private async advertisedTools(requestKey: string): Promise<ApiToolDef[]> {
-    if (!this.research || !this.researchTools) return []
-    const definitions = [WEB_FETCH_TOOL, ...(await this.researchTools.definitions())]
+    if (!this.research) return []
+    const tools = this.researchToolsNow()
+    const definitions = tools ? [WEB_FETCH_TOOL, ...(await tools.definitions())] : [WEB_FETCH_TOOL]
     return definitions.filter(tool => this.research!.available(tool.name, !this.research!.hasRequest(requestKey)))
   }
 
   private async executeTool(call: ApiToolCall, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
     const name = call.function.name
     const allowed = name === 'web_fetch' || name.startsWith(MCP_SEARCH_PREFIX)
-    if (!allowed || !this.research || !this.researchTools) {
+    if (!allowed || !this.research) {
       return { text: '教学内容必须通过 runner 审查后发布，禁止模型调用此工具', isError: true }
     }
     const denial = this.research.claim(name)
@@ -265,7 +285,9 @@ class Chat implements AgentChat {
       try { url = String((JSON.parse(call.function.arguments || '{}') as { url?: unknown }).url ?? '') } catch { /* 参数非法按空 URL 处理 */ }
       result = await webFetch(url, signal, this.fetchImpl)
     } else {
-      result = await this.researchTools.call(name, call.function.arguments, signal)
+      const tools = this.researchToolsNow()
+      if (!tools) return { text: '搜索服务未配置或暂不可用，请使用 web_fetch 或依据已有资料收束。', isError: true }
+      result = await tools.call(name, call.function.arguments, signal)
     }
     const blocks = this.research.result(name, [{ type: 'text', text: result.text }], result.isError)
     return { text: blocks.map(block => block.text).join('\n'), isError: result.isError }
@@ -517,6 +539,9 @@ class Chat implements AgentChat {
   }
 
   async flush(): Promise<void> {
-    await this.researchTools?.close()
+    const cache = this.toolsCache
+    this.toolsCache = undefined
+    try { await cache?.tools.close() } catch { /* 连接已断开 */ }
+    try { await this.options.researchTools?.close() } catch { /* 测试替身 */ }
   }
 }

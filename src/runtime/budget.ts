@@ -1,3 +1,5 @@
+import { MCP_SEARCH_PREFIX } from './tools.ts'
+
 export interface TextContentBlock {
   type: 'text'
   text: string
@@ -28,9 +30,12 @@ export class ResearchBudget {
 
   constructor(progress: (message: string) => void = () => {}) { this.progress = progress }
 
+  // 工具分类同时兼容下划线与连字符命名（searchix 用 *_search；Tavily Hikari 用 tavily-search）。
+  // extract 类工具按正文抓取计费（与 web_fetch 共用抓取预算），其余工具不暴露。
   private kind(name: string): 'search' | 'fetch' | undefined {
-    if (name.startsWith('mcp__searchix__') && name.endsWith('_search')) return 'search'
-    if (name === 'web_fetch') return 'fetch'
+    const bare = name.startsWith(MCP_SEARCH_PREFIX) ? name.slice(MCP_SEARCH_PREFIX.length) : name
+    if (/(^|[_-])search$/.test(bare)) return 'search'
+    if (name === 'web_fetch' || /(^|[_-])extract$/.test(bare)) return 'fetch'
     return undefined
   }
 

@@ -187,3 +187,38 @@ it('模型设置热更新：下一回合用新渠道，渠道按设置缓存且�
   fixedRuntime.modelNow()
   assert.equal(await (await fixedRuntime.createChat())!.ask('请求'), '固定通道')
 })
+
+it('搜索服务热更新：下一步用新 MCP 设置，工具按设置缓存不重建', async (t) => {
+  const root = tmp(t)
+  let current: { url: string; token: string } | undefined
+  const built: string[] = []
+  const requests: LlmRequest[] = []
+  const runtime = new ChatRuntime({
+    model: MODEL, sessionsRoot: root, workspace: root,
+    env: { ...process.env, TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'limits.sqlite') },
+    transport: queueTransport([stop(undefined, '无工具回合'), stop(undefined, '新搜索服务回合'), stop(undefined, '复用回合')], (request) => requests.push(request)),
+    rateLimiter: new DisabledLimiter() as never,
+    resolveSearch: () => current,
+    researchToolsFactory: (settings) => {
+      built.push(settings.url)
+      return {
+        definitions: async () => [{ name: 'mcp__searchix__probe-search', description: 'probe', parameters: { type: 'object', properties: {} } }],
+        call: async () => ({ text: 'ok', isError: false }),
+        close: async () => {},
+      }
+    },
+  })
+  const chat = (await runtime.createChat({ tools: 'research' }))!
+  // 初始没有搜索配置：只广告 web_fetch
+  await chat.ask('一')
+  assert.deepEqual((requests[0].tools ?? []).map((tool) => tool.name), ['web_fetch'])
+  // 保存新搜索服务：下一步立即生效（无需新流程）
+  current = { url: 'https://search-a.invalid/mcp', token: 'tok-a' }
+  await chat.ask('二')
+  assert.deepEqual((requests[1].tools ?? []).map((tool) => tool.name), ['web_fetch', 'mcp__searchix__probe-search'])
+  assert.deepEqual(built, ['https://search-a.invalid/mcp'])
+  // 设置未变：工具复用，不重复重建
+  await chat.ask('三')
+  assert.deepEqual(built, ['https://search-a.invalid/mcp'])
+  await chat.flush()
+})

@@ -78,10 +78,23 @@ export interface ResearchTools {
   close(): Promise<void>
 }
 
-// searchix 搜索服务：延迟连接；连接失败时不暴露搜索工具（web_fetch 仍可用），不使整个流程失败。
-export function createResearchTools(env: NodeJS.ProcessEnv, onNotice: (message: string) => void = () => {}): ResearchTools {
+export interface SearchSettings {
+  url: string
+  token: string
+}
+
+// 从环境变量解析搜索服务（网页保存的配置会映射到这两个变量，优先于 .env；同名时以传入 env 为准）。
+export function searchSettingsFromEnv(env: NodeJS.ProcessEnv): SearchSettings | undefined {
   const url = env.TUTOR_MCP_SEARCH_URL
   const token = env.TUTOR_MCP_SEARCH_TOKEN
+  return url && token ? { url, token } : undefined
+}
+
+// searchix / Tavily Hikari 等搜索服务：MCP over HTTP，延迟连接；
+// 连接失败时不暴露搜索工具（web_fetch 仍可用），不使整个流程失败。
+export function createResearchTools(settings: SearchSettings, onNotice: (message: string) => void = () => {}): ResearchTools {
+  const url = settings.url
+  const token = settings.token
   let client: Client | undefined
   let definitions: ApiToolDef[] | undefined
   let failed = false

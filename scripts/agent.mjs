@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { createCliIO } from '../src/flows/io.ts'
 import { runFlowInProcess, resolveFlowEnv, modelSettingsFromEnv } from '../src/flows/run.ts'
+import { searchSettingsFromEnv } from '../src/runtime/tools.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -94,8 +95,9 @@ async function main() {
   }
   const code = await runFlowInProcess({ kind, courseId, ...(milestoneId ? { milestoneId } : {}), ...(nodeId ? { nodeId } : {}) }, io, {
     root, env,
-    // 与网页宿主一致：保存的模型设置对进行中的流程在下一回合生效（CLI 每次重新解析 .env/网页配置）。
+    // 与网页宿主一致：保存的模型/搜索设置对进行中的流程在下一回合生效（CLI 每次重新解析 .env/网页配置）。
     resolveModel: () => modelSettingsFromEnv(resolveFlowEnv(root, process.env)),
+    resolveSearch: () => { try { return searchSettingsFromEnv(resolveFlowEnv(root, process.env)) } catch { return undefined } },
   })
   process.exit(code)
 }

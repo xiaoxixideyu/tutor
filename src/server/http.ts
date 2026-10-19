@@ -8,6 +8,7 @@ import type { KnowledgeMap } from '../core/schema.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { FlowExit, createLineQueue, type FlowIO, type LineQueue } from '../flows/io.ts'
 import { modelSettingsFromEnv, runFlowInProcess } from '../flows/run.ts'
+import { searchSettingsFromEnv } from '../runtime/tools.ts'
 
 export const FLOW_PROTOCOL_VERSION = 1
 const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice', 'audit-content'])
@@ -87,8 +88,14 @@ export function createTutorServer(options: TutorServerOptions) {
   const runFlow: FlowRunner = options.runFlow ?? ((input, io, env) => runFlowInProcess(
     { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}) },
     io,
-    // 模型设置热更新：进行中的流程每个回合读取最新保存的配置（practice 零模型，不接渠道）。
-    { root, env, ...(input.kind === 'practice' ? {} : { resolveModel: () => modelSettingsFromEnv(models.environment()) }) }))
+    // 模型与搜索设置均按回合热更新：进行中的流程读取最新保存的配置（practice 零模型，不接渠道）。
+    {
+      root, env,
+      ...(input.kind === 'practice' ? {} : {
+        resolveModel: () => modelSettingsFromEnv(models.environment()),
+        resolveSearch: () => { try { return searchSettingsFromEnv(models.environment()) } catch { return undefined } },
+      }),
+    }))
 
   function broadcast(flow: Flow, event: Record<string, unknown>): void {
     const payload = `data: ${JSON.stringify({ ...snapshot(flow), ...event })}\n\n`

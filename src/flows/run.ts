@@ -5,6 +5,7 @@ import path from 'node:path'
 import { CourseStore } from '../core/store.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { ChatRuntime, type AgentChat, type AttemptObservation, type CreateChatOptions, type ModelSettings } from '../runtime/chat.ts'
+import type { SearchSettings } from '../runtime/tools.ts'
 import { createResearchStatus } from '../runtime/status.ts'
 import { FlowExit, type FlowIO } from './io.ts'
 import type { FlowDeps, FlowInput } from './deps.ts'
@@ -37,6 +38,8 @@ export interface RunFlowOptions {
   maxModelRequests?: number
   // 每回合重新解析模型渠道（网页宿主：保存设置后进行中的流程下个回合生效）；缺省沿用启动快照。
   resolveModel?: () => ModelSettings
+  // 每回合重新解析教研搜索服务（MCP）；缺省沿用启动环境快照。
+  resolveSearch?: () => SearchSettings | undefined
 }
 
 export function personaFor(root: string, kind: string): string {
@@ -87,6 +90,7 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
       ...(options.observe ? { observe: options.observe } : {}),
       ...(options.maxModelRequests !== undefined ? { maxModelRequests: options.maxModelRequests } : {}),
       ...(options.resolveModel ? { resolveModel: options.resolveModel } : {}),
+      ...(options.resolveSearch ? { resolveSearch: options.resolveSearch } : {}),
     })
   }
   const createChat = async (chatOptions: CreateChatOptions = {}): Promise<AgentChat | null> => {

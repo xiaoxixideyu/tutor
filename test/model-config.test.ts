@@ -99,3 +99,34 @@ it('未配置模型时可读取空设置，但启动模型流程必须先完成�
   empty.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'local-model:latest', apiKey: 'local-placeholder' })
   assert.equal(empty.environment().TUTOR_LLM_MODEL, 'local-model:latest')
 })
+
+it('教研搜索可在网页配置：环境回显、密钥掩码、换址必须新 Token、清空回退环境', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-model-config-search-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const env = { TUTOR_MCP_SEARCH_URL: 'https://search.env.invalid/mcp', TUTOR_MCP_SEARCH_TOKEN: 'env-search-token' }
+  const store = new ModelConfigStore(root, { env })
+  // 无保存文件：直接回显环境里的搜索配置（网页可见 .env 已配置），但不回显 Token
+  const fromEnv = store.publicConfig()
+  assert.equal(fromEnv.searchMcpUrl, 'https://search.env.invalid/mcp')
+  assert.equal(fromEnv.searchTokenSet, true)
+  assert.equal(fromEnv.searchConfigured, true)
+  assert.ok(!JSON.stringify(fromEnv).includes('env-search-token'))
+  // 网页保存覆盖环境；地址尾部斜杠规范化
+  const saved = store.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'local', apiKey: 'local-key',
+    searchMcpUrl: 'https://tavily.ivanli.cc/mcp/', searchToken: 'th-secret' })
+  assert.equal(saved.searchMcpUrl, 'https://tavily.ivanli.cc/mcp')
+  assert.equal(store.environment().TUTOR_MCP_SEARCH_URL, 'https://tavily.ivanli.cc/mcp')
+  assert.equal(store.environment().TUTOR_MCP_SEARCH_TOKEN, 'th-secret')
+  // 换址未给 Token：拒绝且原文件保留
+  const previous = fs.readFileSync(store.file, 'utf8')
+  assert.throws(() => store.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'local', searchMcpUrl: 'https://other.invalid/mcp', searchToken: '' }), /搜索服务/)
+  assert.equal(fs.readFileSync(store.file, 'utf8'), previous)
+  // 同址留空 Token：沿用已保存 Token
+  const kept = store.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'local', searchMcpUrl: 'https://tavily.ivanli.cc/mcp', searchToken: '' })
+  assert.equal(kept.searchTokenSet, true)
+  // 清空网页搜索字段：回退环境变量里的搜索配置
+  const cleared = store.save({ baseUrl: 'http://127.0.0.1:11434/v1', model: 'local', searchMcpUrl: '', searchToken: '' })
+  assert.equal(cleared.searchMcpUrl, 'https://search.env.invalid/mcp')
+  assert.equal(store.environment().TUTOR_MCP_SEARCH_URL, 'https://search.env.invalid/mcp')
+  assert.equal(store.environment().TUTOR_MCP_SEARCH_TOKEN, 'env-search-token')
+})

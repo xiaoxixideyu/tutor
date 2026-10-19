@@ -83,7 +83,7 @@ npm run agent -- "..."          # 一次性 agent 任务
 - 网页模型设置：[使用说明](docs/model-settings.md)；保存在本机 `data/model-config.json`，后续网页和 CLI 模型流程共用；服务仅本机访问，端口可设 `TUTOR_SERVER_PORT`
 - 人格提示词：`config/persona/*.md`（各流程系统提示词，直接读取）
 - 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）
-- 联网教研（二期，可选）：`.env` 配置 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（MCP 搜索服务）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
+- 联网教研（二期，可选）：搜索服务可填在网页"模型设置 → 教研搜索"（MCP over HTTP，如 Tavily Hikari 的 `https://<host>/mcp`，保存后下一回合生效），也可继续用 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（网页保存的值优先）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
 - 会话日志：`data/sessions/<工作目录编码>/session-<uuid>/`（多帧 zstd JSONL `session.v3.jsonl.zstd` + `messages.jsonl`，勿手改；可用 `TUTOR_SESSIONS_ROOT` 更换根目录）
 - 实践执行：目前在本机子进程运行，提供超时与输出限制；`sandbox/` 是任务工作目录，尚无操作系统级文件与网络隔离
 

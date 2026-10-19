@@ -44,7 +44,9 @@ async function fixture(t: TestContext, broken = false) {
   for (const id of ['alpha', 'beta']) store.create(id, { goal: '测试课程' })
   const modelConfigFile = path.join(dir, 'model-config.json')
   const app = createTutorServer({ root, coursesRoot: dir, modelConfigFile, stopTimeoutMs: 100, today: () => '2026-10-08',
-    modelEnvironment: { TUTOR_LLM_BASE_URL: 'https://first.invalid/v1', TUTOR_LLM_MODEL: 'deepseek-fixture', TUTOR_LLM_API_KEY: 'fixture-private-key' },
+    // 显式清空搜索 MCP：避免仓库 .env 泄漏进测试，保证"未配置搜索"的断言稳定。
+    modelEnvironment: { TUTOR_LLM_BASE_URL: 'https://first.invalid/v1', TUTOR_LLM_MODEL: 'deepseek-fixture', TUTOR_LLM_API_KEY: 'fixture-private-key',
+      TUTOR_MCP_SEARCH_URL: '', TUTOR_MCP_SEARCH_TOKEN: '' },
     runFlow: (input, io, env) => { launches.push(env); return fakeFlow(input, io, broken) },
   })
   app.server.listen(0, '127.0.0.1')
@@ -331,4 +333,22 @@ it('内容重审以 audit-content 流程运行，作为课程身份的一部分�
   await events.wait((e) => e.text?.includes('启动 audit-content alpha'))
   await post('/flow/stop', { flowId: flow.flowId })
   await events.wait((e) => e.type === 'exit')
+})
+
+it('搜索服务可在网页配置并掩码：保存后不回显 Token，换址必须提供新 Token', async (t) => {
+  const { base, post } = await fixture(t)
+  const initial: any = await (await fetch(base + '/api/model-config')).json()
+  assert.equal(initial.config.searchConfigured, false)
+  const saved = await post('/api/model-config', { baseUrl: 'https://first.invalid/v1', model: 'deepseek-fixture', apiKey: '',
+    searchMcpUrl: 'https://tavily.ivanli.cc/mcp', searchToken: 'th-secret-token' })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.config.searchMcpUrl, 'https://tavily.ivanli.cc/mcp')
+  assert.equal(saved.body.config.searchTokenSet, true)
+  assert.ok(!JSON.stringify(saved.body).includes('th-secret-token'))
+  const after: any = await (await fetch(base + '/api/model-config')).json()
+  assert.equal(after.config.searchConfigured, true)
+  const refused = await post('/api/model-config', { baseUrl: 'https://first.invalid/v1', model: 'deepseek-fixture', apiKey: '',
+    searchMcpUrl: 'https://other.invalid/mcp', searchToken: '' })
+  assert.equal(refused.status, 400)
+  assert.match(refused.body.error, /Token/)
 })
