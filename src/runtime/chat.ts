@@ -92,6 +92,11 @@ export interface ChatRuntimeOptions {
   status?: ResearchStatusSink
   transport?: LlmTransport
   rateLimiter?: ModelRateLimiter
+  // 每回合重新解析模型渠道：网页保存新设置后，进行中的流程在下一回合生效；缺省沿用启动快照（CLI）。
+  resolveModel?: () => ModelSettings
+  // 渠道重建的注入点（测试/扩展）；固定的 transport/rateLimiter 优先于工厂与默认实现。
+  transportFactory?: (settings: ModelSettings) => LlmTransport
+  limiterFactory?: (settings: ModelSettings) => ModelRateLimiter
   researchTools?: ResearchTools
   signal?: AbortSignal
   observe?: (event: AttemptObservation) => void
@@ -110,20 +115,42 @@ function requestDeadline(options: CreateChatOptions, env: NodeJS.ProcessEnv): nu
 
 export class ChatRuntime {
   private readonly options: ChatRuntimeOptions
-  private readonly transport: LlmTransport
-  private readonly limiter: ModelRateLimiter
+  private readonly startupModel: ModelSettings
+  private cachedChannel?: { key: string; transport: LlmTransport; limiter: ModelRateLimiter }
   readonly env: NodeJS.ProcessEnv
 
   constructor(options: ChatRuntimeOptions) {
     this.options = options
+    this.startupModel = options.model
     this.env = options.env ?? process.env
-    this.transport = options.transport ?? openaiTransport({
-      baseUrl: options.model.baseUrl, apiKey: options.model.apiKey, model: options.model.model, thinking: options.model.thinking,
+  }
+
+  // 当前渠道设置：resolveModel 由宿主注入（网页宿主每次读取最新保存的配置）。
+  modelNow(): ModelSettings {
+    return this.options.resolveModel?.() ?? this.startupModel
+  }
+
+  // transport 与限速器按 (baseUrl, apiKey, model, thinking, rpm) 缓存；设置变化时整体重建。
+  private channel(settings: ModelSettings): { transport: LlmTransport; limiter: ModelRateLimiter } {
+    const key = [settings.baseUrl, settings.apiKey, settings.model, settings.thinking, settings.requestsPerMinute].join('\n')
+    if (this.cachedChannel?.key === key) return this.cachedChannel
+    const transport = this.options.transport ?? this.options.transportFactory?.(settings) ?? openaiTransport({
+      baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model, thinking: settings.thinking,
     })
-    this.limiter = options.rateLimiter ?? new ModelRateLimiter({
-      file: this.env.TUTOR_MODEL_RATE_LIMIT_FILE ?? `${options.sessionsRoot}/../model-rate-limits.sqlite`,
-      baseUrl: options.model.baseUrl, apiKey: options.model.apiKey, requestsPerMinute: options.model.requestsPerMinute,
+    const limiter = this.options.rateLimiter ?? this.options.limiterFactory?.(settings) ?? new ModelRateLimiter({
+      file: this.env.TUTOR_MODEL_RATE_LIMIT_FILE ?? `${this.options.sessionsRoot}/../model-rate-limits.sqlite`,
+      baseUrl: settings.baseUrl, apiKey: settings.apiKey, requestsPerMinute: settings.requestsPerMinute,
     })
+    this.cachedChannel = { key, transport, limiter }
+    return this.cachedChannel
+  }
+
+  transportNow(settings: ModelSettings = this.modelNow()): LlmTransport {
+    return this.channel(settings).transport
+  }
+
+  limiterNow(settings: ModelSettings = this.modelNow()): ModelRateLimiter {
+    return this.channel(settings).limiter
   }
 
   async createChat(options: CreateChatOptions = {}): Promise<AgentChat | null> {
@@ -131,19 +158,16 @@ export class ChatRuntime {
     if (options.resumeSessionId) {
       const log = SessionLog.load(this.options.sessionsRoot, this.options.workspace, options.resumeSessionId)
       if (!log) return null
-      return new Chat(this, this.options, this.transport, this.limiter, log, options)
+      return new Chat(this, this.options, log, options)
     }
-    return new Chat(this, this.options, this.transport, this.limiter, new SessionLog(this.options.sessionsRoot, this.options.workspace), options)
+    return new Chat(this, this.options, new SessionLog(this.options.sessionsRoot, this.options.workspace), options)
   }
 }
 
 class Chat implements AgentChat {
   readonly sessionId: string
-  readonly model: string
   private readonly runtime: ChatRuntime
   private readonly options: ChatRuntimeOptions
-  private readonly transport: LlmTransport
-  private readonly limiter: ModelRateLimiter
   private readonly log: SessionLog
   private readonly chatOptions: CreateChatOptions
   private readonly deadline: number
@@ -162,15 +186,12 @@ class Chat implements AgentChat {
   private settled: Promise<void> = Promise.resolve()
   private modelRequests = 0
 
-  constructor(runtime: ChatRuntime, options: ChatRuntimeOptions, transport: LlmTransport, limiter: ModelRateLimiter, log: SessionLog, chatOptions: CreateChatOptions) {
+  constructor(runtime: ChatRuntime, options: ChatRuntimeOptions, log: SessionLog, chatOptions: CreateChatOptions) {
     this.runtime = runtime
     this.options = options
-    this.transport = transport
-    this.limiter = limiter
     this.log = log
     this.chatOptions = chatOptions
     this.sessionId = log.id
-    this.model = options.model.model
     this.deadline = requestDeadline(chatOptions, runtime.env)
     this.maxWaitMs = chatOptions.maxWaitMs ?? MODEL_RECOVERY_LIMITS.waitingMs
     this.research = chatOptions.tools === 'research' && !chatOptions.isolatedSystemPrompt ? new ResearchBudget(message => this.progress(message)) : undefined
@@ -184,6 +205,11 @@ class Chat implements AgentChat {
       const sample = normalizeUsage(data?.usage ?? data?.message?.usage)
       if (sample) this.total = addUsage(this.total, sample)
     }
+  }
+
+  // 当前模型名（成本显示与事件记录用）：跟随热更新。
+  get model(): string {
+    return this.runtime.modelNow().model
   }
 
   private progress(message: string): void {
@@ -248,9 +274,13 @@ class Chat implements AgentChat {
   private async requestModel(requestKey: string, request: LlmRequest, signal: AbortSignal): Promise<LlmSuccess> {
     for (;;) {
       if (this.requestFailure) throw this.requestFailure
+      // 每次尝试前读取当前渠道设置：网页保存新配置后，进行中的流程从下一次尝试起生效。
+      const settings = this.runtime.modelNow()
+      const transport = this.runtime.transportNow(settings)
+      const limiter = this.runtime.limiterNow(settings)
       this.research?.checkRequest(requestKey)
       try {
-        await this.waiting.wait(async () => this.limiter.acquire(signal, (ms, detail) => {
+        await this.waiting.wait(async () => limiter.acquire(signal, (ms, detail) => {
           const message = detail.reason === 'local-rate-limit'
             ? `按共享队列每分钟 ${detail.requestsPerMinute} 次的设置排队，约 ${Math.ceil(ms / 1000)} 秒后尝试发送请求。`
             : `渠道临时错误后的重试等待，约 ${Math.ceil(ms / 1000)} 秒后再次尝试。`
@@ -279,7 +309,7 @@ class Chat implements AgentChat {
       const capped: LlmRequest = { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, this.chatOptions.maxTokens ?? 8192) }
       let result: LlmResult
       try {
-        result = await this.transport(capped, signal, (isText) => {
+        result = await transport(capped, signal, (isText) => {
           this.streamTicks++
           if (firstChunkMs === undefined) firstChunkMs = Date.now() - started
           if (isText && firstTextMs === undefined) firstTextMs = Date.now() - started
@@ -291,13 +321,13 @@ class Chat implements AgentChat {
           this.account(abortedUsage)
           this.log.appendEvent('assistant/attempt', { usage: abortedUsage })
         }
-        observe?.({ type: 'attempt', sessionId: this.sessionId, model: this.model, attemptId, outcome: 'aborted',
+        observe?.({ type: 'attempt', sessionId: this.sessionId, model: settings.model, attemptId, outcome: 'aborted',
           elapsedMs: Date.now() - started, ...(firstChunkMs !== undefined ? { firstChunkMs } : {}), ...(firstTextMs !== undefined ? { firstTextMs } : {}),
           ...(abortedUsage ? { usage: abortedUsage } : {}) })
         throw error
       }
       if (result.finish !== 'error') {
-        observe?.({ type: 'attempt', sessionId: this.sessionId, model: this.model, attemptId,
+        observe?.({ type: 'attempt', sessionId: this.sessionId, model: settings.model, attemptId,
           outcome: result.finish === 'length' ? 'length' : 'committed', elapsedMs: Date.now() - started,
           ...(firstChunkMs !== undefined ? { firstChunkMs } : {}), ...(firstTextMs !== undefined ? { firstTextMs } : {}),
           ...(result.usage ? { usage: result.usage } : {}) })
@@ -308,7 +338,7 @@ class Chat implements AgentChat {
         this.account(result.usage)
         this.log.appendEvent('assistant/attempt', { usage: result.usage })
       }
-      observe?.({ type: 'attempt', sessionId: this.sessionId, model: this.model, attemptId, outcome: 'error', elapsedMs: Date.now() - started,
+      observe?.({ type: 'attempt', sessionId: this.sessionId, model: settings.model, attemptId, outcome: 'error', elapsedMs: Date.now() - started,
         ...(firstChunkMs !== undefined ? { firstChunkMs } : {}), ...(firstTextMs !== undefined ? { firstTextMs } : {}),
         ...(result.usage ? { usage: result.usage } : {}) })
       observe?.({ type: 'request-error', sessionId: this.sessionId, time: new Date().toISOString(), failure })
@@ -316,7 +346,7 @@ class Chat implements AgentChat {
       if (requestKey !== this.recoveryStep) { this.recoveryStep = requestKey; this.recoveryFailures = 0 }
       this.recoveryFailures += 1
       let wait: number
-      try { wait = await this.limiter.cooldown(signal, recoveryDelay(failure, this.recoveryFailures)) }
+      try { wait = await limiter.cooldown(signal, recoveryDelay(failure, this.recoveryFailures)) }
       catch (error) {
         if (error instanceof ModelRequestQueueError) this.requestFailure = error
         throw error

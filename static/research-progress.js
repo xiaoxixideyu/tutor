@@ -47,7 +47,7 @@ class TutorResearchProgress {
       const previous = this.progress?.completed
       this.progress = saved.result?.research ?? this.progress
       if (previous !== undefined && this.progress?.completed !== previous) this.onSaved(course)
-      const flow = state.active?.kind === 'research' && state.active.courseId === course ? state.active : state.flow
+      const flow = (state.flows ?? []).find((item) => item.kind === 'research' && item.courseId === course) ?? state.flow
       if (flow?.kind === 'research' && flow.courseId === course) {
         if (flow.flowId !== this.flow?.flowId) this.subscribe(flow)
         this.flow = flow

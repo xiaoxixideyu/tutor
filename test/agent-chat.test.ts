@@ -152,3 +152,38 @@ it('请求总时限触发后中止在途请求并收敛，下一请求不会叠�
   assert.equal(cancelled, 2)
   assert.equal(running, false)
 })
+
+it('模型设置热更新：下一回合用新渠道，渠道按设置缓存且会话与用量连续', async (t) => {
+  const root = tmp(t)
+  const builtTransports: string[] = []
+  const builtLimiters: string[] = []
+  let current: ModelSettings = MODEL
+  const runtime = new ChatRuntime({
+    model: MODEL, sessionsRoot: root, workspace: root,
+    env: { ...process.env, TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'limits.sqlite') },
+    resolveModel: () => current,
+    transportFactory: (settings) => {
+      builtTransports.push(settings.model)
+      // 任意回合数都可用：用于验证"设置未变不重建渠道"
+      return async (_request, _signal, onChunk) => { onChunk(true); return stop({ inputTokens: 1, outputTokens: 1 }, `${settings.model} 回复`) }
+    },
+    limiterFactory: (settings) => { builtLimiters.push(settings.model); return new DisabledLimiter() as never },
+  })
+  const chat = (await runtime.createChat())!
+  assert.equal(chat.model, 'fixture-model')
+  assert.equal(await chat.ask('一'), 'fixture-model 回复')
+  // 保存新设置：下一回合立即生效（无需重启流程）
+  current = { ...MODEL, model: 'fixture-model-b', requestsPerMinute: 5 }
+  assert.equal(chat.model, 'fixture-model-b')
+  assert.equal(await chat.ask('二'), 'fixture-model-b 回复')
+  assert.deepEqual(builtTransports, ['fixture-model', 'fixture-model-b'])
+  assert.deepEqual(builtLimiters, ['fixture-model', 'fixture-model-b'])
+  // 设置未再变化：继续复用（不重建），会话历史与用量连续
+  assert.equal(await chat.ask('三'), 'fixture-model-b 回复')
+  assert.deepEqual(builtTransports, ['fixture-model', 'fixture-model-b'])
+  assert.deepEqual(chat.totalUsage(), { inputTokens: 3, outputTokens: 3 })
+  // 固定注入的 transport/limiter 始终优先：热更新不会绕过测试替身
+  const fixedRuntime = runtimeWith(queueTransport([stop(undefined, '固定通道')]), root)
+  fixedRuntime.modelNow()
+  assert.equal(await (await fixedRuntime.createChat())!.ask('请求'), '固定通道')
+})

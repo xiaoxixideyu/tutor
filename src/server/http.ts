@@ -7,7 +7,7 @@ import { handleRpcRequest, RPC_ERRORS, type RpcRequest } from '../core/rpc.ts'
 import type { KnowledgeMap } from '../core/schema.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { FlowExit, createLineQueue, type FlowIO, type LineQueue } from '../flows/io.ts'
-import { runFlowInProcess } from '../flows/run.ts'
+import { modelSettingsFromEnv, runFlowInProcess } from '../flows/run.ts'
 
 export const FLOW_PROTOCOL_VERSION = 1
 const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice', 'audit-content'])
@@ -82,10 +82,13 @@ export function createTutorServer(options: TutorServerOptions) {
   const today = options.today ?? (() => new Date().toISOString().slice(0, 10))
   const models = new ModelConfigStore(root, { file: options.modelConfigFile, env: options.modelEnvironment })
   const flows = new Map<string, Flow>()
-  let active: Flow | null = null
+  // 每门课程同时最多一个流程（课程状态互斥）；不同课程的流程彼此独立、可并行。
+  const running = new Map<string, Flow>()
   const runFlow: FlowRunner = options.runFlow ?? ((input, io, env) => runFlowInProcess(
     { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}) },
-    io, { root, env }))
+    io,
+    // 模型设置热更新：进行中的流程每个回合读取最新保存的配置（practice 零模型，不接渠道）。
+    { root, env, ...(input.kind === 'practice' ? {} : { resolveModel: () => modelSettingsFromEnv(models.environment()) }) }))
 
   function broadcast(flow: Flow, event: Record<string, unknown>): void {
     const payload = `data: ${JSON.stringify({ ...snapshot(flow), ...event })}\n\n`
@@ -103,9 +106,11 @@ export function createTutorServer(options: TutorServerOptions) {
     if (flow.guard) clearTimeout(flow.guard)
     flow.code = code
     flow.status = code === 0 ? 'completed' : 'failed'
-    if (active === flow) active = null
+    if (running.get(flow.courseId) === flow) running.delete(flow.courseId)
     broadcast(flow, { type: 'exit', code })
   }
+
+  const activeSnapshots = () => [...running.values()].map(snapshot)
 
   function start(input: FlowStart) {
     if (!RUNNERS.has(input.kind)) return { ok: false, error: `未知流程 "${input.kind}"` }
@@ -114,17 +119,18 @@ export function createTutorServer(options: TutorServerOptions) {
     if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) {
       return { ok: false, error: '知识点参数非法' }
     }
-    if (active) {
-      if (active.status === 'running' && active.kind === input.kind && active.courseId === input.courseId && active.milestoneId === input.milestoneId && active.nodeId === input.nodeId) {
-        return { ok: true, resumed: true, ...snapshot(active) }
+    const current = running.get(input.courseId)
+    if (current) {
+      if (current.status === 'running' && current.kind === input.kind && current.courseId === input.courseId && current.milestoneId === input.milestoneId && current.nodeId === input.nodeId) {
+        return { ok: true, resumed: true, ...snapshot(current) }
       }
-      return { ok: false, error: `已有进行中的流程（${active.kind} ${active.courseId}），先结束它再开始新的` }
+      return { ok: false, error: `课程「${input.courseId}」已有进行中的流程（${current.kind}），先结束它再开始新的` }
     }
     if (input.kind !== 'new' && !store.exists(input.courseId)) return { ok: false, error: `课程 "${input.courseId}" 不存在——先用 new 访谈建档` }
     if (input.nodeId && (!store.has(input.courseId, 'knowledge-map') || !(store.read(input.courseId, 'knowledge-map') as KnowledgeMap).nodes.some((node) => node.id === input.nodeId))) {
       return { ok: false, error: '所选知识点不在本课程知识地图中' }
     }
-    // 每次启动流程冻结模型配置；practice 为零模型流程，不要求已配置模型。
+    // 每次启动流程冻结模型配置快照（模型渠道由 resolveModel 每回合热更新）；practice 零模型，不要求已配置模型。
     const env = input.kind === 'practice' ? { ...(options.modelEnvironment ?? process.env) } : models.environment()
     const queue = createLineQueue()
     const controller = new AbortController()
@@ -138,14 +144,15 @@ export function createTutorServer(options: TutorServerOptions) {
       signal: controller.signal,
       tty: false,
     }
-    // 保留最近 8 个流程的内存回放；跨服务重启的课程断点由课程状态持久化。
+    // 保留最近 8 个流程的内存回放；只淘汰已结束的流程，不能动在跑的（并行课程时可能同时多个）。
     while (flows.size > 8) {
-      const oldest = flows.values().next().value!
-      for (const client of oldest.clients) client.end()
-      flows.delete(oldest.flowId)
+      const finished = [...flows.values()].find(candidate => candidate.code !== undefined)
+      if (!finished) break
+      for (const client of finished.clients) client.end()
+      flows.delete(finished.flowId)
     }
-    active = flow
     flows.set(flow.flowId, flow)
+    running.set(flow.courseId, flow)
     flow.task = (async () => {
       let code: number
       try {
@@ -168,7 +175,7 @@ export function createTutorServer(options: TutorServerOptions) {
       if (url.pathname === '/api/model-config') {
         if (!localSettingsRequest(req)) { json(res, 403, { ok: false, error: '模型设置仅允许从本机同源页面访问' }); return }
         if (req.method === 'GET') {
-          json(res, 200, { ok: true, config: models.publicConfig(), active: active ? snapshot(active) : null }); return
+          json(res, 200, { ok: true, config: models.publicConfig(), flows: activeSnapshots() }); return
         }
         if (req.method === 'POST') {
           if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
@@ -177,7 +184,7 @@ export function createTutorServer(options: TutorServerOptions) {
           let input
           try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型设置请求必须是有效的 JSON' }); return }
           const config = models.save(input)
-          json(res, 200, { ok: true, config, active: active ? snapshot(active) : null }); return
+          json(res, 200, { ok: true, config, flows: activeSnapshots() }); return
         }
         json(res, 405, { ok: false, error: '不支持此操作' }); return
       }
@@ -186,16 +193,17 @@ export function createTutorServer(options: TutorServerOptions) {
         try { request = await body(req) } catch {
           json(res, 200, { jsonrpc: '2.0', id: null, error: RPC_ERRORS.parse }); return
         }
-        // 流程持有课程快照，同一课程的网页复习不能同时回写。
+        // 流程持有课程快照，同一课程的网页复习不能同时回写（其他课程的流程不受影响）。
         const rpc = request as RpcRequest | null
-        if (active && rpc?.params?.id === active.courseId && ['submitReview', 'applyReview'].includes(rpc?.method ?? '')) {
+        const runningForCourse = typeof rpc?.params?.id === 'string' ? running.get(rpc.params.id) : undefined
+        if (runningForCourse && ['submitReview', 'applyReview'].includes(rpc?.method ?? '')) {
           json(res, 200, { jsonrpc: '2.0', id: rpc?.id ?? null, error: { code: -32602, message: '本课程有进行中的流程，请结束后提交复习' } }); return
         }
         json(res, 200, handleRpcRequest(store, request as RpcRequest, today)); return
       }
       if (req.method === 'GET' && url.pathname === '/flow/state') {
         const requested = flows.get(url.searchParams.get('flowId') ?? '')
-        json(res, 200, { protocolVersion: FLOW_PROTOCOL_VERSION, active: active ? snapshot(active) : null, flow: requested ? snapshot(requested) : null }); return
+        json(res, 200, { protocolVersion: FLOW_PROTOCOL_VERSION, flows: activeSnapshots(), flow: requested ? snapshot(requested) : null }); return
       }
       if (req.method === 'GET' && url.pathname === '/flow/stream') {
         const flow = flows.get(url.searchParams.get('flowId') ?? '')
@@ -216,8 +224,9 @@ export function createTutorServer(options: TutorServerOptions) {
           json(res, result.ok ? 200 : 409, result); return
         }
         if (url.pathname !== '/flow/input' && url.pathname !== '/flow/stop') { json(res, 404, { ok: false, error: '未知操作' }); return }
-        if (!active || input.flowId !== active.flowId) { json(res, 409, { ok: false, error: '流程已结束或已切换，请刷新页面后继续' }); return }
-        const flow = active
+        // 按 flowId 定位流程：并行课程下每个页面只操作自己的流程，过期页面拿不到别人的流程。
+        const flow = flows.get(typeof input.flowId === 'string' ? input.flowId : '')
+        if (!flow || flow.code !== undefined) { json(res, 409, { ok: false, error: '流程已结束或已切换，请刷新页面后继续' }); return }
         if (url.pathname === '/flow/input') {
           if (flow.status !== 'running' || flow.queue.closed) { json(res, 409, { ok: false, error: '流程正在结束' }); return }
           if (typeof input.line !== 'string' || /[\r\n]/.test(input.line)) { json(res, 400, { ok: false, error: '每次只能提交一行输入' }); return }

@@ -56,8 +56,8 @@ $('form').addEventListener('submit', async (event) => {
   try {
     const result = await request({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config) })
     populate(result.config)
-    message(result.active
-      ? `已保存。正在进行的「${result.active.courseId}」流程继续使用原配置；下一次开始流程时生效。`
+    message(result.flows?.length
+      ? `已保存。进行中的 ${result.flows.length} 个流程将在下一回合使用新配置；本回合已发出的请求不受影响。`
       : '已保存。新开始的教学流程将使用此配置，无需重启服务。')
   } catch (error) {
     message(error.name === 'TimeoutError' ? '保存请求超时，请刷新页面确认是否保存成功' : error.message, true)

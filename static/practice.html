@@ -258,15 +258,15 @@ async function startPracticeGen() {
   if (!result.ok) { showBanner(result.error || '生成实践任务失败'); return false }
   $state.textContent = `生成实践任务中：${wantedCourse}`; hideBanner(); setRunning(true, '正在生成并核对任务'); return true
 }
-// 全局流程桥同一时间只跑一个子进程。想练习却撞上别的进行中流程（另一门课、或本课的课堂/大考等）时，
-// 如实说明并给「结束并开始实践」入口，而不是把别的流程的输出灌进本页。
+// 同一门课程同时只能跑一个流程（不同课程可并行）。同门课被别的流程占用时如实说明并给入口，
+// 而不是把别的流程的输出灌进本页。
 function renderFlowMismatch(runningFlow) {
   if (!flowClient.attach(runningFlow)) return
   const runLabel = KIND_LABEL[runningFlow.kind] || runningFlow.kind
   $state.textContent = `${runLabel}进行中：${runningFlow.courseId}`
   $banner.innerHTML = ''
   $banner.appendChild(document.createTextNode(
-    `当前正在进行「${runningFlow.courseId} · ${runLabel}${runningFlow.nodeId ? ' · ' + runningFlow.nodeId : ''}」。要练习「${wantedCourse} · ${wantedNode}」，请先结束当前流程。`))
+    `「${runningFlow.courseId}」正在进行${runLabel}${runningFlow.nodeId ? ' · ' + runningFlow.nodeId : ''}。要练习「${wantedCourse} · ${wantedNode}」，请先结束它。`))
   const btn = el('<button style="margin-top:8px;cursor:pointer">结束当前流程并开始实践</button>')
   btn.addEventListener('click', async () => {
     btn.disabled = true; btn.textContent = '正在结束当前流程…'
@@ -274,7 +274,7 @@ function renderFlowMismatch(runningFlow) {
     for (let i = 0; i < 40; i++) {
       const s = await flowClient.state()
       if (!s) { btn.disabled = false; return }
-      if (!s.active) break
+      if (!(s.flows ?? []).some((flow) => flow.courseId === runningFlow.courseId)) break
       await new Promise((r) => setTimeout(r, 500))
     }
     hideBanner()
@@ -292,16 +292,18 @@ async function enterPractice() {
   renderGenPrompt(); return false
 }
 
-// 页面加载：按 URL 想练的课 vs 全局正在跑的流程，决定附着 / 提示切换 / 起新练习。
+// 页面加载：按 URL 的课程找自己的实践流程，决定附着 / 提示切换 / 起新练习。
 ;(async () => {
   if (!wantedCourse) { showBanner('缺少 course 参数——请从课程列表进入实践。'); return }
   const state = await flowClient.state()
   if (!state) return
-  const act = state.active
+  const flows = state.flows ?? []
+  const act = flows.find((flow) => ['practice', 'practice-gen'].includes(flow.kind) && flow.courseId === wantedCourse)
+  const busySameCourse = flows.find((flow) => flow.courseId === wantedCourse && flow !== act)
   const course = await rpc('courseStatus', { id: wantedCourse })
   if (!course.hasPlan) { showBanner('请先完成课程规划，再选择知识点实践。'); return }
-  const sameCourse = act && ['practice', 'practice-gen'].includes(act.kind) && act.courseId === wantedCourse
-  wantedNode ||= (sameCourse && act.nodeId) || course.current || course.nodes[0]?.id
+  const sameCourse = !!act
+  wantedNode ||= (act && act.nodeId) || course.current || course.nodes[0]?.id
   if (!course.nodes.some((node) => node.id === wantedNode)) { showBanner('所选知识点不存在，请从课程列表重新选择。'); return }
   for (const node of course.nodes) {
     const option = document.createElement('option')
@@ -310,6 +312,7 @@ async function enterPractice() {
     $nodeSelect.appendChild(option)
   }
   $nodeSelect.value = wantedNode
+  if (busySameCourse) { renderFlowMismatch(busySameCourse); return }
   const mine = sameCourse && act.nodeId === wantedNode
   if (act && !mine) { renderFlowMismatch(act); return }
   if (act) {

@@ -22,7 +22,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COURSE_ID_PATTERN } from '../src/core/store.ts'
 import { createCliIO } from '../src/flows/io.ts'
-import { runFlowInProcess, resolveFlowEnv } from '../src/flows/run.ts'
+import { runFlowInProcess, resolveFlowEnv, modelSettingsFromEnv } from '../src/flows/run.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -92,7 +92,11 @@ async function main() {
     if (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN) throw new Error('联网教研需要配置搜索 MCP；也可在网页跳过教研')
     env.TUTOR_CHANNEL_TRACE_FILE ??= path.join(root, 'data', 'transport.jsonl')
   }
-  const code = await runFlowInProcess({ kind, courseId, ...(milestoneId ? { milestoneId } : {}), ...(nodeId ? { nodeId } : {}) }, io, { root, env })
+  const code = await runFlowInProcess({ kind, courseId, ...(milestoneId ? { milestoneId } : {}), ...(nodeId ? { nodeId } : {}) }, io, {
+    root, env,
+    // 与网页宿主一致：保存的模型设置对进行中的流程在下一回合生效（CLI 每次重新解析 .env/网页配置）。
+    resolveModel: () => modelSettingsFromEnv(resolveFlowEnv(root, process.env)),
+  })
   process.exit(code)
 }
 

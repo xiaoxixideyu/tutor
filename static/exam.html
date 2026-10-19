@@ -409,15 +409,15 @@ async function startExam(courseId, milestoneId) {
 
 const KIND_LABEL = { new: '建档访谈', assess: '摸底', plan: '生成计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '生成实践', practice: '实践' }
 
-// 全局流程桥同一时间只跑一个子进程。想开大考却撞上别的进行中流程（另一门课、或同门课的课堂/实践等）时，
-// 如实说明并给「结束并开始大考」入口，而不是把别的流程的输出灌进本页。
+// 同一门课程同时只能跑一个流程（不同课程可并行）。同门课被别的流程占用时如实说明并给「结束并开始大考」入口，
+// 而不是把别的流程的输出灌进本页。
 function renderFlowMismatch(running) {
   if (!flowClient.attach(running)) return
   const runLabel = KIND_LABEL[running.kind] || running.kind
   $state.textContent = `${runLabel}进行中：${running.courseId}`
   $banner.innerHTML = ''
   $banner.appendChild(document.createTextNode(
-    `当前正在进行「${running.courseId} · ${runLabel}」——tutor 同一时间只能跑一个流程。要开始「${wantedCourse}」的大考，得先结束它（进度已存，随时能回来续上）。`))
+    `「${running.courseId}」正在进行${runLabel}——同一门课程同时只能跑一个流程。要开始「${wantedCourse}」的大考，得先结束它（进度已存，随时能回来续上）。`))
   const btn = el(`<button style="margin-top:8px;cursor:pointer">结束当前流程并开始大考</button>`)
   btn.addEventListener('click', async () => {
     btn.disabled = true
@@ -426,7 +426,7 @@ function renderFlowMismatch(running) {
     for (let i = 0; i < 40; i++) {
       const s = await flowClient.state()
       if (!s) { btn.disabled = false; return }
-      if (!s.active) break
+      if (!(s.flows ?? []).some((flow) => flow.courseId === running.courseId)) break
       await new Promise((r) => setTimeout(r, 500))
     }
     if (await startExam(wantedCourse, wantedMilestone)) startSse()
@@ -437,7 +437,7 @@ function renderFlowMismatch(running) {
   $banner.style.display = 'block'
 }
 
-// 页面加载：按 URL 想考的课 vs 全局正在跑的流程，决定附着 / 提示切换 / 起新考
+// 页面加载：按 URL 的课程找自己的考试流程，决定附着 / 提示切换 / 起新考
 ;(async () => {
   if (!wantedCourse) {
     $banner.textContent = '缺少 course 参数——请从课程列表点「参加大考」进入。'
@@ -455,16 +455,20 @@ function renderFlowMismatch(running) {
     startSse()
     return
   }
-  const running = state.active
-  if (running && !(running.kind === 'exam' && running.courseId === wantedCourse && (!wantedMilestone || running.milestoneId === wantedMilestone))) {
-    renderFlowMismatch(running)
+  const flows = state.flows ?? []
+  const matched = flows.find((flow) => flow.kind === 'exam' && flow.courseId === wantedCourse
+    && (!wantedMilestone || flow.milestoneId === wantedMilestone))
+  if (matched) {
+    if (!flowClient.attach(matched)) return
+    rememberFlow(matched)
+    $state.textContent = `大考进行中：${matched.courseId}`
+    startSse()
     return
   }
-  if (running) {
-    if (!flowClient.attach(running)) return
-    rememberFlow(running)
-    $state.textContent = `大考进行中：${running.courseId}`
-    startSse()
+  // 同课程被别的流程占用才提示切换；其他课程的并行流程与本页无关。
+  const busySameCourse = flows.find((flow) => flow.courseId === wantedCourse)
+  if (busySameCourse) {
+    renderFlowMismatch(busySameCourse)
     return
   }
   if (params.has('flowId')) {

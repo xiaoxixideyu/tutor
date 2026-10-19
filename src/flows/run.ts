@@ -35,6 +35,8 @@ export interface RunFlowOptions {
   // 验收/评测注入：观察每次传输尝试、限制单阶段模型请求次数。
   observe?: (event: AttemptObservation) => void
   maxModelRequests?: number
+  // 每回合重新解析模型渠道（网页宿主：保存设置后进行中的流程下个回合生效）；缺省沿用启动快照。
+  resolveModel?: () => ModelSettings
 }
 
 export function personaFor(root: string, kind: string): string {
@@ -84,6 +86,7 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
       signal: io.signal,
       ...(options.observe ? { observe: options.observe } : {}),
       ...(options.maxModelRequests !== undefined ? { maxModelRequests: options.maxModelRequests } : {}),
+      ...(options.resolveModel ? { resolveModel: options.resolveModel } : {}),
     })
   }
   const createChat = async (chatOptions: CreateChatOptions = {}): Promise<AgentChat | null> => {

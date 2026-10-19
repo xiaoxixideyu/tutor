@@ -386,12 +386,16 @@ async function api(path, body) {
   return result
 }
 
-async function ensureLesson() {
+async function findLessonFlow() {
   const state = await flowClient.state()
   if (!state) return undefined
-  if (state.active) return state.active
-  // 无进行中的课堂：让用户从课程列表选课（本页简化为提示去首页）
-  return null
+  const flows = state.flows ?? []
+  const learnFlows = flows.filter((flow) => flow.kind === 'learn')
+  const mine = wanted ? learnFlows.find((flow) => flow.courseId === wanted) : learnFlows[0]
+  if (mine) return { flow: mine, busy: null }
+  // 同一门课被别的流程占用（同课程互斥）；其他课程的流程与本页无关，可并行运行。
+  const busy = wanted ? flows.find((flow) => flow.courseId === wanted) : null
+  return { flow: null, busy: busy ?? null }
 }
 
 function send() {
@@ -422,7 +426,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   await api('/flow/stop')
 })
 
-// 全局同一时间只运行一个流程；课程或流程类型不匹配时，显示切换入口。
+// 同一门课程同时只能运行一个流程；不同课程的流程可以并行，不进本页的切换提示。
 function renderCourseMismatch(runningFlow, wanted) {
   if (!flowClient.attach(runningFlow)) return
   const running = runningFlow.courseId
@@ -431,18 +435,18 @@ function renderCourseMismatch(runningFlow, wanted) {
   $state.textContent = `${kind}进行中：${running}`
   $banner.innerHTML = ''
   $banner.appendChild(document.createTextNode(
-    `当前正在进行「${running}」的${kind}。tutor 同一时间只能运行一个流程；开始「${wanted}」课堂前，需要先结束当前流程。`))
+    `「${running}」正在进行${kind}。同一门课程同时只能运行一个流程；开始本课课堂前，需要先结束它。`))
   const btn = el(`<button style="margin-top:8px;cursor:pointer">结束当前流程并开始「${esc(wanted)}」课堂</button>`)
   btn.addEventListener('click', async () => {
     btn.disabled = true
     btn.textContent = `正在结束${kind}…`
     const stopped = await api('/flow/stop')
     if (!stopped.ok) { btn.disabled = false; btn.textContent = '重试切换'; return }
-    // 等旧流程子进程真正退出（serve 侧 flow 置空）再起新课，否则会撞「已有进行中的流程」
+    // 等旧流程真正结束（该课程的槽位释放）再起新课，否则会撞「已有进行中的流程」
     for (let i = 0; i < 40; i++) {
       const s = await flowClient.state()
       if (!s) { btn.disabled = false; return }
-      if (!s.active) break
+      if (!(s.flows ?? []).some((flow) => flow.courseId === running)) break
       await new Promise((r) => setTimeout(r, 500))
     }
     const result = await api('/flow/start', { kind: 'learn', courseId: wanted })
@@ -457,19 +461,18 @@ function renderCourseMismatch(runningFlow, wanted) {
   $banner.style.display = 'block'
 }
 
-// 页面加载：同时核对课程与流程类型，决定附着、提示切换或起新课。
+// 页面加载：按课程找自己的课堂流程，决定附着、提示切换或起新课。
 const wanted = new URLSearchParams(location.search).get('course')
-ensureLesson().then(async (running) => {
-  if (running === undefined) return
-  // 不匹配时先提示切换，避免将其他课程或其他类型的输出灌进课堂。
-  if (running && (running.kind !== 'learn' || (wanted && running.courseId !== wanted))) {
-    renderCourseMismatch(running, wanted || running.courseId)
+findLessonFlow().then(async (found) => {
+  if (found === undefined) return
+  if (found.flow) {
+    if (!flowClient.attach(found.flow)) return
+    $state.textContent = `课堂进行中：${found.flow.courseId}`
+    startSse()
     return
   }
-  if (running) {
-    if (!flowClient.attach(running)) return
-    $state.textContent = `课堂进行中：${running.courseId}`
-    startSse()
+  if (found.busy) {
+    renderCourseMismatch(found.busy, wanted || found.busy.courseId)
     return
   }
   if (wanted) {

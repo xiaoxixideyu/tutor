@@ -112,7 +112,7 @@ it('自定义课程目录、网页资源与坏请求均走真实 HTTP', async (t
   assert.equal((await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body.ok, true)
 })
 
-it('网页配置立即影响下一条模型流程，当前流程保留配置快照且接口不回传密钥', async (t) => {
+it('网页配置立即影响下一条模型流程，流程启动快照保留且接口不回传密钥', async (t) => {
   const { base, post, launches, modelConfigFile } = await fixture(t)
   const read = await fetch(base + '/api/model-config')
   const initial = await read.json() as any
@@ -124,7 +124,7 @@ it('网页配置立即影响下一条模型流程，当前流程保留配置快�
   await events.wait((e) => e.text?.includes('启动'))
   const saved = await post('/api/model-config', { baseUrl: 'https://second.invalid/v1', model: 'other-model', apiKey: 'replacement-private-key', contextWindow: 32768, researchDeadlineMs: 600000, requestsPerMinute: 5 })
   assert.equal(saved.status, 200)
-  assert.equal(saved.body.active.flowId, first.flowId)
+  assert.equal(saved.body.flows[0].flowId, first.flowId)
   assert.ok(!JSON.stringify(saved.body).includes('replacement-private-key'))
   assert.equal(launches[0].TUTOR_LLM_MODEL, 'deepseek-fixture')
   assert.equal(launches[0].TUTOR_LLM_API_KEY, 'fixture-private-key')
@@ -234,7 +234,7 @@ it('流程 ID 隔离输入、停止与回放；停止后最终输出仍可重连
   await replay.wait((e) => e.text?.includes('最终结果'))
   await replay.wait((e) => e.type === 'exit')
   const state: any = await (await fetch(base + '/flow/state')).json()
-  assert.equal(state.active.flowId, second.flowId)
+  assert.deepEqual(state.flows.map((flow: any) => flow.flowId), [second.flowId])
 })
 
 it('不同里程碑不是同一场考试；进行中的课程禁止并发复习回写', async (t) => {
@@ -248,7 +248,7 @@ it('不同里程碑不是同一场考试；进行中的课程禁止并发复习�
   assert.match(review.body.error.message, /进行中的流程/)
 })
 
-it('停止超时后中止在途流程并释放活动槽位', async (t) => {
+it('停止超时后中止在途流程并释放课程槽位', async (t) => {
   const { base, post } = await fixture(t)
   const flow = (await post('/flow/start', { kind: 'plan', courseId: 'alpha' })).body
   const events = await stream(t, base, flow.flowId)
@@ -256,7 +256,7 @@ it('停止超时后中止在途流程并释放活动槽位', async (t) => {
   await post('/flow/stop', { flowId: flow.flowId })
   await events.wait((e) => e.type === 'exit')
   const state: any = await (await fetch(base + '/flow/state')).json()
-  assert.equal(state.active, null)
+  assert.deepEqual(state.flows, [])
 })
 
 it('流程启动失败会清理活动流程并留下失败事件', async (t) => {
@@ -265,7 +265,41 @@ it('流程启动失败会清理活动流程并留下失败事件', async (t) => 
   const events = await stream(t, base, flow.flowId)
   await events.wait((e) => e.type === 'exit' && e.code === -1)
   const state: any = await (await fetch(base + '/flow/state')).json()
-  assert.equal(state.active, null)
+  assert.deepEqual(state.flows, [])
+})
+
+it('不同课程的流程可并行：同课程互斥、输入各归各、RPC 守卫按课程隔离', async (t) => {
+  const { base, post, store } = await fixture(t)
+  store.create('gamma', { goal: '测试课程' })
+  const alpha = (await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body
+  const alphaEvents = await stream(t, base, alpha.flowId)
+  await alphaEvents.wait((e) => e.text?.includes('启动'))
+  // 另一门课不再需要先结束当前流程
+  const beta = (await post('/flow/start', { kind: 'learn', courseId: 'beta' })).body
+  assert.equal(beta.ok, true)
+  assert.notEqual(beta.flowId, alpha.flowId)
+  const betaEvents = await stream(t, base, beta.flowId)
+  await betaEvents.wait((e) => e.text?.includes('beta'))
+  // 同一课程第二个流程仍互斥（同类型同参数是断点复用，不在此列）
+  assert.equal((await post('/flow/start', { kind: 'plan', courseId: 'alpha' })).status, 409)
+  // 输入按 flowId 各归各的流程，不串台
+  assert.equal((await post('/flow/input', { flowId: alpha.flowId, line: '给 alpha' })).status, 200)
+  await alphaEvents.wait((e) => e.text?.includes('收到：给 alpha'))
+  assert.ok(!betaEvents.events.some((e) => e.text?.includes('给 alpha')))
+  // 复习回写守卫只挡有进行中流程的课程（alpha/beta 在跑，gamma 没有）
+  const alphaReview = await post('/rpc', { id: 1, method: 'applyReview', params: { id: 'alpha', node: 'x', score: 1 } })
+  assert.match(alphaReview.body.error.message, /进行中的流程/)
+  const gammaReview = await post('/rpc', { id: 2, method: 'applyReview', params: { id: 'gamma', node: 'x', score: 1 } })
+  assert.ok(!/进行中的流程/.test(gammaReview.body.error?.message ?? ''))
+  const state: any = await (await fetch(base + '/flow/state')).json()
+  assert.deepEqual(state.flows.map((flow: any) => flow.courseId).sort(), ['alpha', 'beta'])
+  // 停掉 alpha 不影响 beta 继续交互
+  await post('/flow/stop', { flowId: alpha.flowId })
+  await alphaEvents.wait((e) => e.type === 'exit')
+  assert.equal((await post('/flow/input', { flowId: beta.flowId, line: 'beta 还在' })).status, 200)
+  await betaEvents.wait((e) => e.text?.includes('收到：beta 还在'))
+  await post('/flow/stop', { flowId: beta.flowId })
+  await betaEvents.wait((e) => e.type === 'exit')
 })
 
 it('实践和教研的知识点传给 runner 并参与流程身份；不同节点不复用，非法节点不启动', async (t) => {

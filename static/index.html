@@ -28,6 +28,7 @@
   .course .id { font-weight: 600; color: var(--accent); }
   .course .goal { color: var(--fg); font-size: 14px; flex: 1; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; }
+  .badge.run { background: #dbeafe; color: #1e40af; }
   .bar { height: 6px; border-radius: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--mastered); border-radius: 3px; }
   .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -61,10 +62,20 @@
 <script src="/research-progress.js"></script>
 <script>
 const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
+const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
 const $panel = document.getElementById('panel')
 const researchLive = new TutorResearchProgress(document.getElementById('researchLive'), id => {
   renderStatus(id).catch(() => {})
 })
+
+// 进行中的流程按课程归属跳回各自页面；每门课同时最多一个流程，不同课程可并行。
+function flowHref(flow) {
+  const course = encodeURIComponent(flow.courseId)
+  if (flow.kind === 'learn') return `/lesson.html?course=${course}`
+  if (flow.kind === 'exam') return `/exam.html?course=${course}&milestone=${encodeURIComponent(flow.milestoneId || '')}`
+  if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `/practice.html?course=${course}`
+  return `/wizard.html?course=${course}&resume=${encodeURIComponent(flow.kind)}${flow.nodeId ? `&node=${encodeURIComponent(flow.nodeId)}` : ''}`
+}
 
 async function rpc(method, params) {
   const response = await fetch('/rpc', {
@@ -87,12 +98,16 @@ async function renderList() {
   researchLive.connect(null)
   const courses = await rpc('listCourses')
   const due = await rpc('dueReviews')
+  const state = await fetch('/flow/state').then((response) => response.json()).catch(() => ({ flows: [] }))
+  const flowByCourse = new Map((state.flows ?? []).map((flow) => [flow.courseId, flow]))
   const dueById = new Map((due ?? []).map((c) => [c.id, c]))
   const rows = courses.length === 0
     ? '<div class="empty">暂无课程。先在“模型设置”中配置渠道，再点击“开设新课程”。</div>'
     : courses.map((c) => {
         const pct = c.total > 0 ? Math.round((c.mastered / c.total) * 100) : 0
         const dueBadge = c.dueCount ? `<span class="badge">到期 ${c.dueCount}</span>` : ''
+        const running = flowByCourse.get(c.id)
+        const runningBadge = running ? `<span class="badge run">▶ ${FLOW_LABEL[running.kind] ?? running.kind}进行中</span>` : ''
         const reviewLine = dueById.has(c.id)
           ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
           : ''
@@ -103,7 +118,9 @@ async function renderList() {
         // CTA 按阶段分流：有计划才进课堂；半成品课导去向导补齐（摸底/计划），不再把用户丢进「缺计划」死路。
         // 全部已掌握且无待学指针：上课只会得到「无课可上」，如实显示完成态并给复习/重测出口。
         const allMastered = c.stage === 'ready' && c.total > 0 && c.mastered === c.total && !c.current
-        const cta = c.stage === 'ready'
+        const cta = running
+          ? { label: `继续${FLOW_LABEL[running.kind] ?? '流程'} →`, href: flowHref(running) }
+          : c.stage === 'ready'
           ? allMastered
             ? { label: '✓ 已全部掌握', href: `/?course=${encodeURIComponent(c.id)}` }
             : { label: '上课 →', href: `/lesson.html?course=${encodeURIComponent(c.id)}` }
@@ -114,7 +131,7 @@ async function renderList() {
           ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
           : ''
         return `<div class="course" data-id="${esc(c.id)}">
-          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${dueBadge}${reviewBtn}<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button></div>
+          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button></div>
           <div class="bar"><span style="width:${pct}%"></span></div>
           <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
           ${reviewLine}

@@ -8,7 +8,7 @@ function fixture() {
     [name, { dataset: { part: name }, textContent: '', value: 0, max: 1, href: '' }]))
   const root = { hidden: true, innerHTML: '', classList: { add() {} }, querySelectorAll: () => Object.values(parts) }
   const flow = { flowId: 'r1', kind: 'research', courseId: 'agent5', status: 'running' }
-  const state: { active: typeof flow | null } = { active: flow }
+  const state: { flows: (typeof flow)[]; flow: typeof flow | null } = { flows: [flow], flow: null }
   const saved = { completed: 6, total: 39, verified: 2, pending: 33 }
   const requests: string[] = []
   const context = vm.createContext({ AbortSignal, encodeURIComponent, setInterval: () => 1,
@@ -67,7 +67,7 @@ it('旧流程从宿主记录消失时关闭订阅，不把历史等待显示为�
   let closed = false
   source.close = () => { closed = true }
   client.event = { phase: 'waiting', message: '旧的等待', retryAt: Date.now() + 60_000, at: Date.now() }
-  state.active = null
+  state.flows = []
   await client.refresh()
   assert.equal(closed, true)
   assert.equal(client.source, null)

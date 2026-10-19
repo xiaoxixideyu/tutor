@@ -40,7 +40,7 @@
 <body>
 <header><a href="/">← 课程列表</a><h1>模型设置</h1></header>
 <main>
-  <p class="intro">接入支持 OpenAI 兼容接口的模型服务。保存后，新开始的教学流程自动使用最新设置，无需重启服务。</p>
+  <p class="intro">接入支持 OpenAI 兼容接口的模型服务。保存后立即生效：进行中的流程在下一回合使用新配置，此后开始的流程直接使用，无需重启服务。</p>
   <form id="form">
     <fieldset id="fields" disabled>
       <div class="field">
@@ -89,7 +89,7 @@
     </fieldset>
     <div id="message" role="status" aria-live="polite"></div>
   </form>
-  <p class="note">正在进行的课堂或考试继续使用开始时的配置。切换服务地址时需要填写新渠道的密钥。费用仍按当前单价配置估算，切换模型后应核对单价。</p>
+  <p class="note">正在进行的流程会在下一次模型请求（下一回合）使用新配置；本回合已发出的请求不受影响。换模型后前缀缓存需重新建立一次。切换服务地址时需要填写新渠道的密钥。费用仍按当前单价配置估算，切换模型后应核对单价。</p>
 </main>
 <script src="/settings.js"></script>
 </body>

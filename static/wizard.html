@@ -490,8 +490,9 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   }
   const state = await flowClient.state()
   if (!state) return
-  if (state.active) {
-    document.getElementById('err').textContent = `已有进行中的流程（${state.active.kind} ${state.active.courseId}）`
+  const sameCourse = (state.flows ?? []).find((flow) => flow.courseId === id)
+  if (sameCourse) {
+    document.getElementById('err').textContent = `课程「${id}」已有进行中的流程（${sameCourse.kind}）`
     return
   }
   courseName = id
@@ -520,14 +521,17 @@ function resumeFrom(kind, course, nodeId) {
   startFlow(kind, nodeId)
 }
 
-// 页面加载：附加进行中的流程（刷新不丢）；否则若带 ?course=&resume= 则续起；再否则停在 setup
+// 页面加载：附加本课程的进行中流程（刷新不丢；其他课程的并行流程与本页无关）；
+// 否则若带 ?course=&resume= 则续起；再否则停在 setup
 const entryParams = new URLSearchParams(location.search)
+const WIZARD_KINDS = ['new', 'assess', 'plan', 'research', 'audit-content']
 flowClient.state(entryParams.get('flowId')).then((state) => {
   if (!state) return
   const requestedCourse = entryParams.get('course')
-  const available = state.flow ?? state.active
+  const available = state.flow ?? (state.flows ?? []).find((flow) =>
+    WIZARD_KINDS.includes(flow.kind) && (!requestedCourse || flow.courseId === requestedCourse))
   if (available) {
-    if (!['new', 'assess', 'plan', 'research'].includes(available.kind)
+    if (!WIZARD_KINDS.includes(available.kind)
       || (requestedCourse && available.courseId !== requestedCourse)) {
       document.getElementById('err').textContent = `当前流程属于 ${available.kind} ${available.courseId}，请先返回课程列表。`
       return
