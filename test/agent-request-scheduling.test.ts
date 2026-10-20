@@ -7,7 +7,7 @@ import { ChatRuntime, permanentModelError, type ModelSettings } from '../src/run
 import { ContentReviewError } from '../src/flows/content-gate.ts'
 import { ModelRateLimiter, ModelRateLimitError } from '../src/core/model-rate-limit.ts'
 import { researchNodes } from '../src/core/research.ts'
-import { ResearchBudgetError } from '../src/runtime/budget.ts'
+import { ResearchBudgetError, RESEARCH_LIMITS } from '../src/runtime/budget.ts'
 import { ModelWaitTimeoutError } from '../src/runtime/timeouts.ts'
 import { MODEL_RECOVERY_LIMITS, recoveryDelay, transientModelFailure } from '../src/core/model-recovery.ts'
 import type { LlmResult, LlmTransport } from '../src/runtime/llm.ts'
@@ -109,16 +109,17 @@ it('持续无法恢复达到独立上限时才暂停整批，失败类型和费�
   assert.deepEqual(chat.totalUsage(), { inputTokens: attempts * 10, outputTokens: attempts })
 })
 
-it('真正生成耗尽五次预算仍停止；最后一次生成遇到 429 可恢复而不增加生成轮数', async (t) => {
-  const exhausted = fixture(t, ['tool', 'tool', 'tool', 'tool', 'tool'])
+it('真正生成耗尽模型请求预算仍停止；最后一次生成遇到 429 可恢复而不增加生成轮数', async (t) => {
+  const limit = RESEARCH_LIMITS.modelRequests
+  const exhausted = fixture(t, Array.from({ length: limit }, () => 'tool' as const))
   const chat = (await exhausted.runtime.createChat({ tools: 'research', onProgress: () => {} }))!
   await assert.rejects(chat.ask('请求'), ResearchBudgetError)
-  assert.equal(exhausted.calls.filter(call => call === 'acquire').length, 5)
-  const rate = fixture(t, ['tool', 'tool', 'tool', 'tool', 'rate-limit', 'success'])
+  assert.equal(exhausted.calls.filter(call => call === 'acquire').length, limit)
+  const rate = fixture(t, [...Array.from({ length: limit - 1 }, () => 'tool' as const), 'rate-limit', 'success'])
   const rateChat = (await rate.runtime.createChat({ tools: 'research', onProgress: () => {} }))!
   assert.equal(await rateChat.ask('请求'), '完成')
-  assert.equal(rate.calls.filter(call => call === 'acquire').length, 6)
-  assert.equal(rate.transportCalls(), 6)
+  assert.equal(rate.calls.filter(call => call === 'acquire').length, limit + 1)
+  assert.equal(rate.transportCalls(), limit + 1)
 })
 
 it('同一步退避遵守渠道建议与递增间隔，认证/余额不足仍不作为瞬时故障重试', () => {

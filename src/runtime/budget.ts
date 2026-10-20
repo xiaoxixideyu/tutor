@@ -6,7 +6,7 @@ export interface TextContentBlock {
 }
 
 export const RESEARCH_LIMITS = {
-  searches: 3, fetches: 2, toolRounds: 3, modelRequests: 5,
+  searches: 3, fetches: 2, toolRounds: 3, modelRequests: 6,
   resultChars: 6000, totalChars: 24000,
 } as const
 

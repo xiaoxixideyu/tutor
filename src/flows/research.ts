@@ -58,7 +58,7 @@ export function nodePrompt(profile: Profile, node: { id: string; title?: string;
     '- resources 只收直接支撑本知识点结论的资料：讲前置或后续课内容的资料不要挂到本知识点（整图复审判为越界会要求删改，浪费返工）',
     '- 引用稳定的页面标题与链接，不写与知识内容无关的章节编号；版本相关结论必须写明版本，不能混用不同版本的编号或行为',
     '- 选型类课程以任务需求、实测质量、延迟、成本、数据与部署约束为主；未经本次来源核实的型号、价格、窗口长度、显存或许可数字不要写入，不凭记忆补全产品排行表',
-    '- resources 最多 3 条；summary 是学习范围摘要，最多 120 字符。每条 material 只保留最多 3 个核心事实、180 字符以内，note 一句话且最多 120 字符，title 最多 120 字符；程序会校验长度，缺少足够证据时提交现有资料并保持 verified=false',
+    '- resources 最多 3 条；输出前逐字段自检长度（程序硬校验，超限会被拒绝并浪费重试预算）：summary 40–120 字（一句话讲清范围，写完删掉举例与修饰）、每条 material ≤180 字（最多 3 条事实、平均每条 ≤60 字，能短则短）、note 一句话 ≤120 字、title ≤120 字；缺少足够证据时提交现有资料并保持 verified=false',
     '',
     '输出 JSON（```json 代码块，只含当前知识点，不更改标题或扩展课程）：',
     '{"nodes": [{"id": "…", "title": "…", "summary": "…", "verified": true 或 false}], "resources": [{"node": "…", "title": "…", "url": "https://…", "note": "推荐理由", "material": "正文摘要（可选 ≤180字符）"}]}',
@@ -115,12 +115,20 @@ export function validateBatch(data: unknown, batchIds: Set<string>): ParseResult
   if (orphan) return { ok: false, error: `resources 中的知识点 "${orphan.node}" 不在本批里` }
   const invalidUrl = resources.find((r) => r.url && !/^https?:\/\//.test(r.url))
   if (invalidUrl) return { ok: false, error: `资源 "${invalidUrl.title}" 的 URL 非法` }
+  // 长度违规一次报全（逐字段给当前字数与需删字数）：只报第一个会让模型只修一处、来回拉锯，
+  // 而"每节点模型请求"预算有限，每次拉锯都在烧修复机会。
+  const overages: string[] = []
   for (const item of [...batch.nodes, ...resources]) {
     for (const [field, limit] of Object.entries({ summary: 120, material: 180, note: 120, title: 120 })) {
       const value = (item as Record<string, unknown>)[field]
-      if (typeof value === 'string' && [...value].length > limit) return { ok: false,
-        error: `${'id' in item ? item.id : item.node} 的 ${field} 超过 ${limit} 字符。只保留已取得来源支撑的核心事实，完整改写后返回当前知识点 JSON；保留必要限定条件，不机械截断、不扩大搜索。` }
+      if (typeof value !== 'string') continue
+      const length = [...value].length
+      if (length > limit) overages.push(`${'id' in item ? item.id : item.node} 的 ${field} 超限（当前 ${length} 字 / 上限 ${limit} 字，需再删约 ${length - limit} 字）`)
     }
+  }
+  if (overages.length > 0) {
+    return { ok: false,
+      error: `以下字段超过长度上限，必须压缩后重发：${overages.join('；')}。压缩策略：只保留最核心的事实，删去举例、修饰语、重复说明与次要限定；不要新增或扩写其他内容。保留必要限定条件，不机械截断、不扩大搜索，返回当前知识点完整 JSON。` }
   }
   return schemaResult
 }

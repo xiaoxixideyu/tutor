@@ -44,7 +44,7 @@ it('工具阶段之后留出汇总和修复回合，反复拒绝工具或修复�
   assert.equal(budget.available(search), false)
   budget.startRequest()
   assert.ok(budget.claim(search))
-  budget.startRequest()
+  while (budget.requests < RESEARCH_LIMITS.modelRequests) budget.startRequest()
   assert.throws(() => budget.startRequest(), ResearchBudgetError)
   assert.equal(budget.requests, RESEARCH_LIMITS.modelRequests)
 })
@@ -60,6 +60,7 @@ it('同一步的传输恢复不消耗内容轮数，也不提前剥夺工具；�
   assert.equal(budget.available(search, !budget.hasRequest('1:4')), false)
   budget.startRequest('1:4')
   budget.startRequest('2:1')
+  while (budget.requests < RESEARCH_LIMITS.modelRequests) budget.startRequest()
   assert.throws(() => budget.checkRequest('2:2'), ResearchBudgetError)
 })
 
