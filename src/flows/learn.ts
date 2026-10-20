@@ -8,11 +8,13 @@ import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile, Qu
 import type { AgentChat } from '../runtime/chat.ts'
 import { parseJsonBlock } from './generation.ts'
 import { loadCostConfigFromRepo, printSessionTotal } from './cost-line.ts'
+import { withChatUsage } from './cost-ledger.ts'
 import { formatTurnCost } from '../core/cost.ts'
 import { lessonContent, mapContent, planContent, replayApprovedReply, teachingContent, type ApprovedTeachingTurn } from '../core/content-quality.ts'
 import { createContentGate, generateApproved, generateApprovedTeaching, type ContentGate } from './content-gate.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
+import { requirePlanMapConsistency } from './consistency.ts'
 import { today } from './deps.ts'
 
 async function publishTeaching(deps: FlowDeps, gate: ContentGate, chat: AgentChat, turn: ApprovedTeachingTurn, node: string, profile: Profile, map: KnowledgeMap, text: string): Promise<void> {
@@ -86,11 +88,13 @@ async function startFreshLesson(
     const prepChat = await deps.createChat()
     io.out(`正在备课：${node}…\n`)
     const cap = lessonStructureCap(profile.daily_minutes)
-    draft = await generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery, today: today(), ...prepNotes }), (text) => {
+    draft = await withChatUsage(deps.costs, prepChat, 'prep', () => generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery, today: today(), ...prepNotes }), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       return validateLessonDraft(data.value, node, cap)
-    }, gate, value => lessonContent(value, profile, map))
+    }, gate, value => lessonContent(value, profile, map)))
+    io.out('备课开销：')
+    printSessionTotal(prepChat, deps)
     // 没有可恢复的已批准讲授时，先保存新教案；被拒旧教案不能阻止落盘。
     // 可用的已批准课堂断点仍由后续新讲授替换，不能在尝试恢复时提前覆盖。
     if (!previousTurn) store.write(config.courseId, 'lesson', { node, started_at: today(), draft })
@@ -103,9 +107,9 @@ async function startFreshLesson(
   const teachChat = await deps.createChat()
   const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources,
     ...(memory.length > 0 ? { memory } : {}), ...(warmup.length > 0 ? { warmup } : {}) })
-  const turn = await generateApprovedTeaching(teachChat, previousTurn
+  const turn = await withChatUsage(deps.costs, teachChat, 'teach', () => generateApprovedTeaching(teachChat, previousTurn
     ? `${intro}\n恢复课堂：上一段已向学员展示的内容为 ${JSON.stringify(previousTurn)}。从这个进度继续，不重讲已完成的部分。` : intro,
-  gate, { node, profile, map, learnerMessage: previousTurn ? '恢复本课' : '开始本课', previousReply: previousTurn?.reply ?? '' })
+  gate, { node, profile, map, learnerMessage: previousTurn ? '恢复本课' : '开始本课', previousReply: previousTurn?.reply ?? '' }))
   store.write(config.courseId, 'lesson', {
     session_id: teachChat.sessionId,
     node,
@@ -130,6 +134,7 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
+  requirePlanMapConsistency(deps, config.courseId, plan, map)
   const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
   await gate.require(planContent(plan, profile, map))
@@ -332,7 +337,11 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
     }
     const signal = detectStyleSignal(command)
     if (signal) bestEffort(() => notes.recordStyle({ at: today(), kind: signal.kind, detail: signal.detail }))
-    approvedTurn = await generateApprovedTeaching(chat, command, gate, { node, profile, map, learnerMessage: command, previousReply: approvedTurn.reply })
+    if (!approvedTurn) throw new Error('tutor: 缺少已通过审查的讲授断点')
+    const previousReply: string = approvedTurn.reply
+    const nextTurn: ApprovedTeachingTurn = await withChatUsage<ApprovedTeachingTurn>(deps.costs, chat, 'teach',
+      () => generateApprovedTeaching(chat, command, gate, { node, profile, map, learnerMessage: command, previousReply }))
+    approvedTurn = nextTurn
     store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: today(), draft, approved_turn: approvedTurn })
     approvedTurns.push(approvedTurn)
     await publishTeaching(deps, gate, chat, approvedTurn, node, profile, map, `\n${approvedTurn.reply}`)

@@ -2,6 +2,7 @@ import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, 
 import type { KnowledgeMap, LearnerProfile, Mastery, Plan, Profile } from '../core/schema.ts'
 import { parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import { topoOrder } from '../core/knowledge.ts'
 import { mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
@@ -42,6 +43,13 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   const profile = store.read(config.courseId, 'profile') as Profile
   const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
+  const archiveOldPlan = () => {
+    if (!store.has(config.courseId, 'plan')) return
+    const archive = store.archive(config.courseId, ['plan', 'lesson'], {
+      label: 'replan', files: ['exam-attempt.json'], removeKinds: ['plan', 'lesson'], removeFiles: ['exam-attempt.json'],
+    })
+    io.out(`旧教学计划已归档到 ${archive}；旧里程碑的考试记录随计划保留在归档中。\n`)
+  }
   const mastered = masteredNodes(store, config.courseId)
   const hasProfile = store.has(config.courseId, 'learner-profile')
   if (!hasProfile) io.out('提示：尚未摸底，按零基础全量规划（可先运行 assess）。\n')
@@ -51,6 +59,7 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   if (path.length === 0) {
     const plan = assemblePlan([], [], topoOrder(map))
     await gate.require(planContent(plan, profile, map))
+    archiveOldPlan()
     store.write(config.courseId, 'plan', plan)
     io.out('所有知识点均已掌握，无需生成教学路径。\n')
     io.closeInput()
@@ -86,6 +95,7 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   }, gate, value => planContent(assemblePlan(path, value, topoOrder(map)), profile, map))
   const milestones = draft as { title: string; nodes: string[] }[]
   const plan: Plan = assemblePlan(path, milestones, topoOrder(map))
+  archiveOldPlan()
   store.write(config.courseId, 'plan', plan)
 
   io.out(`\n教学计划已生成（${store.root}/${config.courseId}/plan.yaml）：\n`)
@@ -95,6 +105,7 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   }
   io.out(`当前指针：${plan.current ?? '（无）'}\n`)
   await chat.flush()
+  recordChatTotal(deps.costs, chat, 'plan')
   printSessionTotal(chat, deps)
   io.closeInput()
   throw new FlowExit(0)

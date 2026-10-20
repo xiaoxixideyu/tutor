@@ -57,3 +57,21 @@ it('实践进程不继承服务凭据，超时会终止子进程组并及时返�
   assert.equal(result[0].timedOut, true)
   assert.ok(Date.now() - started < 2000)
 })
+
+it('实践进程的 HOME/TMP 落在任务目录内，可用信号中止', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-exec-home-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const env = await runTests({ ...task, tests: [{ name: 'env', command: 'printf "%s\\n%s\\n" "$HOME" "$TMPDIR"' }] }, root)
+  assert.equal(env[0].exitCode, 0)
+  assert.ok(env[0].output.includes(path.join(root, '.tutor-home')))
+  assert.ok(env[0].output.includes(path.join(root, '.tutor-tmp')))
+
+  const controller = new AbortController()
+  const started = Date.now()
+  const pending = runTests({ ...task, tests: [{ name: 'abort', command: 'sleep 5' }] }, root, { signal: controller.signal })
+  setTimeout(() => controller.abort(), 50)
+  const aborted = await pending
+  assert.equal(aborted[0].exitCode, -1)
+  assert.match(aborted[0].output, /已中止/)
+  assert.ok(Date.now() - started < 2000)
+})

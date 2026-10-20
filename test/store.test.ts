@@ -112,4 +112,16 @@ describe('CourseStore', () => {
     const leftovers = fs.readdirSync(path.join(store.root, 'golang')).filter((f) => f.includes('.tmp-'))
     assert.deepEqual(leftovers, [])
   })
+
+  it('archive 复制旧状态并按需删除，归档目录位于课程内', () => {
+    const store = makeStore()
+    store.create('golang', profile)
+    store.write('golang', 'plan', { path: ['a'], milestones: [], current: 'a' })
+    store.write('golang', 'mastery', { a: { status: 'mastered' } })
+    const directory = store.archive('golang', ['plan', 'mastery'], { label: 'replan', removeKinds: ['plan'] })
+    assert.equal(fs.existsSync(path.join(store.root, 'golang', 'plan.yaml')), false)
+    assert.equal(fs.existsSync(path.join(store.root, 'golang', 'mastery.yaml')), true)
+    assert.match(fs.readFileSync(path.join(directory, 'plan.yaml'), 'utf8'), /a/)
+    assert.match(fs.readFileSync(path.join(directory, 'mastery.yaml'), 'utf8'), /mastered/)
+  })
 })

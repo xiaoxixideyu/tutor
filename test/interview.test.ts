@@ -1,6 +1,14 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { extractProfileJson, parseProfile, preserveLearnerRequests, profileScope, profileValidationError } from '../src/core/interview.ts'
+import { CourseStore } from '../src/core/store.ts'
+import { runInterview, MAX_PROFILE_REPAIRS } from '../src/flows/interview.ts'
+import { FlowExit, type FlowIO } from '../src/flows/io.ts'
+import type { FlowDeps } from '../src/flows/deps.ts'
+import type { AgentChat } from '../src/runtime/chat.ts'
 
 const VALID_JSON = JSON.stringify({
   goal: '掌握 Go 后端开发',
@@ -56,4 +64,38 @@ describe('parseProfile', () => {
   it('纯提问（无 JSON）返回 null 且无校验错误', () => {
     assert.equal(parseProfile('你想达到什么程度？'), null)
   })
+})
+
+it('模型连续输出无效档案时有上限，不会无限重试', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-interview-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const store = new CourseStore(root)
+  let asks = 0
+  const chat = {
+    sessionId: 'session-test',
+    model: 'fixture-model',
+    ask: async () => { asks += 1; return '```json\n{"goal": 1}\n```' },
+    lastTurnUsage: () => ({ inputTokens: 0, outputTokens: 0 }),
+    totalUsage: () => ({ inputTokens: 0, outputTokens: 0 }),
+    lastReply: () => '',
+    lastReplySeq: () => null,
+    flush: async () => {},
+  } satisfies AgentChat
+  const io: FlowIO = {
+    out: () => {},
+    err: () => {},
+    readLine: async () => { throw new Error('无效档案重试期间不应读取学员输入') },
+    closeInput: () => {},
+    signal: new AbortController().signal,
+    tty: false,
+  }
+  const deps = {
+    store, io, status: () => {}, env: {}, workspace: root, today: () => '2026-10-20',
+    createChat: async () => chat,
+  } as unknown as FlowDeps
+
+  await assert.rejects(runInterview(deps, { courseId: 'alpha', maxTurns: 5 }),
+    (error: unknown) => error instanceof FlowExit && error.code === 1)
+  assert.equal(asks, MAX_PROFILE_REPAIRS + 1)
+  assert.equal(store.exists('alpha'), false)
 })

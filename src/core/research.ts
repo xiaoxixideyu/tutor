@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { contentKey, mapContent } from './content-quality.ts'
+import { contentKey, mapContent, type ContentInput } from './content-quality.ts'
 import { COURSE_ID_PATTERN } from './store.ts'
 import type { KnowledgeMap, Profile } from './schema.ts'
 
@@ -17,12 +17,34 @@ export class ResearchProgressStore {
     return path.join(this.directory, `${node}.json`)
   }
   private key(map: KnowledgeMap, profile: Profile, node: string): string {
+    return this.keyFrom(mapContent(map, profile), node, map)
+  }
+  private keyFrom(base: ContentInput, node: string, map: KnowledgeMap): string {
     if (!map.nodes.some(item => item.id === node)) throw new Error('知识点不存在')
-    const input = mapContent(map, profile)
-    input.units = [input.units[0], ...input.units.filter(unit => unit.id === `node:${node}`),
-      ...(map.resources ?? []).filter(resource => resource.node === node)
-        .map((resource, index) => ({ id: `resource:${index}`, node, content: resource }))]
+    const input: ContentInput = {
+      ...base,
+      units: [base.units[0]!, ...base.units.filter(unit => unit.id === `node:${node}`),
+        ...(map.resources ?? []).filter(resource => resource.node === node)
+          .map((resource, index) => ({ id: `resource:${index}`, node, content: resource }))],
+    }
     return contentKey(input)
+  }
+  // 批量状态：地图/资料只序列化一次，避免课程看板按节点重复构造整张图。
+  statuses(map: KnowledgeMap, profile: Profile, nodes: string[]): Record<string, 'pending' | 'saved' | 'verified'> {
+    const base = mapContent(map, profile)
+    const result: Record<string, 'pending' | 'saved' | 'verified'> = {}
+    for (const node of nodes) {
+      if (!map.nodes.some(item => item.id === node)) continue
+      const verified = map.nodes.find(item => item.id === node)?.verified === true
+      const file = this.file(node)
+      let completed = false
+      try {
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
+        completed = saved.version === 1 && saved.key === this.keyFrom(base, node, map) && typeof saved.completedAt === 'string'
+      } catch { /* 没有断点或断点损坏 */ }
+      result[node] = completed ? (verified ? 'verified' : 'saved') : (verified && !fs.existsSync(file) ? 'verified' : 'pending')
+    }
+    return result
   }
   completed(map: KnowledgeMap, profile: Profile, node: string): boolean {
     try {
@@ -39,9 +61,9 @@ export class ResearchProgressStore {
   save(map: KnowledgeMap, profile: Profile, node: string): void {
     const file = this.file(node)
     const value = { version: 1, key: this.key(map, profile, node), completedAt: new Date().toISOString() }
-    fs.mkdirSync(this.directory, { recursive: true })
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     const tmp = `${file}.${randomUUID()}.tmp`
-    try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file) }
+    try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file) }
     finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) }
   }
 }

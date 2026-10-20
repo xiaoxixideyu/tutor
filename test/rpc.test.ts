@@ -299,3 +299,24 @@ describe('handleRpcRequest', () => {
     assert.ok(Array.isArray(response.result))
   })
 })
+
+describe('断点清理 RPC', () => {
+  it('resetAssessment / discardAttempt 归档并移除断点，重复调用安全', () => {
+    const store = makeStore()
+    store.create('alpha', { goal: '目标' })
+    store.write('alpha', 'assessment', { node_order: ['a1'], current_node: 'a1', asked: [], scores: {} })
+    const examFile = path.join(store.root, 'alpha', 'exam-attempt.json')
+    fs.writeFileSync(examFile, '{"broken": true}\n')
+    const methods = createRpcMethods(store, today)
+    const reset = methods.resetAssessment({ id: 'alpha' }) as { reset: boolean; archive: string }
+    assert.equal(reset.reset, true)
+    assert.equal(store.has('alpha', 'assessment'), false)
+    assert.equal(fs.existsSync(reset.archive), true)
+    const discarded = methods.discardAttempt({ id: 'alpha' }) as { discarded: boolean; archive: string }
+    assert.equal(discarded.discarded, true)
+    assert.equal(fs.existsSync(examFile), false)
+    assert.equal(fs.existsSync(discarded.archive), true)
+    assert.equal((methods.resetAssessment({ id: 'alpha' }) as { reset: boolean }).reset, false)
+    assert.equal((methods.discardAttempt({ id: 'alpha' }) as { discarded: boolean }).discarded, false)
+  })
+})

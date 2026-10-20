@@ -3,9 +3,11 @@ import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
 import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
 import { permanentModelError } from '../runtime/chat.ts'
+import { safeFetch } from '../runtime/url-safety.ts'
 import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../core/research.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import { mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
@@ -73,9 +75,9 @@ async function checkUrl(url: string): Promise<string | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_000))
     try {
-      const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(10_000) })
+      const { response, url: finalUrl } = await safeFetch(url, { signal: AbortSignal.timeout(10_000) })
       await response.body?.cancel()
-      if (response.status >= 200 && response.status < 400) return response.url
+      if (response.status >= 200 && response.status < 400) return finalUrl.toString()
       if (response.status >= 500) continue // 服务端错误可能是暂时性的，重试
       return null // 404 等客户端错误是确定性的，直接判死
     } catch {
@@ -233,7 +235,7 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
           reviewLimitRepair: '本知识点资料太长，独立审查达到预算。请只保留原课程要求的核心事实，summary 缩至 100 字以内，每条 material 缩至 150 字以内，note 一句话；去掉无关的章节编号和冗长方法清单。保留已取得的真实来源链接，不新增搜索，不扩大课程，不改变节点 id。返回原结构的完整 JSON，仍须接受完整内容审查。',
           out: io.out,
         })
-      } finally { await nodeChat.flush(); printSessionTotal(nodeChat, deps) }
+      } finally { await nodeChat.flush(); recordChatTotal(deps.costs, nodeChat, 'research-node'); printSessionTotal(nodeChat, deps) }
     },
     save: (next, node) => {
       store.write(config.courseId, 'knowledge-map', next); map = next
@@ -262,6 +264,7 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
   const remaining = pendingResearchNodes(map, profile, progress).length
   io.out(`\n本次教研已保存：${map.nodes.length - remaining}/${map.nodes.length} 个知识点已完成资料检查，${verifiedTotal} 个已联网验证，来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
   await chat.flush()
+  recordChatTotal(deps.costs, chat, 'research-skeleton')
   printSessionTotal(chat, deps)
   io.closeInput()
   throw new FlowExit(0)

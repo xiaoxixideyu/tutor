@@ -31,6 +31,35 @@ export function courseNodeOrder(plan: Plan, map?: KnowledgeMap): string[] {
   return [...new Set(nodes.length || plan.scope || map ? nodes : plan.current ? [plan.current] : [])]
 }
 
+export interface PlanMapMismatch {
+  missingFromMap: string[]
+  notInPlan: string[]
+}
+
+// 计划是地图在规划时的快照。地图增删节点后必须先重新规划：
+// 否则新节点永远不会被教到，已删除节点又会被 currentNode 选中并在内容审查处报晦涩错误。
+export function planMapMismatch(plan: Plan, map: KnowledgeMap): PlanMapMismatch | null {
+  const mapIds = map.nodes.map((node) => node.id)
+  const mapSet = new Set(mapIds)
+  const referenced = [...new Set([
+    ...(plan.scope ?? []),
+    ...plan.path,
+    ...plan.milestones.flatMap((milestone) => milestone.nodes),
+    ...(plan.current !== undefined ? [plan.current] : []),
+  ])]
+  const missingFromMap = referenced.filter((id) => !mapSet.has(id))
+  const covered = plan.scope !== undefined ? new Set([...plan.scope, ...plan.path]) : new Set(mapIds)
+  const notInPlan = mapIds.filter((id) => !covered.has(id))
+  return missingFromMap.length > 0 || notInPlan.length > 0 ? { missingFromMap, notInPlan } : null
+}
+
+export function planMapMismatchText(mismatch: PlanMapMismatch): string {
+  const parts: string[] = []
+  if (mismatch.missingFromMap.length > 0) parts.push(`计划中的节点不在知识地图：${mismatch.missingFromMap.join('、')}`)
+  if (mismatch.notInPlan.length > 0) parts.push(`知识地图中的节点未纳入计划：${mismatch.notInPlan.join('、')}`)
+  return parts.join('；')
+}
+
 export interface MilestoneDraft {
   title: unknown
   nodes: unknown

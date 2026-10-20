@@ -64,6 +64,16 @@ it('同一步的传输恢复不消耗内容轮数，也不提前剥夺工具；�
   assert.throws(() => budget.checkRequest('2:2'), ResearchBudgetError)
 })
 
+it('教研系统指令不随预算计数变化，保证渠道前缀缓存可复用', () => {
+  const budget = new ResearchBudget()
+  const before = budget.instruction()
+  budget.startRequest()
+  budget.claim(search)
+  budget.result(search, [{ type: 'text', text: 'result' }], false)
+  budget.claim('web_fetch')
+  assert.equal(budget.instruction(), before)
+})
+
 it('兼容连字符命名：Tavily Hikari 的 search/extract 计入预算，未知工具不暴露', () => {
   const budget = new ResearchBudget()
   budget.startRequest()

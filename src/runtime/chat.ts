@@ -6,6 +6,7 @@ import { ModelRateLimitError, ModelRequestQueueError, ModelRateLimiter } from '.
 import { addUsage, normalizeUsage, type ReportedUsage, type UsageSample } from '../core/cost.ts'
 import { ModelWaitClock, ModelWaitTimeoutError, TurnTimeoutError, turnTimeoutMs, whenIdleOrStalled, whenIdleWithin } from './timeouts.ts'
 import { ResearchBudget } from './budget.ts'
+import { ContextWindowError, estimateTokens, fitHistory, normalizeContextWindow, outputTokenLimit } from './context.ts'
 import { SessionLog } from './session.ts'
 import { openaiTransport, type ApiMessage, type ApiToolCall, type ApiToolDef, type LlmFailure, type LlmRequest, type LlmResult, type LlmTransport } from './llm.ts'
 import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings } from './tools.ts'
@@ -232,9 +233,15 @@ class Chat implements AgentChat {
   private apiMessages(): ApiMessage[] {
     const sections = [this.systemPrompt()]
     if (this.research) sections.push(this.research.instruction())
-    const messages: ApiMessage[] = [{ role: 'system', content: sections.filter(section => section !== '').join('\n\n') }]
-    messages.push(...this.log.messages)
-    return messages
+    const systemContent = sections.filter(section => section !== '').join('\n\n')
+    const settings = this.runtime.modelNow()
+    const maxOutput = outputTokenLimit(settings.contextWindow, this.chatOptions.maxTokens ?? 8192)
+    const promptBudget = Math.max(256, normalizeContextWindow(settings.contextWindow) - maxOutput - 512)
+    const fitted = fitHistory(estimateTokens(systemContent), this.log.messages, promptBudget)
+    const content = fitted.omitted > 0
+      ? `${systemContent}\n\n（较早的 ${fitted.omitted} 条对话已按上下文预算省略；请依据保留的课程计划与最近对话继续。）`
+      : systemContent
+    return [{ role: 'system', content }, ...fitted.messages]
   }
 
   private appendUser(prompt: string): void {
@@ -328,7 +335,8 @@ class Chat implements AgentChat {
       let firstTextMs: number | undefined
       const observe = this.options.observe
       observe?.({ type: 'attempt-start', sessionId: this.sessionId, attemptId, time: new Date(started).toISOString() })
-      const capped: LlmRequest = { ...request, maxTokens: Math.min(request.maxTokens ?? 8192, this.chatOptions.maxTokens ?? 8192) }
+      const capped: LlmRequest = { ...request,
+        maxTokens: outputTokenLimit(settings.contextWindow, Math.min(request.maxTokens ?? 8192, this.chatOptions.maxTokens ?? 8192)) }
       let result: LlmResult
       try {
         result = await transport(capped, signal, (isText) => {
@@ -436,6 +444,8 @@ class Chat implements AgentChat {
       // 恢复耗尽/队列故障/预算错误：保留原始类型，由 ask() 原样抛出。
       if (this.requestFailure) throw error
       if (this.research?.failure) throw error
+      // 上下文预算错误是确定性的，重试只会重复同一份超限请求。
+      if (error instanceof ContextWindowError) throw error
       if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
         this.log.appendEvent('turn/end', { reason: { kind: 'aborted' } })
         return { text, aborted: true }
@@ -466,6 +476,8 @@ class Chat implements AgentChat {
   async ask(prompt: string): Promise<string> {
     this.turnUsage = { inputTokens: 0, outputTokens: 0 }
     this.turn += 1
+    // 用户消息每回合只落盘一次：重试复用同一段历史，不能在会话里追加第二份相同提问。
+    this.appendUser(prompt)
     let lastError: unknown
     for (let attempt = 0; attempt < 2; attempt++) {
       const controller = new AbortController()
@@ -476,7 +488,6 @@ class Chat implements AgentChat {
         else external.addEventListener('abort', relay, { once: true })
       }
       try {
-        this.appendUser(prompt)
         const result = await this.runTurn(`T${this.turn}`, controller)
         if (result.aborted) {
           const error = new Error('模型回合已被中止')
@@ -496,7 +507,7 @@ class Chat implements AgentChat {
           try { await whenIdleWithin(() => this.settled, 5000) } catch { /* 已收敛或超时 */ }
           throw error
         }
-        if ((error instanceof Error && error.name === 'AbortError') || permanentModelError(error)
+        if ((error instanceof Error && error.name === 'AbortError') || error instanceof ContextWindowError || permanentModelError(error)
           || (error instanceof OutputLimitError && this.chatOptions.retryOnLength === false)) throw error
         if (attempt === 0) {
           this.options.err?.(`tutor: 模型回合异常（${error instanceof Error ? error.message : String(error)}），重试一次…\n`)

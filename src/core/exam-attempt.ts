@@ -63,14 +63,25 @@ export class ExamAttemptStore {
   }
   save(attempt: ExamAttempt): void {
     const write = (file: string) => {
-      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
       const temp = `${file}.${randomUUID()}.tmp`
-      try { fs.writeFileSync(temp, JSON.stringify(attempt, null, 2) + '\n'); fs.renameSync(temp, file) }
+      try { fs.writeFileSync(temp, JSON.stringify(attempt, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file) }
       finally { if (fs.existsSync(temp)) fs.unlinkSync(temp) }
     }
     // 先归档再标记当前断点完成；归档失败仍可从 graded 恢复。
     if (attempt.status === 'completed') write(path.join(path.dirname(this.file), 'exams', `${attempt.id}.json`))
     write(this.file)
+  }
+
+  // 放弃当前断点：原文件复制到 archive/ 后再移除，便于用户事后核对。
+  discard(): string | undefined {
+    if (!fs.existsSync(this.file)) return undefined
+    const directory = path.join(path.dirname(this.file), 'archive')
+    fs.mkdirSync(directory, { recursive: true })
+    const target = path.join(directory, `exam-attempt-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.json`)
+    fs.copyFileSync(this.file, target)
+    fs.unlinkSync(this.file)
+    return target
   }
 }
 

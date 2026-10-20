@@ -18,6 +18,12 @@ export class ResearchBudgetError extends Error {
 }
 
 // 按一个知识点计数。JSON 修复不重置预算，同一步的传输重试使用单独的恢复上限。
+// 系统提示词必须逐字节稳定才能复用渠道前缀缓存：预算计数只用于服务端限制与进度展示，
+// 不写进 instruction()，否则每次工具调用后都会改变首条 system 消息。
+const INSTRUCTION = '本次只教研一个知识点。最多进行 ' + RESEARCH_LIMITS.searches + ' 次搜索（包括失败后换服务）、'
+  + RESEARCH_LIMITS.fetches + ' 次正文抓取；前 ' + RESEARCH_LIMITS.toolRounds + ' 轮可用工具，后续只输出或修复最终 JSON。'
+  + '资料只保留有限片段，内容不足时标记未验证，不扩大搜索、不使用本地文件工具。'
+
 export class ResearchBudget {
   requests = 0
   searches = 0
@@ -92,9 +98,6 @@ export class ResearchBudget {
   }
 
   instruction(): string {
-    return '本次只教研一个知识点。最多进行 ' + RESEARCH_LIMITS.searches + ' 次搜索（包括失败后换服务）、'
-      + RESEARCH_LIMITS.fetches + ' 次正文抓取；前 ' + RESEARCH_LIMITS.toolRounds + ' 轮可用工具，后续只输出或修复最终 JSON。'
-      + '资料只保留有限片段，内容不足时标记未验证，不扩大搜索、不使用本地文件工具。'
-      + '已用搜索 ' + this.searches + ' 次、抓取 ' + this.fetches + ' 次。'
+    return INSTRUCTION
   }
 }

@@ -116,7 +116,7 @@ export class LearnerNotesStore {
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temp = `${this.file}.${randomUUID()}.tmp`
     try {
-      fs.writeFileSync(temp, JSON.stringify(notes, null, 2) + '\n')
+      fs.writeFileSync(temp, JSON.stringify(notes, null, 2) + '\n', { mode: 0o600 })
       fs.renameSync(temp, this.file)
     } finally {
       if (fs.existsSync(temp)) fs.unlinkSync(temp)

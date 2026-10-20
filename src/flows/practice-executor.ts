@@ -15,8 +15,17 @@ const OUTPUT_LIMIT = 64 * 1024
 const BASE_TIMEOUT_MS = 60_000
 const GO_TIMEOUT_MS = 120_000 // go build/test 首次编译（GOCACHE 冷）较慢
 
+const activeChildren = new Set<ReturnType<typeof spawn>>()
+// 进程异常退出时尽量带走仍在运行的测试进程组；正常路径由 runOne 自己清理。
+process.once('exit', () => {
+  for (const child of activeChildren) {
+    try { if (child.pid) process.kill(-child.pid, 'SIGKILL') } catch { /* 已退出 */ }
+  }
+})
+
 export interface RunTestsOptions {
   timeoutMs?: number
+  signal?: AbortSignal
 }
 
 function timeoutFor(command: string, opts?: RunTestsOptions): number {
@@ -25,22 +34,50 @@ function timeoutFor(command: string, opts?: RunTestsOptions): number {
 }
 
 function environmentFor(workdir: string): NodeJS.ProcessEnv {
-  // Go 修正：GOCACHE 落任务目录（HOME 只读/缺失也能编译）；离线（不下载依赖）；允许 go.mod 自动补全
+  // 测试进程使用任务目录内的临时 HOME/TMP/缓存：学员程序/命令里的 ~、$HOME、临时文件
+  // 不再落到真实用户目录（这不是操作系统沙箱，绝对路径与网络仍受当前用户权限约束）。
+  const home = path.join(workdir, '.tutor-home')
+  const tmp = path.join(workdir, '.tutor-tmp')
+  const xdg = path.join(home, '.local')
+  fs.mkdirSync(home, { recursive: true })
+  fs.mkdirSync(tmp, { recursive: true })
   return {
     // 学员程序不需要模型、搜索或其他服务凭据。
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|HOME|TMPDIR|TMP|TEMP|SystemRoot|LANG|LC_.*|GOROOT)$/.test(key))),
-    GOCACHE: path.join(workdir, '.gocache'),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|GOROOT|SystemRoot|LANG|LC_.*)$/.test(key))),
+    HOME: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    XDG_CACHE_HOME: path.join(home, '.cache'),
+    XDG_DATA_HOME: xdg,
+    GOCACHE: path.join(workdir, '.tutor-gocache'),
+    GOPATH: path.join(workdir, '.tutor-gopath'),
     GOPROXY: 'off',
     GOFLAGS: '-mod=mod',
   }
 }
 
-function runOne(command: string, workdir: string, timeoutMs: number): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
+function runOne(command: string, workdir: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
+  if (signal?.aborted) return Promise.resolve({ exitCode: -1, output: '（已中止）', timedOut: false })
   return new Promise((resolve) => {
     const child = spawn('/bin/sh', ['-c', command], { cwd: workdir, env: environmentFor(workdir), detached: true })
+    activeChildren.add(child)
     let output = ''
     let truncated = false
+    let timedOut = false
+    let aborted = false
     const stop = () => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL') } catch {} }
+    const onAbort = () => { aborted = true; stop() }
+    if (signal) {
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
+    const finish = (result: { exitCode: number; output: string; timedOut: boolean }) => {
+      signal?.removeEventListener('abort', onAbort)
+      activeChildren.delete(child)
+      resolve(result)
+    }
     const collect = (chunk: Buffer | string) => {
       if (output.length >= OUTPUT_LIMIT) {
         truncated = true
@@ -56,19 +93,19 @@ function runOne(command: string, workdir: string, timeoutMs: number): Promise<{ 
     }
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
-    let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
       stop()
     }, timeoutMs)
     child.on('error', () => {
       clearTimeout(timer)
-      resolve({ exitCode: 127, output: output + (truncated ? '\n…（输出过长已截断）' : '') + '\n（命令启动失败）', timedOut: false })
+      finish({ exitCode: 127, output: output + (truncated ? '\n…（输出过长已截断）' : '') + '\n（命令启动失败）', timedOut: false })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
       const suffix = truncated ? '\n…（输出过长已截断）' : ''
-      resolve({ exitCode: timedOut ? -1 : (code ?? -1), output: output + suffix, timedOut })
+      finish({ exitCode: aborted || timedOut ? -1 : (code ?? -1),
+        output: output + suffix + (aborted ? '\n（已中止）' : ''), timedOut })
     })
   })
 }
@@ -76,7 +113,11 @@ function runOne(command: string, workdir: string, timeoutMs: number): Promise<{ 
 export async function runTests(task: PracticeTask, workdir: string, opts?: RunTestsOptions): Promise<TestResultLike[]> {
   const results: TestResultLike[] = []
   for (const test of task.tests) {
-    const outcome = await runOne(test.command, workdir, timeoutFor(test.command, opts))
+    if (opts?.signal?.aborted) {
+      results.push({ exitCode: -1, output: '（已中止）', timedOut: false })
+      continue
+    }
+    const outcome = await runOne(test.command, workdir, timeoutFor(test.command, opts), opts?.signal)
     results.push({ ...outcome })
   }
   return results

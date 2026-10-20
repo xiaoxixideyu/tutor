@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { ruleAnswerIssue } from './rule-grading.ts'
+import { numericAnswer, ruleAnswerIssue } from './rule-grading.ts'
 import type { ExamPaper } from './exam.ts'
 import type { KnowledgeMap, LessonDraft, Plan, PracticeTask, Profile, QuestionBank } from './schema.ts'
 import { evaluateRational, sameRational } from './rational.ts'
@@ -206,8 +206,11 @@ requiredAssertions 列出程序从候选原文定位的强断言。每条必须�
 
 export function blindQuestions(input: ContentInput): BlindQuestion[] {
   // 白名单构造，禁止传整个题目对象后再删 answer，以免 accept/keywords 或新字段泄漏。
-  return input.units.flatMap(unit => unit.question ? [{ id: unit.id, question: unit.question.question,
-    ...(unit.question.choices ? { choices: unit.question.choices } : {}) }] : [])
+  // 只有“可独立判定”的题才进入盲解：选择题，或单一数值填空。
+  // 开放式主观题/代码题没有可精确比对的答案，交给 reviewer 按量规核查；强制 solved 只会误拦。
+  return input.units.flatMap(unit => unit.question && ((unit.question.choices?.length ?? 0) > 0 || numericAnswer(unit.question.answer) !== undefined)
+    ? [{ id: unit.id, question: unit.question.question, ...(unit.question.choices ? { choices: unit.question.choices } : {}) }]
+    : [])
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -254,7 +257,8 @@ export function validateContentInput(input: ContentInput): void {
   }
 }
 export function parseBlindSolutions(value: unknown, input: ContentInput): BlindSolution[] {
-  return covered(object(value).solutions, blindQuestions(input).map(q => q.id)).map(item => {
+  const raw = object(value).solutions
+  return covered(raw === undefined ? [] : raw, blindQuestions(input).map(q => q.id)).map(item => {
     if (item.status !== 'solved' && item.status !== 'uncertain') throw new Error('独立解答状态缺失或非法')
     // uncertain 合法地可能没有确定答案（“不猜答案”）：空/缺 answer 不判为解析错误。
     // solved 的空答案会在 contentIssues 按“不一致/无法映射”拦截并进入修复循环，而不是把整份审查拖成 error。

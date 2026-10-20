@@ -1,4 +1,5 @@
 import type { CourseStore } from './store.ts'
+import { localDate } from './dates.ts'
 import { dueReviews, type DueReview } from './review.ts'
 import { currentNode } from './lesson.ts'
 import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
@@ -67,6 +68,8 @@ export interface CourseListItem {
   stage: CourseStage
   // 见 CourseProgress.contentReady：地图准入未过时看板提示"内容待重新审查"，不甩会 dead-end 的入口。
   contentReady: boolean
+  // 单门课程状态文件损坏时的可读错误；列表仍返回其他课程，不因一门坏数据整体失败。
+  error?: string
 }
 
 export interface CourseReviewDue {
@@ -77,7 +80,7 @@ export interface CourseReviewDue {
 
 const EMPTY_COUNTS: Record<MasteryStatusId, number> = { mastered: 0, learning: 0, weak: 0, unknown: 0 }
 
-export function courseProgress(store: CourseStore, id: string, today = new Date().toISOString().slice(0, 10)): CourseProgress {
+export function courseProgress(store: CourseStore, id: string, today = localDate()): CourseProgress {
   if (!store.exists(id)) throw new Error(`课程 "${id}" 不存在`)
   const profile = store.has(id, 'profile') ? (store.read(id, 'profile') as Profile) : undefined
   const map = store.has(id, 'knowledge-map') ? (store.read(id, 'knowledge-map') as KnowledgeMap) : undefined
@@ -99,10 +102,12 @@ export function courseProgress(store: CourseStore, id: string, today = new Date(
   for (const nodeId of plan?.path ?? []) push(nodeId)
   for (const nodeId of Object.keys(mastery ?? {})) push(nodeId)
 
+  const researchStatuses = map && profile ? research.statuses(map, profile, map.nodes.map(node => node.id)) : {}
+
   const nodes: ProgressNode[] = order.map((nodeId) => {
     const entry = mastery?.[nodeId]
     const mapNode = map?.nodes.find(node => node.id === nodeId)
-    const researchStatus = mapNode && map && profile ? research.status(map, profile, nodeId) : undefined
+    const researchStatus = mapNode && map && profile ? researchStatuses[nodeId] : undefined
     const card = entry ? memoryCard(entry, today) : undefined
     return {
       id: nodeId,
@@ -161,27 +166,40 @@ export function courseProgress(store: CourseStore, id: string, today = new Date(
   }
 }
 
-export function listCourseSummaries(store: CourseStore, today = new Date().toISOString().slice(0, 10)): CourseListItem[] {
+export function listCourseSummaries(store: CourseStore, today = localDate()): CourseListItem[] {
   return store.list().map((id) => {
-    const progress = courseProgress(store, id)
-    const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
-    const dueCount = mastery ? dueReviews(mastery, today).length : 0
-    const stage: CourseStage = store.has(id, 'assessment')
-      ? 'need-assess'
-      : store.has(id, 'plan')
-      ? 'ready'
-      : store.has(id, 'knowledge-map') && store.has(id, 'learner-profile')
-        ? 'need-plan'
-        : 'need-assess'
-    return {
-      id,
-      goal: progress.goal ?? '',
-      ...(progress.current !== undefined ? { current: progress.current } : {}),
-      mastered: progress.counts.mastered,
-      total: progress.totalNodes,
-      ...(dueCount > 0 ? { dueCount } : {}),
-      stage,
-      contentReady: progress.contentReady,
+    try {
+      const progress = courseProgress(store, id, today)
+      const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
+      const dueCount = mastery ? dueReviews(mastery, today).length : 0
+      const stage: CourseStage = store.has(id, 'assessment')
+        ? 'need-assess'
+        : store.has(id, 'plan')
+        ? 'ready'
+        : store.has(id, 'knowledge-map') && store.has(id, 'learner-profile')
+          ? 'need-plan'
+          : 'need-assess'
+      return {
+        id,
+        goal: progress.goal ?? '',
+        ...(progress.current !== undefined ? { current: progress.current } : {}),
+        mastered: progress.counts.mastered,
+        total: progress.totalNodes,
+        ...(dueCount > 0 ? { dueCount } : {}),
+        stage,
+        contentReady: progress.contentReady,
+      }
+    } catch (error) {
+      // 一门课的损坏数据不能拖垮整个课程列表；UI 依据 error 显示修复提示。
+      return {
+        id,
+        goal: '（课程数据无法读取）',
+        mastered: 0,
+        total: 0,
+        stage: 'need-assess',
+        contentReady: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
     }
   })
 }
@@ -205,11 +223,16 @@ export function courseContentIssues(store: CourseStore, id: string): { kind: str
 export function listDueReviews(store: CourseStore, today: string): CourseReviewDue[] {
   const items: CourseReviewDue[] = []
   for (const id of store.list()) {
-    const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
-    if (!mastery) continue
-    const due = dueReviews(mastery, today)
-    if (due.length === 0) continue
-    items.push({ id, due, earliestDue: due[0].review_due })
+    try {
+      const mastery = store.has(id, 'mastery') ? (store.read(id, 'mastery') as Mastery) : undefined
+      if (!mastery) continue
+      const due = dueReviews(mastery, today)
+      if (due.length === 0) continue
+      items.push({ id, due, earliestDue: due[0].review_due })
+    } catch {
+      // 单门课程状态损坏时跳过它，跨课程复习汇总不能被一门坏课程打断。
+      continue
+    }
   }
   return items.sort(
     (a, b) => (a.earliestDue ?? '').localeCompare(b.earliestDue ?? '') || a.id.localeCompare(b.id)

@@ -3,6 +3,7 @@ import { topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import { bankContent, mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
@@ -111,12 +112,22 @@ async function runQuiz(deps: FlowDeps, courseId: string, engine: AssessmentEngin
   }
 }
 
-export async function runAssess(deps: FlowDeps, config: { courseId: string }): Promise<void> {
+export async function runAssess(deps: FlowDeps, config: { courseId: string; reset?: boolean }): Promise<void> {
   const { store, io } = deps
   if (!store.exists(config.courseId)) {
     io.err(`tutor: 课程 "${config.courseId}" 不存在，请先运行 npm run agent -- new ${config.courseId}\n`)
     io.closeInput()
     throw new FlowExit(1)
+  }
+  if (config.reset) {
+    if (!store.has(config.courseId, 'assessment')) {
+      io.out('没有未完成的摸底进度。\n')
+    } else {
+      const archive = store.archive(config.courseId, ['assessment'], { label: 'assessment-reset', removeKinds: ['assessment'] })
+      io.out(`已清理未完成的摸底进度（原文件归档到 ${archive}）。\n`)
+    }
+    io.closeInput()
+    throw new FlowExit(0)
   }
   const profile = store.read(config.courseId, 'profile') as Profile
   const gate = createContentGate(deps, config.courseId)
@@ -130,6 +141,7 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string }): P
     }, gate, value => mapContent(value, profile))
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
+    recordChatTotal(deps.costs, chat, 'map')
     io.out('知识地图生成开销：')
     printSessionTotal(chat, deps)
   }
@@ -159,6 +171,7 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string }): P
     bank[node.id] = (bankValue as QuestionBank)[node.id]
     store.write(config.courseId, 'question-bank', bank)
     await bankChat.flush()
+    recordChatTotal(deps.costs, bankChat, 'bank')
     io.out('该知识点出题开销：')
     printSessionTotal(bankChat, deps)
   }
@@ -170,10 +183,21 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string }): P
   await runQuiz(deps, config.courseId, engine, map, prepareNode)
 
   const learner = engine.buildLearnerProfile(today())
+  // 摸底成功后才归档旧状态：中途失败/中断保留原掌握度、计划与断点，不提前清空。
+  // 旧计划/实践/考试与新掌握度不再匹配，归档后要求重新规划。
+  const hasPriorState = store.has(config.courseId, 'mastery') || store.has(config.courseId, 'learner-profile')
+    || store.has(config.courseId, 'plan') || store.has(config.courseId, 'lesson') || store.has(config.courseId, 'practice-state')
+  let planArchive: string | undefined
+  if (hasPriorState) {
+    planArchive = store.archive(config.courseId, ['mastery', 'learner-profile', 'plan', 'lesson', 'practice-state'], {
+      label: 'reassessed', files: ['exam-attempt.json'], removeKinds: ['plan', 'lesson', 'practice-state'], removeFiles: ['exam-attempt.json'],
+    })
+  }
   store.write(config.courseId, 'learner-profile', learner)
   store.write(config.courseId, 'mastery', engine.buildMastery())
   store.remove(config.courseId, 'assessment')
   io.out(`\n摸底完成。${learner.summary}\n能力画像已写入 ${store.root}/${config.courseId}/learner-profile.yaml\n`)
+  if (planArchive) io.out(`旧掌握度/计划已归档到 ${planArchive}；请重新运行 plan 生成与新掌握度匹配的计划。\n`)
   io.closeInput()
   throw new FlowExit(0)
 }

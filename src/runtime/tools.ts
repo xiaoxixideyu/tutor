@@ -3,6 +3,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { ApiToolDef } from './llm.ts'
+import { readBodyLimited, safeFetch, ResponseTooLargeError, UnsafeUrlError } from './url-safety.ts'
 
 export const MCP_SEARCH_PREFIX = 'mcp__searchix__'
 
@@ -55,19 +56,27 @@ export async function webFetch(url: string, signal: AbortSignal, fetchImpl: type
   const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS)
   const combined = AbortSignal.any([signal, timeout])
   try {
-    const response = await fetchImpl(target.toString(), { method: 'GET', redirect: 'follow', signal: combined,
-      headers: { accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5', 'user-agent': 'tutor/0.1 (local study agent)' } })
-    if (!response.ok) return { text: `抓取失败：HTTP ${response.status}`, isError: true }
+    // safeFetch 会逐跳校验重定向，拒绝本机/内网/云元数据地址。
+    const { response, url: finalUrl } = await safeFetch(target.toString(), {
+      signal: combined,
+      fetchImpl,
+      headers: { accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5', 'user-agent': 'tutor/0.1 (local study agent)' },
+    })
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {})
+      return { text: `抓取失败：HTTP ${response.status}`, isError: true }
+    }
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
-    const buffer = Buffer.from(await response.arrayBuffer())
-    if (buffer.byteLength > FETCH_BYTES_LIMIT) return { text: `页面过大（超过 ${Math.round(FETCH_BYTES_LIMIT / 1024)}KB），未读取`, isError: true }
+    const buffer = await readBodyLimited(response, FETCH_BYTES_LIMIT)
     const raw = buffer.toString('utf8')
     const text = contentType.includes('html') ? htmlToText(raw) : raw
     const trimmed = text.slice(0, FETCH_TEXT_LIMIT)
     if (!trimmed) return { text: '页面没有可读正文', isError: true }
-    return { text: `来源 ${response.url}\n\n${trimmed}`, isError: false }
+    return { text: `来源 ${finalUrl.toString()}\n\n${trimmed}`, isError: false }
   } catch (error) {
     if (signal.aborted) throw error
+    if (error instanceof ResponseTooLargeError) return { text: `页面过大（超过 ${Math.round(FETCH_BYTES_LIMIT / 1024)}KB），未读取`, isError: true }
+    if (error instanceof UnsafeUrlError) return { text: `抓取失败：${error.message}`, isError: true }
     return { text: `抓取失败：${error instanceof Error ? error.message : String(error)}`, isError: true }
   }
 }

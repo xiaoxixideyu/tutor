@@ -32,7 +32,8 @@ function renderList() {
     const pointer = item.current ? `  ${paint('→', 90)} ${item.current}` : ''
     const due = item.dueCount ? `  ${paint(`到期 ${item.dueCount}`, 33)}` : ''
     out.write(`${paint('●', 36)} ${item.id}  ${item.goal}${pointer}${due}\n`)
-    out.write(`  进度 ${item.mastered}/${item.total} 已掌握\n`)
+    if (item.error) out.write(`  ${paint(`⚠ 数据无法读取：${item.error}`, 31)}\n`)
+    else out.write(`  进度 ${item.mastered}/${item.total} 已掌握\n`)
   }
 }
 

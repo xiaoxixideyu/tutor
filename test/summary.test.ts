@@ -165,6 +165,20 @@ describe('listCourseSummaries', () => {
     store.write('a', 'mastery', { a1: { status: 'mastered' }, a2: { status: 'mastered' } })
     assert.equal(courseProgress(store, 'a').current, undefined)
   })
+
+  it('单门课程数据损坏时仍返回其他课程并标记错误', (t) => {
+    const store = makeStore()
+    t.after(() => fs.rmSync(store.root, { recursive: true, force: true }))
+    store.create('good', { goal: '正常课程' })
+    store.create('bad', { goal: '损坏课程' })
+    fs.writeFileSync(path.join(store.root, 'bad', 'profile.yaml'), 'goal: 123\n')
+    const items = listCourseSummaries(store)
+    assert.deepEqual(items.map((item) => item.id), ['bad', 'good'])
+    assert.match(items[0].error ?? '', /profile\.yaml|校验失败/)
+    assert.equal(items[0].total, 0)
+    assert.equal(items[1].goal, '正常课程')
+    assert.equal(items[1].error, undefined)
+  })
 })
 
 describe('listDueReviews', () => {
@@ -189,5 +203,17 @@ describe('listDueReviews', () => {
     store.write('beta', 'mastery', { b1: { status: 'learning', review_due: '2026-09-18', review_stage: 1 } })
     const tied = listDueReviews(store, '2026-09-18')
     assert.deepEqual(tied.map((c) => c.id), ['alpha', 'beta'])
+  })
+
+  it('单门课程状态损坏时跳过它，不影响其他课程的到期汇总', (t) => {
+    const store = makeStore()
+    t.after(() => fs.rmSync(store.root, { recursive: true, force: true }))
+    store.create('good', { goal: '正常' })
+    store.write('good', 'mastery', { a1: { status: 'mastered', review_due: '2026-09-17' } })
+    store.create('bad', { goal: '损坏' })
+    fs.writeFileSync(path.join(store.root, 'bad', 'mastery.yaml'), 'a1: [\n')
+    const due = listDueReviews(store, '2026-09-19')
+    assert.deepEqual(due.map((item) => item.id), ['good'])
+    assert.equal(due[0].due.length, 1)
   })
 })

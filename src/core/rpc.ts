@@ -1,9 +1,11 @@
 import { COURSE_ID_PATTERN, type CourseStore } from './store.ts'
+import { acquireCourseLock, CourseBusyError } from './course-lock.ts'
 import { dueReviews, pickReviewQuestions, reviewAttemptId } from './review.ts'
 import { courseProgress, listCourseSummaries, listDueReviews, courseContentIssues } from './summary.ts'
 import { applyReviewResult, judgeQuizAnswer } from './assessment.ts'
 import { LearnerNotesStore } from './learner-notes.ts'
 import { appendMasteryEvent, dailyActivity, learningPace, nodeTrails, readMasteryEvents } from './events.ts'
+import { ExamAttemptStore } from './exam-attempt.ts'
 import type { DocKind, Mastery, Question, QuestionBank, ReviewResult } from './schema.ts'
 import { requireReviewedBank } from './quality-store.ts'
 
@@ -91,6 +93,18 @@ function requireCourse(store: CourseStore, id: string): void {
   }
 }
 
+// 复习回写前的短临界区：与网页/CLI 流程共用课程锁，避免两个进程各自读整份 mastery 后互相覆盖。
+function withCourseWrite<T>(store: CourseStore, id: string, work: () => T): T {
+  let lock: ReturnType<typeof acquireCourseLock>
+  try {
+    lock = acquireCourseLock(store.root, id)
+  } catch (error) {
+    if (error instanceof CourseBusyError) throw rpcError(RPC_ERRORS.invalidParams, error.message)
+    throw error
+  }
+  try { return work() } finally { lock.release() }
+}
+
 // 方法表：method 名 -> 处理函数（params -> result）。抛出的 Error 若带 rpcCode 则映射为对应 JSON-RPC 错误码。
 export function createRpcMethods(
   store: CourseStore,
@@ -109,6 +123,24 @@ export function createRpcMethods(
       const id = asCourseId(params)
       requireCourse(store, id)
       return courseContentIssues(store, id)
+    },
+    // 清理中断的摸底/考试断点：原文件先归档；不触碰掌握度、计划与已通过成绩。
+    resetAssessment: (params) => {
+      const id = asCourseId(params)
+      requireCourse(store, id)
+      return withCourseWrite(store, id, () => {
+        if (!store.has(id, 'assessment')) return { reset: false, message: '没有未完成的摸底进度' }
+        const archive = store.archive(id, ['assessment'], { label: 'assessment-reset', removeKinds: ['assessment'] })
+        return { reset: true, archive }
+      })
+    },
+    discardAttempt: (params) => {
+      const id = asCourseId(params)
+      requireCourse(store, id)
+      return withCourseWrite(store, id, () => {
+        const archive = new ExamAttemptStore(store.root, id).discard()
+        return archive ? { discarded: true, archive } : { discarded: false, message: '没有未完成的考试断点' }
+      })
     },
     dueReviews: (params) => {
       if (params?.id === undefined) return listDueReviews(store, today())
@@ -140,23 +172,25 @@ export function createRpcMethods(
       const score = asScore(params?.score)
       const day = today()
       requireCourse(store, id)
-      if (!store.has(id, 'mastery')) {
-        throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 尚未产生掌握度记录`)
-      }
-      const mastery = store.read(id, 'mastery') as Mastery
-      if (!(node in mastery)) {
-        throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 没有知识点 "${node}" 的掌握度记录`)
-      }
-      if (!mastery[node].review_due || mastery[node].review_due! > day) {
-        throw rpcError(RPC_ERRORS.invalidParams, '该知识点尚未到复习日期或已完成本次复习')
-      }
-      const updated = applyReviewResult(mastery, node, score, day)
-      store.write(id, 'mastery', updated)
-      // 旧入口无逐题信息：只记事件流；辅助数据失败不回滚已提交的掌握度。
-      try {
-        appendMasteryEvent(store.root, id, { key: `review:legacy:${id}:${node}:${day}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
-      } catch { /* 辅助数据写入失败忽略 */ }
-      return updated[node]
+      return withCourseWrite(store, id, () => {
+        if (!store.has(id, 'mastery')) {
+          throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 尚未产生掌握度记录`)
+        }
+        const mastery = store.read(id, 'mastery') as Mastery
+        if (!(node in mastery)) {
+          throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 没有知识点 "${node}" 的掌握度记录`)
+        }
+        if (!mastery[node].review_due || mastery[node].review_due! > day) {
+          throw rpcError(RPC_ERRORS.invalidParams, '该知识点尚未到复习日期或已完成本次复习')
+        }
+        const updated = applyReviewResult(mastery, node, score, day)
+        store.write(id, 'mastery', updated)
+        // 旧入口无逐题信息：只记事件流；辅助数据失败不回滚已提交的掌握度。
+        try {
+          appendMasteryEvent(store.root, id, { key: `review:legacy:${id}:${node}:${day}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
+        } catch { /* 辅助数据写入失败忽略 */ }
+        return updated[node]
+      })
     },
     // 取到期复习题（判分留服务端，故下发抹掉答案）。返回每个到期节点及其题目；题库缺失的节点 questions 为空，
     // 前端据此提示「题库缺失」而非静默漏掉。
@@ -185,59 +219,61 @@ export function createRpcMethods(
       const node = asString(params?.node, 'node')
       const answers = asStringArray(params?.answers, 'answers')
       requireCourse(store, id)
-      if (!store.has(id, 'mastery')) {
-        throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 尚未产生掌握度记录`)
-      }
-      const mastery = store.read(id, 'mastery') as Mastery
-      if (!(node in mastery)) {
-        throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 没有知识点 "${node}" 的掌握度记录`)
-      }
-      const attemptId = asString(params?.attemptId, 'attemptId')
-      const receipt = mastery[node].last_review
-      if (receipt?.attempt_id === attemptId) {
-        if (JSON.stringify(answers) !== JSON.stringify(receipt.answers)) {
-          throw rpcError(RPC_ERRORS.invalidParams, '该次复习已提交，不能更改答案')
+      return withCourseWrite(store, id, () => {
+        if (!store.has(id, 'mastery')) {
+          throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 尚未产生掌握度记录`)
         }
-        return receipt.result
-      }
-      const bank = store.has(id, 'question-bank') ? (store.read(id, 'question-bank') as QuestionBank) : {}
-      const questions = pickReviewQuestions(bank, node)
-      if (questions.length === 0) {
-        throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 知识点 "${node}" 没有可复习的题目`)
-      }
-      const day = today()
-      if (!mastery[node].review_due || mastery[node].review_due! > day
-        || attemptId !== reviewAttemptId(id, node, mastery[node], questions)) {
-        throw rpcError(RPC_ERRORS.invalidParams, '复习题目或进度已变化，请刷新后重新取题')
-      }
-      if (answers.length !== questions.length || answers.some((answer) => !answer.trim())) {
-        throw rpcError(RPC_ERRORS.invalidParams, '请完成全部复习题后提交')
-      }
-      requireReviewedBank(store, id, bank, node)
-      const perQuestion = questions.map((question, index) => {
-        const your = answers[index] ?? ''
-        return {
-          id: question.id,
-          question: question.question,
-          your,
-          correct: judgeQuizAnswer(question, your),
-          answer: question.answer,
+        const mastery = store.read(id, 'mastery') as Mastery
+        if (!(node in mastery)) {
+          throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 没有知识点 "${node}" 的掌握度记录`)
         }
+        const attemptId = asString(params?.attemptId, 'attemptId')
+        const receipt = mastery[node].last_review
+        if (receipt?.attempt_id === attemptId) {
+          if (JSON.stringify(answers) !== JSON.stringify(receipt.answers)) {
+            throw rpcError(RPC_ERRORS.invalidParams, '该次复习已提交，不能更改答案')
+          }
+          return receipt.result
+        }
+        const bank = store.has(id, 'question-bank') ? (store.read(id, 'question-bank') as QuestionBank) : {}
+        const questions = pickReviewQuestions(bank, node)
+        if (questions.length === 0) {
+          throw rpcError(RPC_ERRORS.invalidParams, `课程 "${id}" 知识点 "${node}" 没有可复习的题目`)
+        }
+        const day = today()
+        if (!mastery[node].review_due || mastery[node].review_due! > day
+          || attemptId !== reviewAttemptId(id, node, mastery[node], questions)) {
+          throw rpcError(RPC_ERRORS.invalidParams, '复习题目或进度已变化，请刷新后重新取题')
+        }
+        if (answers.length !== questions.length || answers.some((answer) => !answer.trim())) {
+          throw rpcError(RPC_ERRORS.invalidParams, '请完成全部复习题后提交')
+        }
+        requireReviewedBank(store, id, bank, node)
+        const perQuestion = questions.map((question, index) => {
+          const your = answers[index] ?? ''
+          return {
+            id: question.id,
+            question: question.question,
+            your,
+            correct: judgeQuizAnswer(question, your),
+            answer: question.answer,
+          }
+        })
+        const correct = perQuestion.filter((q) => q.correct).length
+        const total = questions.length
+        const score = correct / total
+        const updated = applyReviewResult(mastery, node, score, day)
+        const result: ReviewResult = { score, correct, total, perQuestion, entry: { ...updated[node] } }
+        updated[node].last_review = { attempt_id: attemptId, answers: [...answers], result }
+        store.write(id, 'mastery', updated)
+        // 回执已落盘后追加观察记录与事件流；写失败不影响本次复习结果。
+        try {
+          const wrong = perQuestion.filter((item) => !item.correct).map((item) => ({ question: item.question, your: item.your, answer: item.answer }))
+          if (wrong.length > 0) new LearnerNotesStore(store.root, id).recordErrors(node, wrong, day, 'review')
+          appendMasteryEvent(store.root, id, { key: `review:${attemptId}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
+        } catch { /* 辅助数据写入失败忽略 */ }
+        return result
       })
-      const correct = perQuestion.filter((q) => q.correct).length
-      const total = questions.length
-      const score = correct / total
-      const updated = applyReviewResult(mastery, node, score, day)
-      const result: ReviewResult = { score, correct, total, perQuestion, entry: { ...updated[node] } }
-      updated[node].last_review = { attempt_id: attemptId, answers: [...answers], result }
-      store.write(id, 'mastery', updated)
-      // 回执已落盘后追加观察记录与事件流；写失败不影响本次复习结果。
-      try {
-        const wrong = perQuestion.filter((item) => !item.correct).map((item) => ({ question: item.question, your: item.your, answer: item.answer }))
-        if (wrong.length > 0) new LearnerNotesStore(store.root, id).recordErrors(node, wrong, day, 'review')
-        appendMasteryEvent(store.root, id, { key: `review:${attemptId}`, at: day, node, kind: 'review', score, passed: score >= 0.5 })
-      } catch { /* 辅助数据写入失败忽略 */ }
-      return result
     },
   }
 }

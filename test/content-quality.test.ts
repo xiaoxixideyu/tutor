@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { evaluateRational, sameRational } from '../src/core/rational.ts'
-import { bankContent, blindQuestions, contentIssues, contentKey, lessonContent, mapContent, parseBlindSolutions, parseContentReview,
+import { bankContent, blindQuestions, contentIssues, contentKey, examContent, lessonContent, mapContent, parseBlindSolutions, parseContentReview,
   planContent, practiceContent, replayApprovedReply, requiredAssertions, teachingContent, parseFactChecks, type ContentInput, type ContentReview } from '../src/core/content-quality.ts'
 import { QualityStore, type QualityRecord } from '../src/core/quality-store.ts'
 import { ContentGate, generateApproved, generateApprovedTeaching } from '../src/flows/content-gate.ts'
@@ -569,6 +569,19 @@ it('实践 README、测试和提示，教案所有题目和误区都纳入审查
   const lesson = lessonContent(draft, profile, map)
   assert.deepEqual(blindQuestions(lesson).map(q => q.id), ['practice:0', 'quiz:0'])
   assert.match(JSON.stringify(lesson.units[0]), /错误假设/)
+})
+
+it('开放式练习和主观题不强制盲解，选择题与数值题仍独立验证', () => {
+  const open: LessonDraft = { node: 'die', title: '课', hook: '开场', structure: ['要点'], example: '例子',
+    practice: [{ question: '解释一下', answer: '一段开放解释' }], quiz: [{ question: '数值题', answer: '1/2' }], misconceptions: [] }
+  assert.deepEqual(blindQuestions(lessonContent(open, profile, map)).map(q => q.id), ['quiz:0'])
+  const choice: LessonDraft = { ...open,
+    practice: [{ question: '选择题', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'B' }], quiz: [] }
+  assert.deepEqual(blindQuestions(lessonContent(choice, profile, map)).map(q => q.id), ['practice:0'])
+  const exam = examContent({ milestone: 'm1', questions: [
+    { id: 'q1', node: 'die', type: 'subjective', question: '描述完整方案', answer: '一段参考答案', points: 2 },
+  ] }, profile, map, { id: 'm1', title: '里程碑', nodes: ['die'] })
+  assert.deepEqual(blindQuestions(exam), [])
 })
 
 it('强断言定位到具体分句，缺漏反例核查时不能批准；干扰项与历史发言不混入断言', () => {

@@ -6,7 +6,56 @@ import zlib from 'node:zlib'
 import { randomUUID } from 'node:crypto'
 import type { ApiMessage } from './llm.ts'
 
-const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+// 按 zstd 帧头/块头计算帧边界。不能搜索魔数：压缩数据内部可能偶然出现同样的 4 字节，
+// 会把一帧误切两半并让整段事件静默丢失。
+function zstdFrameEnd(buffer: Buffer, start: number): number | undefined {
+  if (start + 5 > buffer.length || buffer.readUInt32LE(start) !== 0xfd2fb528) return undefined
+  const descriptor = buffer[start + 4]
+  const fcsFlag = descriptor >> 6
+  const singleSegment = ((descriptor >> 5) & 1) === 1
+  const checksum = ((descriptor >> 2) & 1) === 1
+  const dictFlag = descriptor & 3
+  let offset = start + 5
+  if (!singleSegment) offset += 1
+  offset += [0, 1, 2, 4][dictFlag]!
+  offset += fcsFlag === 0 ? (singleSegment ? 1 : 0) : [0, 2, 4, 8][fcsFlag]!
+  for (;;) {
+    if (offset + 3 > buffer.length) return undefined
+    const header = buffer[offset]! | (buffer[offset + 1]! << 8) | (buffer[offset + 2]! << 16)
+    offset += 3
+    const last = (header & 1) === 1
+    const blockType = (header >> 1) & 3
+    const blockSize = header >>> 3
+    if (blockType === 3) return undefined
+    offset += blockType === 1 ? 1 : blockSize
+    if (offset > buffer.length) return undefined
+    if (last) break
+  }
+  if (checksum) offset += 4
+  return offset <= buffer.length ? offset : undefined
+}
+
+export function decodeZstdFrames(buffer: Buffer): string {
+  let offset = 0
+  let text = ''
+  while (offset < buffer.length) {
+    // skippable frame（0x184D2A50–0x184D2A5F）：跳过 length 指定的负载。
+    if (offset + 8 <= buffer.length) {
+      const skippable = buffer.readUInt32LE(offset)
+      if (skippable >= 0x184d2a50 && skippable <= 0x184d2a5f) {
+        const size = buffer.readUInt32LE(offset + 4)
+        offset += 8 + size
+        continue
+      }
+    }
+    const end = zstdFrameEnd(buffer, offset)
+    if (end === undefined) break
+    try { text += zlib.zstdDecompressSync(buffer.subarray(offset, end)).toString('utf8') }
+    catch { /* 单帧损坏不影响后续帧 */ }
+    offset = end
+  }
+  return text
+}
 
 export interface SessionEvent {
   seq: number
@@ -17,21 +66,6 @@ export interface SessionEvent {
 
 export function encodeWorkspace(workspace: string): string {
   return `-${workspace.replaceAll('/', '-')}--`
-}
-
-export function decodeZstdFrames(buffer: Buffer): string {
-  let offset = 0
-  let text = ''
-  while (offset < buffer.length) {
-    const start = buffer.indexOf(MAGIC, offset)
-    if (start < 0) break
-    let end = buffer.indexOf(MAGIC, start + 4)
-    if (end < 0) end = buffer.length
-    try { text += zlib.zstdDecompressSync(buffer.subarray(start, end)).toString('utf8') }
-    catch { /* 尾部不完整帧忽略 */ }
-    offset = end
-  }
-  return text
 }
 
 function writeFileAtomic(file: string, content: string): void {
@@ -73,6 +107,8 @@ export class SessionLog {
 
   // 恢复已有会话：事件与消息任一缺失都视为不可恢复（返回 null）。
   static load(sessionsRoot: string, workspace: string, id: string): SessionLog | null {
+    // 会话 id 来自课程 YAML，必须限制为单段目录名，防止被篡改成路径穿越。
+    if (!/^session-[A-Za-z0-9._-]+$/.test(id)) return null
     try {
       const log = new SessionLog(sessionsRoot, workspace, id)
       const eventsText = decodeZstdFrames(fs.readFileSync(log.eventFile))

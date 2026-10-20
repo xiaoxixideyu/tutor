@@ -110,7 +110,7 @@ function completedMapCall(call: QualityCall, original: QualityRecord): boolean {
 function atomicJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.${randomUUID()}.tmp`
-  try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file) }
+  try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file) }
   finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) }
 }
 
@@ -262,7 +262,9 @@ export class QualityStore {
       if (record.calls.some(call => !this.reusable(call, input))) return false
       if (blindQuestions(input).length && !solver.length) return false
       if (factProbes(input).length && !record.calls.some(call => call.role === 'facts')) return false
-      const solutions = parseBlindSolutions({ solutions: record.solutions }, input)
+      // 旧版本曾把主观题也送去盲解；校验新记录时只取当前可盲解题目的解答，兼容旧批准。
+      const blindIds = new Set(blindQuestions(input).map(question => question.id))
+      const solutions = parseBlindSolutions({ solutions: (record.solutions ?? []).filter(solution => blindIds.has(solution.id)) }, input)
       const facts = parseFactChecks({ claims: record.facts }, factProbes(input).map(fact => fact.id))
       const review = parseContentReview(record.review, input)
       return contentIssues(input, solutions, review, facts).length === 0

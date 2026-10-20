@@ -3,10 +3,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { CourseStore } from '../core/store.ts'
+import { acquireCourseLock, type CourseLock } from '../core/course-lock.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { ChatRuntime, type AgentChat, type AttemptObservation, type CreateChatOptions, type ModelSettings } from '../runtime/chat.ts'
 import type { SearchSettings } from '../runtime/tools.ts'
 import { createResearchStatus } from '../runtime/status.ts'
+import { CostLedger } from './cost-ledger.ts'
+import { printCostLedger } from './cost-line.ts'
 import { FlowExit, type FlowIO } from './io.ts'
 import type { FlowDeps, FlowInput } from './deps.ts'
 import { today } from './deps.ts'
@@ -100,16 +103,24 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
   const deps: FlowDeps = {
     store, io, status, env, workspace, today,
     createChat: createChat as FlowDeps['createChat'],
+    costs: new CostLedger(),
+  }
+  let lock: CourseLock
+  try {
+    lock = acquireCourseLock(store.root, input.courseId)
+  } catch (error) {
+    io.err(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
+    return 1
   }
   try {
     switch (input.kind) {
       case 'new': await runInterview(deps, { courseId: input.courseId }); break
-      case 'assess': await runAssess(deps, { courseId: input.courseId }); break
+      case 'assess': await runAssess(deps, { courseId: input.courseId, ...(input.reset ? { reset: true } : {}) }); break
       case 'plan': await runPlan(deps, { courseId: input.courseId }); break
       case 'learn': await runLearn(deps, { courseId: input.courseId }); break
       case 'research': await runResearch(deps, { courseId: input.courseId, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) }); break
       case 'practice-gen': await runPracticeGen(deps, { courseId: input.courseId, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) }); break
-      case 'exam': await runExam(deps, { courseId: input.courseId, ...(input.milestoneId !== undefined ? { milestoneId: input.milestoneId } : {}) }); break
+      case 'exam': await runExam(deps, { courseId: input.courseId, ...(input.milestoneId !== undefined ? { milestoneId: input.milestoneId } : {}), ...(input.discard ? { discard: true } : {}) }); break
       case 'practice': await runPractice(deps, { courseId: input.courseId, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) }); break
       case 'audit-content': return await runAuditContent(deps, { courseId: input.courseId })
       default: throw new Error(`未知流程 "${input.kind}"`)
@@ -119,6 +130,9 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
     if (error instanceof FlowExit) return error.code
     io.err(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
     return 1
+  } finally {
+    lock.release()
+    try { printCostLedger(deps) } catch { /* 成本展示失败不影响流程结果 */ }
   }
 }
 

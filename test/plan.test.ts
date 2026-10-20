@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, validateMilestoneDraft } from '../src/core/plan.ts'
+import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, planMapMismatch, planMapMismatchText, validateMilestoneDraft } from '../src/core/plan.ts'
 import { PlanSchema } from '../src/core/schema.ts'
 import type { KnowledgeMap, LearnerProfile, Mastery } from '../src/core/schema.ts'
 
@@ -113,5 +113,34 @@ describe('assemblePlan', () => {
   it('空路径时省略 current', () => {
     const plan = assemblePlan([], [])
     assert.equal('current' in plan, false)
+  })
+})
+
+describe('planMapMismatch', () => {
+  const plan = assemblePlan(planPath, [], map.nodes.map((node) => node.id))
+
+  it('计划覆盖当前地图时返回 null', () => {
+    assert.equal(planMapMismatch(plan, map), null)
+  })
+
+  it('地图新增节点时报告未纳入计划的节点', () => {
+    const extended = { ...map, nodes: [...map.nodes, { id: 'testing', title: '测试' }] }
+    const mismatch = planMapMismatch(plan, extended)
+    assert.deepEqual(mismatch?.missingFromMap, [])
+    assert.deepEqual(mismatch?.notInPlan, ['testing'])
+    assert.match(planMapMismatchText(mismatch!), /testing/)
+  })
+
+  it('地图删除节点时报告计划中的失效节点', () => {
+    const reduced = { ...map, nodes: map.nodes.filter((node) => node.id !== 'channels') }
+    const mismatch = planMapMismatch(plan, reduced)
+    assert.deepEqual(mismatch?.missingFromMap, ['channels'])
+    assert.deepEqual(mismatch?.notInPlan, [])
+    assert.match(planMapMismatchText(mismatch!), /channels/)
+  })
+
+  it('旧计划没有 scope 时按完整拓扑图视为覆盖全部节点', () => {
+    const legacy = { path: ['basics'], milestones: [], current: 'basics' }
+    assert.equal(planMapMismatch(legacy, map), null)
   })
 })

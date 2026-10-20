@@ -216,7 +216,10 @@ export function createContentGate(deps: FlowDeps, courseId: string): ContentGate
     const cost = loadCostConfigFromRepo(deps.workspace)
     const reused = record.calls.filter(call => call.reusedFrom).length
     if (reused) out(`复用同一内容的 ${reused} 项已完成检查，原始证据与费用保留；本次不重复计费。\n`)
-    for (const call of record.calls) if (call.model && !call.reusedFrom) out(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, deps.io.tty)}\n`)
+    for (const call of record.calls) if (call.model && !call.reusedFrom) {
+      deps.costs?.record(call.model, call.usage, `review:${call.role}`)
+      out(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, deps.io.tty)}\n`)
+    }
   }, {
     onStart: record => {
       const message = `正在核对${labels[record.input.kind]}的范围与正确性…`

@@ -72,7 +72,15 @@ export function gradeObjective(q: ExamQuestion, raw: string): ExamGrading {
   if ((q.choices?.length ?? 0) > 0) {
     const letter = q.answer.trim().toLowerCase()
     const normalized = raw.trim().toLowerCase()
-    const correct = /^[a-d]$/.test(normalized) ? normalized === letter : false
+    if (/^[a-d]$/.test(normalized)) {
+      const correct = normalized === letter
+      return { questionId: q.id, correct, score: correct ? 1 : 0 }
+    }
+    // 与大考外的选择题判分保持一致：除了字母，也接受选项原文（可带 A./B. 前缀）。
+    const index = 'abcd'.indexOf(letter)
+    const choice = index >= 0 ? q.choices?.[index] : undefined
+    const bare = choice?.replace(/^[a-d][.、,，:：\)）]?\s*/i, '')
+    const correct = choice !== undefined && matchesRuleAnswer(raw, [choice, bare ?? choice])
     return { questionId: q.id, correct, score: correct ? 1 : 0 }
   }
   const correct = matchesRuleAnswer(raw, [q.answer, ...(q.accept ?? [])])

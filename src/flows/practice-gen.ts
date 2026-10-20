@@ -2,12 +2,14 @@ import { buildPracticeGenPrompt, practiceGenerationNodes, validatePracticeTasks 
 import type { KnowledgeMap, Plan, PracticeTaskFile, Profile } from '../core/schema.ts'
 import { parseJsonBlock } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import { mapContent, planContent, practiceContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
 import { applyPracticeEdits, PRACTICE_REPAIR_PERSONA, practiceRepairPrompt } from '../core/content-edit.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
+import { requirePlanMapConsistency } from './consistency.ts'
 import { today } from './deps.ts'
 
 export async function runPracticeGen(deps: FlowDeps, config: { courseId: string; batchSize?: number; nodeId?: string }): Promise<void> {
@@ -24,6 +26,7 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
   const profile = store.read(config.courseId, 'profile') as Profile
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const plan = store.read(config.courseId, 'plan') as Plan
+  requirePlanMapConsistency(deps, config.courseId, plan, map)
   const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
   await gate.require(planContent(plan, profile, map))
@@ -65,6 +68,7 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
           const data = parseJsonBlock(text)
           return data.ok ? applyPracticeEdits(oldTasks, data.value, node, today()) : data
         }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+        recordChatTotal(deps.costs, repairChat, 'practice-repair')
         printSessionTotal(repairChat, deps)
       } else result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
         courseId: config.courseId,
@@ -90,6 +94,7 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
 
   io.out(`\n实践任务生成完成：覆盖 ${new Set(file.tasks.map((t) => t.node)).size} 个知识点。\n`)
   await chat.flush()
+  recordChatTotal(deps.costs, chat, 'practice-gen')
   printSessionTotal(chat, deps)
   throw new FlowExit(0)
 }

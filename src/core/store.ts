@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { isMap, parseDocument, stringify, type Document as YamlDocument } from 'yaml'
 import { DocumentSchemas, type DocKind } from './schema.ts'
 import type { KnowledgeMap } from './schema.ts'
@@ -75,12 +76,43 @@ export class CourseStore {
     if (fs.existsSync(file)) fs.unlinkSync(file)
   }
 
+  // 破坏性重跑前把旧状态复制到 courses/<id>/archive/<label>-<timestamp>/。
+  // 只复制/删除显式列出的文件；失败时抛错，让调用方在覆盖前停下。
+  archive(id: string, kinds: DocKind[], options: {
+    label?: string
+    files?: string[]
+    removeKinds?: DocKind[]
+    removeFiles?: string[]
+  } = {}): string {
+    if (!this.exists(id)) throw new Error(`课程 "${id}" 不存在`)
+    const label = (options.label ?? 'snapshot').replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 40) || 'snapshot'
+    const directory = path.join(this.courseDir(id), 'archive', `${label}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`)
+    fs.mkdirSync(directory, { recursive: true })
+    for (const kind of kinds) {
+      const file = this.courseFile(id, kind)
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) fs.copyFileSync(file, path.join(directory, FILES[kind]))
+    }
+    for (const name of options.files ?? []) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error(`归档文件名 "${name}" 非法`)
+      const file = path.join(this.courseDir(id), name)
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) fs.copyFileSync(file, path.join(directory, name))
+    }
+    for (const kind of options.removeKinds ?? []) this.remove(id, kind)
+    for (const name of options.removeFiles ?? []) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error(`归档文件名 "${name}" 非法`)
+      const file = path.join(this.courseDir(id), name)
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) fs.unlinkSync(file)
+    }
+    return directory
+  }
+
   private writeFile(id: string, kind: DocKind, validated: unknown): void {
     const file = this.courseFile(id, kind)
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const doc = mergeIntoDocument(file, validated)
     const tmp = `${file}.tmp-${process.pid}`
-    fs.writeFileSync(tmp, doc.toString())
+    fs.writeFileSync(tmp, doc.toString(), { mode: 0o600 })
+    try { fs.chmodSync(tmp, 0o600) } catch { /* 文件系统不支持时保持默认 */ }
     fs.renameSync(tmp, file)
   }
 

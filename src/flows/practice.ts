@@ -8,6 +8,7 @@ import { requireReviewedPractice } from '../core/quality-store.ts'
 import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
+import { requirePlanMapConsistency } from './consistency.ts'
 import { today } from './deps.ts'
 
 // 从测试命令提取已知工具并探测可用性（学员机器没装就给指引，不产生任务状态）
@@ -48,6 +49,7 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
   const plan = store.read(courseId, 'plan') as Plan
   const map = store.read(courseId, 'knowledge-map') as KnowledgeMap
   const mastery = store.has(courseId, 'mastery') ? store.read(courseId, 'mastery') as Mastery : undefined
+  requirePlanMapConsistency(deps, courseId, plan, map)
   const prevState = store.has(courseId, 'practice-state') ? store.read(courseId, 'practice-state') as PracticeTaskState : undefined
   const node = selectPracticeNode(plan, map, mastery, nodeOverride, prevState)
   if (!node) {
@@ -112,7 +114,7 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
     if (command !== '' && command !== 'r') continue
 
     io.out('运行测试…\n')
-    const rawResults = await runTests(task, workdir)
+    const rawResults = await runTests(task, workdir, { signal: deps.io.signal })
     const results: Record<string, { exitCode: number; output: string; timedOut: boolean }> = {}
     for (const [index, test] of task.tests.entries()) {
       results[test.name] = rawResults[index]

@@ -65,7 +65,23 @@ export function createCliIO(options: { tty?: boolean; signal?: AbortSignal } = {
     }
   }
   const controller = new AbortController()
+  let onSignal: (() => void) | undefined
   if (options.signal) options.signal.addEventListener('abort', () => controller.abort(options.signal!.reason), { once: true })
+  else {
+    // CLI 的 Ctrl-C / SIGTERM 也要能中止模型请求或正在运行的实践测试，而不是把子进程留成孤儿。
+    onSignal = () => {
+      queue.close()
+      controller.abort(new Error('用户中断'))
+    }
+    process.once('SIGINT', onSignal)
+    process.once('SIGTERM', onSignal)
+  }
+  const stopSignal = () => {
+    if (!onSignal) return
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    onSignal = undefined
+  }
   return {
     out: text => { process.stdout.write(text) },
     err: text => { process.stderr.write(text) },
@@ -74,6 +90,7 @@ export function createCliIO(options: { tty?: boolean; signal?: AbortSignal } = {
       return queue.read()
     },
     closeInput(): void {
+      stopSignal()
       queue.close()
       try { process.stdin.destroy() } catch { /* 已关闭 */ }
     },

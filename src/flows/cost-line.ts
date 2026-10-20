@@ -3,6 +3,20 @@ import path from 'node:path'
 import { loadCostConfig, formatTotalCost, type CostConfig } from '../core/cost.ts'
 import type { AgentChat } from '../runtime/chat.ts'
 import type { FlowDeps } from './deps.ts'
+import type { CostLedger } from './cost-ledger.ts'
+
+function formatTokens(count: number): string {
+  return count >= 10000 ? `${Math.round(count / 100) / 10}k` : String(count)
+}
+
+export function printCostLedger(deps: Pick<FlowDeps, 'io' | 'workspace' | 'costs'>): void {
+  const ledger: CostLedger | undefined = deps.costs
+  if (!ledger || ledger.size === 0) return
+  const config = loadCostConfigFromRepo(deps.workspace)
+  const summary = ledger.summary(config as CostConfig)
+  const models = summary.byModel.map((item) => `${item.model} ${config.currency}${item.cost.toFixed(4)}`).join('，')
+  deps.io.out(`\n本次流程总成本 ${config.currency}${summary.cost.toFixed(4)}（输入 ${formatTokens(summary.inputTokens)} · 输出 ${formatTokens(summary.outputTokens)}${models ? `；${models}` : ''}）\n`)
+}
 
 export function loadCostConfigFromRepo(workspace: string): CostConfig {
   try {

@@ -1,9 +1,12 @@
 import { extractProfileJson, parseProfile, preserveLearnerRequests, profileValidationError } from '../core/interview.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 
 const START_MESSAGE = '（学员已就座，请开始需求访谈）'
+// 模型连续输出 schema 不合法的档案时最多要求它修正几次；不设上限会让坏模型无限烧调用。
+export const MAX_PROFILE_REPAIRS = 3
 
 export async function runInterview(deps: FlowDeps, config: { courseId: string; maxTurns?: number }): Promise<void> {
   const maxTurns = config.maxTurns ?? 24
@@ -12,6 +15,7 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
 
   let reply = await chat.ask(START_MESSAGE)
   let turns = 0
+  let profileRepairs = 0
   const requests: string[] = []
   while (true) {
     io.out(`${reply}\n> `)
@@ -21,12 +25,22 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
       store.create(config.courseId, preserveLearnerRequests(profile, requests))
       io.out(`\n课程 "${config.courseId}" 已创建，档案位于 ${store.root}/${config.courseId}/profile.yaml\n`)
       await chat.flush()
+      recordChatTotal(deps.costs, chat, 'interview')
       printSessionTotal(chat, deps)
       io.closeInput()
       throw new FlowExit(0)
     }
 
     if (extractProfileJson(reply) !== null) {
+      profileRepairs += 1
+      if (profileRepairs > MAX_PROFILE_REPAIRS) {
+        io.err(`tutor: 模型连续 ${MAX_PROFILE_REPAIRS + 1} 次输出无效档案，已中止；最后错误：${profileValidationError(reply) ?? '未知'}\n`)
+        await chat.flush()
+        recordChatTotal(deps.costs, chat, 'interview')
+        printSessionTotal(chat, deps)
+        io.closeInput()
+        throw new FlowExit(1)
+      }
       reply = await chat.ask(`你输出的 JSON 档案校验失败：${profileValidationError(reply)}。请修正后重新输出完整 JSON 块。`)
       continue
     }
@@ -35,6 +49,7 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
     if (turns > maxTurns) {
       io.err('tutor: 超过最大访谈轮数\n')
       await chat.flush()
+      recordChatTotal(deps.costs, chat, 'interview')
       io.closeInput()
       throw new FlowExit(1)
     }
@@ -49,10 +64,12 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
     if (answer === null) {
       io.err('tutor: 输入已结束，访谈中止\n')
       await chat.flush()
+      recordChatTotal(deps.costs, chat, 'interview')
       io.closeInput()
       throw new FlowExit(1)
     }
     requests.push(answer.trim())
+    profileRepairs = 0
     reply = await chat.ask(answer.trim())
   }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CourseStore, COURSE_ID_PATTERN } from '../core/store.ts'
+import { localDate } from '../core/dates.ts'
 import { handleRpcRequest, RPC_ERRORS, type RpcRequest } from '../core/rpc.ts'
 import type { KnowledgeMap } from '../core/schema.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
@@ -20,6 +21,8 @@ export interface FlowStart {
   courseId: string
   milestoneId: string
   nodeId: string
+  reset?: boolean
+  discard?: boolean
 }
 
 interface Flow extends FlowStart {
@@ -53,13 +56,27 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-function localSettingsRequest(req: IncomingMessage): boolean {
+// 本地同源校验：Host 必须是本机地址，跨站 Origin/Sec-Fetch-Site 一律拒绝。
+// 静态页面本身不敏感，但 RPC/流程能读写课程与学习状态，所有入口都必须过这道门。
+function localRequest(req: IncomingMessage): boolean {
   try {
     const target = new URL(`http://${req.headers.host ?? ''}`)
     if (!['localhost', '127.0.0.1', '[::1]'].includes(target.hostname) || target.username || target.password) return false
     if (req.headers.origin && req.headers.origin !== target.origin) return false
     return req.headers['sec-fetch-site'] !== 'cross-site'
   } catch { return false }
+}
+
+function requireLocal(req: IncomingMessage, res: ServerResponse): boolean {
+  if (localRequest(req)) return true
+  json(res, 403, { ok: false, error: '仅允许从本机同源页面访问' })
+  return false
+}
+
+function requireJson(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() === 'application/json') return true
+  json(res, 415, { ok: false, error: '请求必须使用 application/json' })
+  return false
 }
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -80,13 +97,14 @@ export function createTutorServer(options: TutorServerOptions) {
   const root = path.resolve(options.root)
   const staticDir = path.join(root, 'static')
   const store = new CourseStore(options.coursesRoot ?? path.join(root, 'courses'))
-  const today = options.today ?? (() => new Date().toISOString().slice(0, 10))
+  const today = options.today ?? (() => localDate())
   const models = new ModelConfigStore(root, { file: options.modelConfigFile, env: options.modelEnvironment })
   const flows = new Map<string, Flow>()
   // 每门课程同时最多一个流程（课程状态互斥）；不同课程的流程彼此独立、可并行。
   const running = new Map<string, Flow>()
   const runFlow: FlowRunner = options.runFlow ?? ((input, io, env) => runFlowInProcess(
-    { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}) },
+    { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+      ...(input.reset ? { reset: true } : {}), ...(input.discard ? { discard: true } : {}) },
     io,
     // 模型与搜索设置均按回合热更新：进行中的流程读取最新保存的配置（practice 零模型，不接渠道）。
     {
@@ -122,6 +140,8 @@ export function createTutorServer(options: TutorServerOptions) {
   function start(input: FlowStart) {
     if (!RUNNERS.has(input.kind)) return { ok: false, error: `未知流程 "${input.kind}"` }
     if (!COURSE_ID_PATTERN.test(input.courseId)) return { ok: false, error: `课程名 "${input.courseId}" 非法` }
+    if (input.reset && input.kind !== 'assess') return { ok: false, error: 'reset 仅用于清理摸底进度' }
+    if (input.discard && input.kind !== 'exam') return { ok: false, error: 'discard 仅用于放弃考试断点' }
     if (input.milestoneId && (input.kind !== 'exam' || !COURSE_ID_PATTERN.test(input.milestoneId))) return { ok: false, error: '里程碑参数非法' }
     if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) {
       return { ok: false, error: '知识点参数非法' }
@@ -138,8 +158,9 @@ export function createTutorServer(options: TutorServerOptions) {
       return { ok: false, error: '所选知识点不在本课程知识地图中' }
     }
     // 每次启动流程冻结模型配置快照（模型渠道由 resolveModel 每回合热更新）；practice 零模型，不要求已配置模型。
-    // research 额外开启结构化进度事件（@@tutor-progress），供网页进度面板显示阶段与等待倒计时。
-    const env = input.kind === 'practice'
+    // reset/discard 只清理断点，同样不应因为模型配置缺失而无法执行。
+    const zeroModel = input.kind === 'practice' || (input.kind === 'assess' && input.reset === true) || (input.kind === 'exam' && input.discard === true)
+    const env = zeroModel
       ? { ...(options.modelEnvironment ?? process.env) }
       : { ...models.environment(), ...(input.kind === 'research' ? { TUTOR_RESEARCH_PROGRESS: '1' } : {}) }
     const queue = createLineQueue()
@@ -183,14 +204,12 @@ export function createTutorServer(options: TutorServerOptions) {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     try {
       if (url.pathname === '/api/model-config') {
-        if (!localSettingsRequest(req)) { json(res, 403, { ok: false, error: '模型设置仅允许从本机同源页面访问' }); return }
+        if (!requireLocal(req, res)) return
         if (req.method === 'GET') {
           json(res, 200, { ok: true, config: models.publicConfig(), flows: activeSnapshots() }); return
         }
         if (req.method === 'POST') {
-          if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
-            json(res, 415, { ok: false, error: '模型设置请求必须使用 application/json' }); return
-          }
+          if (!requireJson(req, res)) return
           let input
           try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型设置请求必须是有效的 JSON' }); return }
           const config = models.save(input)
@@ -199,6 +218,8 @@ export function createTutorServer(options: TutorServerOptions) {
         json(res, 405, { ok: false, error: '不支持此操作' }); return
       }
       if (req.method === 'POST' && url.pathname === '/rpc') {
+        if (!requireLocal(req, res)) return
+        if (!requireJson(req, res)) return
         let request
         try { request = await body(req) } catch {
           json(res, 200, { jsonrpc: '2.0', id: null, error: RPC_ERRORS.parse }); return
@@ -212,10 +233,12 @@ export function createTutorServer(options: TutorServerOptions) {
         json(res, 200, handleRpcRequest(store, request as RpcRequest, today)); return
       }
       if (req.method === 'GET' && url.pathname === '/flow/state') {
+        if (!requireLocal(req, res)) return
         const requested = flows.get(url.searchParams.get('flowId') ?? '')
         json(res, 200, { protocolVersion: FLOW_PROTOCOL_VERSION, flows: activeSnapshots(), flow: requested ? snapshot(requested) : null }); return
       }
       if (req.method === 'GET' && url.pathname === '/flow/stream') {
+        if (!requireLocal(req, res)) return
         const flow = flows.get(url.searchParams.get('flowId') ?? '')
         if (!flow) { json(res, 404, { ok: false, error: '流程不存在或回放已过期，请刷新页面' }); return }
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
@@ -226,11 +249,14 @@ export function createTutorServer(options: TutorServerOptions) {
         return
       }
       if (req.method === 'POST' && url.pathname.startsWith('/flow/')) {
+        if (!requireLocal(req, res)) return
+        if (!requireJson(req, res)) return
         const value = await body(req)
         if (!value || typeof value !== 'object' || Array.isArray(value)) { json(res, 400, { ok: false, error: '请求体必须是对象' }); return }
         const input = value as Record<string, unknown>
         if (url.pathname === '/flow/start') {
-          const result = start({ kind: String(input.kind ?? ''), courseId: String(input.courseId ?? ''), milestoneId: String(input.milestoneId ?? ''), nodeId: String(input.nodeId ?? '') })
+          const result = start({ kind: String(input.kind ?? ''), courseId: String(input.courseId ?? ''), milestoneId: String(input.milestoneId ?? ''),
+            nodeId: String(input.nodeId ?? ''), reset: input.reset === true, discard: input.discard === true })
           json(res, result.ok ? 200 : 409, result); return
         }
         if (url.pathname !== '/flow/input' && url.pathname !== '/flow/stop') { json(res, 404, { ok: false, error: '未知操作' }); return }

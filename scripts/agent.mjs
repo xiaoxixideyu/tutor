@@ -12,10 +12,12 @@
 //   npm run agent -- "任务文本"          一次性任务
 //   npm run agent -- new <课程名>        需求澄清访谈（交互式，设计 §6.4 tutor new）
 //   npm run agent -- assess <课程名>     摸底测评（交互式，设计 §6.4 tutor assess）
+//   npm run agent -- assess <课程名> --reset  清理未完成的摸底进度（原文件归档）
 //   npm run agent -- plan <课程名>       生成/更新教学计划（设计 §6.4 tutor plan）
 //   npm run agent -- learn <课程名>      开始/继续本节课：备课→讲授（设计 §6.4 tutor learn）
 //   npm run agent -- research <课程名>   联网教研：构建带来源的知识地图（二期）
 //   npm run agent -- exam <课程名> [里程碑id] 里程碑大考（自动选下一个可考里程碑）
+//   npm run agent -- exam <课程名> --discard  放弃未完成的考试断点（原文件归档）
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -86,14 +88,17 @@ async function main() {
   if (['practice-gen', 'research'].includes(kind) && nodeIndex >= 0 && (!nodeId || !/^[a-z0-9][a-z0-9-]*$/.test(nodeId))) {
     throw new Error('--node 需要合法的知识点 id')
   }
-  const milestoneId = kind === 'exam' ? (argv[2] ?? '') : ''
-  // 服务和零模型命令无需先填写模型配置；空白安装也能打开网页设置。
-  const env = resolveFlowEnv(root, process.env)
+  const milestoneId = kind === 'exam' ? (argv[2] && !argv[2].startsWith('--') ? argv[2] : '') : ''
+  const reset = kind === 'assess' && argv.includes('--reset')
+  const discard = kind === 'exam' && argv.includes('--discard')
+  // 仅清理断点的操作不需要模型配置；服务和零模型命令也无需先填写模型配置。
+  const env = reset || discard ? { ...process.env } : resolveFlowEnv(root, process.env)
   if (kind === 'research') {
     if (!env.TUTOR_MCP_SEARCH_URL || !env.TUTOR_MCP_SEARCH_TOKEN) throw new Error('联网教研需要配置搜索 MCP；也可在网页跳过教研')
     env.TUTOR_CHANNEL_TRACE_FILE ??= path.join(root, 'data', 'transport.jsonl')
   }
-  const code = await runFlowInProcess({ kind, courseId, ...(milestoneId ? { milestoneId } : {}), ...(nodeId ? { nodeId } : {}) }, io, {
+  const code = await runFlowInProcess({ kind, courseId, ...(milestoneId ? { milestoneId } : {}), ...(nodeId ? { nodeId } : {}),
+    ...(reset ? { reset: true } : {}), ...(discard ? { discard: true } : {}) }, io, {
     root, env,
     // 与网页宿主一致：保存的模型/搜索设置对进行中的流程在下一回合生效（CLI 每次重新解析 .env/网页配置）。
     resolveModel: () => modelSettingsFromEnv(resolveFlowEnv(root, process.env)),

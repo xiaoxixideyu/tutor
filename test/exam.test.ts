@@ -23,9 +23,12 @@ describe('paperValid', () => {
 })
 
 describe('gradeObjective', () => {
-  it('选择题按字母，数值填空接受等价表示', () => {
+  it('选择题按字母，也接受选项原文；数值填空接受等价表示', () => {
     assert.equal(gradeObjective(paper.questions[0], 'B').correct, true)
+    assert.equal(gradeObjective(paper.questions[0], 'B. 2').correct, true)
+    assert.equal(gradeObjective(paper.questions[0], '2').correct, true)
     assert.equal(gradeObjective(paper.questions[0], 'a').correct, false)
+    assert.equal(gradeObjective(paper.questions[0], 'C. 3').correct, false)
     assert.equal(gradeObjective(paper.questions[1], '2/4').correct, true)
     assert.equal(gradeObjective(paper.questions[1], '0.5 ').correct, true)
     assert.equal(gradeObjective(paper.questions[1], 'mutex').correct, false)

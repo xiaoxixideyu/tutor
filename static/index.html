@@ -112,13 +112,18 @@ async function renderList() {
           ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
           : ''
         // 内容主闸（地图）未过审：摸底/计划/上课/复习都会 gate.require 地图，任一点进去都会 dead-end；看板先提示而非假装可用。
-        const warnLine = c.contentReady === false
+        const warnLine = !c.error && c.contentReady === false
           ? '<div class="meta" style="color:#b45309">⚠ 课程内容未通过当前审查，摸底/上课/复习等环节可能无法进入——需重新审查后再用</div>'
+          : ''
+        const errorLine = c.error
+          ? `<div class="meta" style="color:#b91c1c">⚠ 课程数据无法读取：${esc(c.error)}</div>`
           : ''
         // CTA 按阶段分流：有计划才进课堂；半成品课导去向导补齐（摸底/计划），不再把用户丢进「缺计划」死路。
         // 全部已掌握且无待学指针：上课只会得到「无课可上」，如实显示完成态并给复习/重测出口。
-        const allMastered = c.stage === 'ready' && c.total > 0 && c.mastered === c.total && !c.current
-        const cta = running
+        const allMastered = !c.error && c.stage === 'ready' && c.total > 0 && c.mastered === c.total && !c.current
+        const cta = c.error
+          ? null
+          : running
           ? { label: `继续${FLOW_LABEL[running.kind] ?? '流程'} →`, href: flowHref(running) }
           : c.stage === 'ready'
           ? allMastered
@@ -130,17 +135,18 @@ async function renderList() {
         const reviewBtn = c.dueCount
           ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
           : ''
-        return `<div class="course" data-id="${esc(c.id)}">
-          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button></div>
+        return `<div class="course" data-id="${esc(c.id)}" data-error="${c.error ? '1' : ''}">
+          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button>` : ''}</div>
           <div class="bar"><span style="width:${pct}%"></span></div>
           <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
           ${reviewLine}
           ${warnLine}
+          ${errorLine}
         </div>`
       }).join('')
   $panel.innerHTML = `<h2>课程列表</h2>${rows}`
   for (const el of $panel.querySelectorAll('.course')) {
-    el.addEventListener('click', () => renderStatus(el.dataset.id))
+    el.addEventListener('click', () => { if (!el.dataset.error) renderStatus(el.dataset.id) })
   }
   for (const btn of $panel.querySelectorAll('.enter')) {
     btn.addEventListener('click', (event) => {
@@ -214,12 +220,14 @@ async function renderStatus(id) {
   const auditBtn = p.contentReady === false
     ? `<button class="enter go-audit" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=audit-content">重新审查 →</button>`
     : ''
+  const resetBtn = `<button class="enter" id="reset-breaks" style="margin-left:8px">清理中断的摸底/考试断点</button>`
   $panel.innerHTML = `
     <button class="back" id="back">← 返回课程列表</button>
     <h2 style="margin-top:12px">${esc(p.id)}${p.goal ? ` · ${esc(p.goal)}` : ''}</h2>
     <div class="meta">指针：${p.current ? esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
     <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
     ${auditBtn}
+    ${resetBtn}
     ${issuesSection}
     ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
     ${practiceRow}
@@ -232,6 +240,22 @@ async function renderStatus(id) {
   for (const btn of $panel.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit')) {
     btn.addEventListener('click', () => { location.href = btn.dataset.href })
   }
+  document.getElementById('reset-breaks').addEventListener('click', async () => {
+    if (!confirm('将归档并清理未完成的摸底/考试断点；掌握度、计划和已通过成绩不受影响。继续？')) return
+    try {
+      const [assessment, exam] = await Promise.all([
+        rpc('resetAssessment', { id: p.id }), rpc('discardAttempt', { id: p.id }),
+      ])
+      const lines = [
+        assessment.reset ? '已清理未完成的摸底进度。' : assessment.message,
+        exam.discarded ? '已放弃未完成的考试断点。' : exam.message,
+      ]
+      alert(lines.filter(Boolean).join('\n'))
+      renderStatus(p.id)
+    } catch (error) {
+      alert(`清理失败：${error.message}`)
+    }
+  })
 }
 
 const requestedCourse = new URLSearchParams(location.search).get('course')

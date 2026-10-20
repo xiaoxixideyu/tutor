@@ -3,6 +3,7 @@ import { applyExamAttempt, ExamAttemptStore, newExamAttempt } from '../core/exam
 import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
 import { formatChoice } from '../core/assessment.ts'
 import { printSessionTotal } from './cost-line.ts'
+import { recordChatTotal } from './cost-ledger.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 import { contentKey, examContent, mapContent, planContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
@@ -11,6 +12,7 @@ import { LearnerNotesStore } from '../core/learner-notes.ts'
 import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
+import { requirePlanMapConsistency } from './consistency.ts'
 import { today } from './deps.ts'
 
 function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap, profile: Profile): string {
@@ -55,7 +57,7 @@ export function buildExamGradingPrompt(questions: ExamQuestion[], answers: Map<s
   return lines.join('\n')
 }
 
-export async function runExam(deps: FlowDeps, config: { courseId: string; milestoneId?: string }): Promise<void> {
+export async function runExam(deps: FlowDeps, config: { courseId: string; milestoneId?: string; discard?: boolean }): Promise<void> {
   const { store, io } = deps
   const milestoneIdInput = config.milestoneId ?? ''
   if (!store.exists(config.courseId)) {
@@ -63,9 +65,16 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
     io.closeInput()
     throw new FlowExit(1)
   }
+  if (config.discard) {
+    const archived = new ExamAttemptStore(store.root, config.courseId).discard()
+    io.out(archived ? `已放弃未完成的考试（原断点归档到 ${archived}）。\n` : '没有未完成的考试断点。\n')
+    io.closeInput()
+    throw new FlowExit(0)
+  }
   const plan = store.read(config.courseId, 'plan') as Plan
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   const profile = store.read(config.courseId, 'profile') as Profile
+  requirePlanMapConsistency(deps, config.courseId, plan, map)
   const gate = createContentGate(deps, config.courseId)
   await gate.require(mapContent(map, profile))
   await gate.require(planContent(plan, profile, map))
@@ -144,6 +153,7 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
     const answer = await io.readLine()
     if (!answer || !answer.trim() || answer.trim() === '/exit') {
       io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+      recordChatTotal(deps.costs, chat, 'exam-paused')
       io.closeInput()
       throw new FlowExit(0)
     }
@@ -166,6 +176,7 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
         attempt.answers[question.id] = lines.join('\n')
         attempts.save(attempt)
         io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        recordChatTotal(deps.costs, chat, 'exam-paused')
         io.closeInput()
         throw new FlowExit(0)
       }
@@ -227,11 +238,12 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''
     const points = paper.questions.find((q) => q.id === grading.questionId)!.points
-    io.out(`  ${grading.score > 0 ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
+    io.out(`  ${grading.correct ? '✓' : '✗'} ${grading.questionId}：${Math.round(grading.score * points * 100) / 100}/${points}${note}\n`)
   }
 
   io.out(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
   io.out(after.plan.current ? `计划指针：${after.plan.current}\n` : '课程完成。\n')
+  recordChatTotal(deps.costs, chat, 'exam')
   printSessionTotal(chat, deps)
   io.closeInput()
   throw new FlowExit(passed ? 0 : 1)

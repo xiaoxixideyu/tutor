@@ -101,14 +101,19 @@ it('主动中止不会自动重启模型回合，已产生的用量仍被保留'
   assert.deepEqual(chat.totalUsage(), { inputTokens: 30, outputTokens: 8 })
 })
 
-it('空正文属于失败回合，仅重试一次并保留两次用量', async (t) => {
+it('空正文属于失败回合，仅重试一次并保留两次用量，且不重复写入学员消息', async (t) => {
   const root = tmp(t)
+  const requests: LlmRequest[] = []
   const chat = (await runtimeWith(queueTransport([
     stop({ inputTokens: 10, outputTokens: 20 }, ''),
     stop({ inputTokens: 15, outputTokens: 25 }, '有效正文'),
-  ]), root).createChat())!
+  ], (request) => requests.push(request)), root).createChat())!
   assert.equal(await chat.ask('请求'), '有效正文')
   assert.deepEqual(chat.totalUsage(), { inputTokens: 25, outputTokens: 45 })
+  assert.equal(requests.length, 2)
+  for (const request of requests) {
+    assert.deepEqual(request.messages.filter((message) => message.role === 'user').map((message) => message.content), ['请求'])
+  }
 })
 
 it('审查截断不重复原请求，404 等永久错误不重试，失败用量仍可读', async (t) => {
@@ -153,8 +158,32 @@ it('请求总时限触发后中止在途请求并收敛，下一请求不会叠�
   assert.equal(running, false)
 })
 
-it('模型设置热更新：下一回合用新渠道，渠道按设置缓存且会话与用量连续', async (t) => {
+it('小上下文窗口会裁剪历史并限制输出 token', async (t) => {
   const root = tmp(t)
+  const log = new SessionLog(root, root)
+  for (let index = 0; index < 6; index++) {
+    log.messages.push({ role: 'user', content: `第${index}轮：${'甲'.repeat(2000)}` })
+    log.messages.push({ role: 'assistant', content: `回答${index}：${'乙'.repeat(2000)}` })
+  }
+  log.appendEvent('turn/end', { reason: { kind: 'completed' } })
+  log.persistMessages()
+  let captured: LlmRequest | undefined
+  const runtime = new ChatRuntime({
+    model: { ...MODEL, contextWindow: 4096 }, sessionsRoot: root, workspace: root,
+    env: { ...process.env, TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'limits.sqlite') },
+    transport: async (request) => { captured = request; return stop(undefined, '回复') },
+    rateLimiter: new DisabledLimiter() as never,
+  })
+  const chat = (await runtime.createChat({ resumeSessionId: log.id }))!
+  assert.equal(await chat.ask('最新问题'), '回复')
+  assert.ok(captured)
+  assert.equal(captured.messages[0].role, 'system')
+  assert.match(String(captured.messages[0].content), /上下文预算/)
+  assert.deepEqual(captured.messages.filter((message) => message.role === 'user').map((message) => message.content), ['最新问题'])
+  assert.ok(captured.maxTokens !== undefined && captured.maxTokens <= 1228)
+})
+
+it('模型设置热更新：下一回合用新渠道，渠道按设置缓存且会话与用量连续', async (t) => {  const root = tmp(t)
   const builtTransports: string[] = []
   const builtLimiters: string[] = []
   let current: ModelSettings = MODEL

@@ -38,8 +38,9 @@ export function validMasteryEvent(value: unknown): value is MasteryEvent {
 
 export function appendMasteryEvent(root: string, courseId: string, event: MasteryEvent): void {
   const file = masteryEventsFile(root, courseId)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.appendFileSync(file, JSON.stringify(event) + '\n')
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.appendFileSync(file, JSON.stringify(event) + '\n', { mode: 0o600 })
+  try { fs.chmodSync(file, 0o600) } catch { /* 权限收紧失败不阻塞学习 */ }
 }
 
 export function readMasteryEvents(root: string, courseId: string): MasteryEvent[] {

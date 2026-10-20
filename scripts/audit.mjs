@@ -3,7 +3,6 @@
 // 用法：npm run agent -- audit [session-id 或 latest] [--json]
 import fs from 'node:fs'
 import path from 'node:path'
-import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import {
   assembleReport,
@@ -12,31 +11,13 @@ import {
 } from '../src/core/fidelity.ts'
 import { CourseStore } from '../src/core/store.ts'
 import { QualityStore } from '../src/core/quality-store.ts'
+import { decodeZstdFrames } from '../src/runtime/session.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = process.stdout
 const sessionsRoot = process.env.TUTOR_SESSIONS_ROOT ?? path.join(root, 'data', 'sessions')
 const workspace = path.resolve(process.env.TUTOR_AUDIT_WORKSPACE ?? process.cwd())
 const WORKSPACE_DIR = `-${workspace.replaceAll('/', '-')}--`
-const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
-
-function decodeZstdMultiFrame(buf) {
-  let offset = 0
-  let text = ''
-  while (offset < buf.length) {
-    const idx = buf.indexOf(MAGIC, offset)
-    if (idx < 0) break
-    let end = buf.indexOf(MAGIC, idx + 4)
-    if (end < 0) end = buf.length
-    try {
-      text += zlib.zstdDecompressSync(buf.subarray(idx, end)).toString('utf8')
-    } catch {
-      // 尾部不完整帧忽略
-    }
-    offset = end
-  }
-  return text
-}
 
 function findSessions(filter) {
   const dir = path.join(sessionsRoot, WORKSPACE_DIR)
@@ -56,7 +37,7 @@ function findSessions(filter) {
 
 function loadEvents(file) {
   if (!fs.existsSync(file)) throw new Error(`会话日志不存在：${file}`)
-  const lines = decodeZstdMultiFrame(fs.readFileSync(file))
+  const lines = decodeZstdFrames(fs.readFileSync(file))
     .split('\n')
     .filter((l) => l.trim())
   return lines.map((l) => JSON.parse(l))

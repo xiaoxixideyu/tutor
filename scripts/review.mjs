@@ -5,6 +5,8 @@ import readline from 'node:readline'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CourseStore, COURSE_ID_PATTERN } from '../src/core/store.ts'
+import { acquireCourseLock } from '../src/core/course-lock.ts'
+import { localDate } from '../src/core/dates.ts'
 import { dueReviews, pickReviewQuestions, postponeReview } from '../src/core/review.ts'
 import { listDueReviews } from '../src/core/summary.ts'
 import { applyReviewResult, formatChoice, judgeQuizAnswer } from '../src/core/assessment.ts'
@@ -16,8 +18,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const store = new CourseStore(process.env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
 const out = process.stdout
 
+// 与网页流程/服务共用课程写锁：复习会读改写整份 mastery，不能和另一个进程的课堂/复习交错。
+let activeLock = null
+const releaseLock = () => {
+  try { activeLock?.release() } catch { /* 已释放 */ }
+  activeLock = null
+}
+process.on('exit', releaseLock)
+
 function today() {
-  return new Date().toISOString().slice(0, 10)
+  return localDate()
 }
 
 function answerText(q) {
@@ -135,7 +145,18 @@ if (courseIds.length === 0) {
 let total = 0
 for (const courseId of courseIds) {
   if (argument === '--all') out.write(`\n== ${courseId} ==\n`)
-  total += await reviewCourse(courseId)
+  try {
+    activeLock = acquireCourseLock(store.root, courseId)
+  } catch (error) {
+    process.stderr.write(`tutor: ${error instanceof Error ? error.message : String(error)}\n`)
+    if (courseIds.length === 1) process.exit(1)
+    continue
+  }
+  try {
+    total += await reviewCourse(courseId)
+  } finally {
+    releaseLock()
+  }
 }
 rl.close()
 out.write(`\n复习完成（${total} 个知识点）。\n`)

@@ -12,7 +12,7 @@
 
 当前支持多课程管理、访谈与可选教研、摸底、教学计划、讲授、小测、实践、里程碑考试、间隔复习和课堂审计，并有看板／向导／课堂／复习／大考／实践与模型设置网页。Go 切片与公平骰子概率两门各两节微课已完成真实模型驱动的工程闭环，**可以开始有人陪同的小规模真人试学**。
 
-最新更新（2026-10-09）：修复长课程联网教研反复超时与返工，改为逐点保存、硬性搜索预算、复用未变化内容的审查，并补齐资料审查的课程上下文。课程详情可查看进度、单点补查；模型渠道和教研时限可在网页保存，新流程自动采用。摸底按作答进度准备当前知识点，首题不再等待整门课程出题。275 项自动测试及类型检查通过；截至上海时间 17:38，39 节长课已续跑保存 4 个知识点、9 条资料。真实渠道仍有搜索容量错误和较长等待，整课尚未验收，见 [教研修复实测](docs/research-recovery-2026-10-09.md) 与 [模型设置](docs/model-settings.md)。
+最新更新（2026-10-09）：修复长课程联网教研反复超时与返工，改为逐点保存、硬性搜索预算、复用未变化内容的审查，并补齐资料审查的课程上下文。课程详情可查看进度、单点补查；模型渠道和教研时限可在网页保存，新流程自动采用。摸底按作答进度准备当前知识点，首题不再等待整门课程出题。当前 391 项自动测试及类型检查通过；截至上海时间 17:38，39 节长课已续跑保存 4 个知识点、9 条资料。真实渠道仍有搜索容量错误和较长等待，整课尚未验收，见 [教研修复实测](docs/research-recovery-2026-10-09.md) 与 [模型设置](docs/model-settings.md)。
 
 试学就绪验收（2026-10-09 上海时间，日志日期为 UTC 2026-10-08）：当时 245 项自动测试及类型检查通过；完成内容错误回归、失败断点恢复、实践负例、考试暂停与成绩刷新、正常复习与答错后的补救。两门课现有内容均审查通过，原错误、失败、费用和受控数据迁移完整保留。详细结果、证据及限制见 [工程验收报告](docs/readiness-2026-10-08.md)。
 
@@ -43,6 +43,7 @@ npm run trial -- --learner p01
 ## 环境要求
 
 - **Node ≥ 22.19**（源码直接运行 TypeScript，依赖原生类型剥离与 `zlib` zstd；CI 与建议版本为 24 LTS）
+- 日期默认使用本机时区；需要固定时区时设置 `TUTOR_TIMEZONE`（IANA 名称，如 `Asia/Shanghai`），CLI、网页与复习共用同一日历日
 - 运行时依赖：`yaml`、`tldts`、`@deepseek-ai/schemastery`（配置校验）、`@modelcontextprotocol/sdk`（联网教研的搜索 MCP）
 
 ## 快速开始
@@ -64,6 +65,7 @@ npm run agent -- list           # 课程列表（零模型，含到期复习徽�
 npm run agent -- status golang  # 进度看板（知识点掌握状态/里程碑/复习到期）
 npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
 npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
+npm run agent -- assess golang --reset # 清理未完成的摸底断点（原文件归档；不动掌握度/计划）
 npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
 npm run agent -- learn golang   # 开始/继续本节课（前置新鲜度软门→备课→回忆热身→对话式讲授；/quiz 小测→自评校准→旧知识回访→更新掌握度与指针；中断后重跑自动续学）
 npm run agent -- review golang  # 复习到期知识点（FSRS-lite 记忆调度：稳定性随答对增长、逾期后成功回忆加成；答错衰减并次日重试）
@@ -73,6 +75,7 @@ npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 
 npm run agent -- practice-gen golang --node channels # 只为指定知识点生成任务，支持已掌握节点
 npm run agent -- practice golang --node channels     # 明确选择本次要巩固的知识点
 npm run agent -- exam golang [m1]    # 里程碑大考（自动选下一个可考里程碑）：客观题规则判分+主观题模型判分，通过=里程碑达成，不过=指针回退补救
+npm run agent -- exam golang --discard # 放弃未完成的考试断点（原文件归档；不动成绩与掌握度）
 npm run agent -- research golang # 联网教研：MCP 搜索+交叉验证 → 带来源知识地图（逐点保存、可中断续研）
 npm run agent -- research golang --node channels # 单独教研或补查一个知识点
 npm run agent -- audit [会话id]  # 课堂忠实度抽查（零模型）：计划覆盖率/引用纪律/超纲/成本 → audits/<会话>.json
@@ -85,7 +88,7 @@ npm run agent -- "..."          # 一次性 agent 任务
 - 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）
 - 联网教研（二期，可选）：搜索服务可填在网页"模型设置 → 教研搜索"（MCP over HTTP，如 Tavily Hikari 的 `https://<host>/mcp`，保存后下一回合生效），也可继续用 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（网页保存的值优先）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
 - 会话日志：`data/sessions/<工作目录编码>/session-<uuid>/`（多帧 zstd JSONL `session.v3.jsonl.zstd` + `messages.jsonl`，勿手改；可用 `TUTOR_SESSIONS_ROOT` 更换根目录）
-- 实践执行：目前在本机子进程运行，提供超时与输出限制；`sandbox/` 是任务工作目录，尚无操作系统级文件与网络隔离
+- 实践执行：目前在本机子进程运行，提供超时、输出限制、任务目录内的 HOME/TMP/缓存和停止时进程组回收；课程/审查/笔记文件权限收紧为仅当前用户可读写，但仍没有操作系统级文件与网络隔离
 
 ## 相关仓库
 

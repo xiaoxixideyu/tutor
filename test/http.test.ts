@@ -352,3 +352,30 @@ it('搜索服务可在网页配置并掩码：保存后不回显 Token，换址�
   assert.equal(refused.status, 400)
   assert.match(refused.body.error, /Token/)
 })
+
+it('RPC 与流程端点拒绝跨站请求，并强制 JSON Content-Type', async (t) => {
+  const { base } = await fixture(t)
+  const cross = (route: string, contentType = 'text/plain') => fetch(base + route, {
+    method: 'POST',
+    headers: { 'content-type': contentType, origin: 'https://evil.example' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  })
+  assert.equal((await cross('/rpc')).status, 403)
+  assert.equal((await cross('/flow/start', 'application/json')).status, 403)
+  const crossState = await fetch(base + '/flow/state', { headers: { origin: 'https://evil.example' } })
+  assert.equal(crossState.status, 403)
+
+  const sameOriginText = await fetch(base + '/rpc', {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain', origin: base },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  })
+  assert.equal(sameOriginText.status, 415)
+  const sameOrigin = await fetch(base + '/rpc', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: base },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+  })
+  assert.equal(sameOrigin.status, 200)
+  assert.deepEqual((await sameOrigin.json() as any).result, { ok: true })
+})
