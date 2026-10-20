@@ -47,10 +47,18 @@ function questionUnit(id: string, node: string, item: { question: string; choice
 }
 
 export function mapContent(map: KnowledgeMap, profile: Profile): ContentInput {
+  // 资料单元 id 按"节点内序号"生成：某节点补查资料只改自己的单元 id，其他节点的检查可继续复用。
+  // （旧版用全局位置 resource:i，插入/删除资料会让后续所有单元错位重判。）
+  const counters = new Map<string, number>()
+  const resourceUnits = (map.resources ?? []).map((resource) => {
+    const index = counters.get(resource.node) ?? 0
+    counters.set(resource.node, index + 1)
+    return { id: `resource:${resource.node}:${index}`, node: resource.node, content: resource }
+  })
   return { kind: 'map', context: context(profile), units: [
     { id: 'outline', content: { nodes: map.nodes.map(({ id, title }) => ({ id, title })), edges: map.edges } },
     ...map.nodes.map(({ id, title, summary }) => ({ id: `node:${id}`, node: id, content: { title, summary } })),
-    ...(map.resources ?? []).map((r, i) => ({ id: `resource:${i}`, node: r.node, content: r })),
+    ...resourceUnits,
   ] }
 }
 

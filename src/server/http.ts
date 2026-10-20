@@ -138,7 +138,10 @@ export function createTutorServer(options: TutorServerOptions) {
       return { ok: false, error: '所选知识点不在本课程知识地图中' }
     }
     // 每次启动流程冻结模型配置快照（模型渠道由 resolveModel 每回合热更新）；practice 零模型，不要求已配置模型。
-    const env = input.kind === 'practice' ? { ...(options.modelEnvironment ?? process.env) } : models.environment()
+    // research 额外开启结构化进度事件（@@tutor-progress），供网页进度面板显示阶段与等待倒计时。
+    const env = input.kind === 'practice'
+      ? { ...(options.modelEnvironment ?? process.env) }
+      : { ...models.environment(), ...(input.kind === 'research' ? { TUTOR_RESEARCH_PROGRESS: '1' } : {}) }
     const queue = createLineQueue()
     const controller = new AbortController()
     const flow: Flow = { ...input, flowId: randomUUID(), status: 'running', buffer: [], bytes: 0, clients: new Set(), queue, controller,

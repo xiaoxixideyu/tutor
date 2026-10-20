@@ -101,7 +101,7 @@ it('局部修复被拒地图复用其他完整检查，原拒绝证据不改写�
   assert.equal((await gate.review(repaired)).approved, true)
   assert.equal(requests.length - baseline, 1, '只重新核查内容改变的批次')
   const approved = records().find(record => record.key === contentKey(repaired))!
-  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 3)
+  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 6, '未变的骨架与 5 个节点全部复用')
   assert.equal(approved.review!.units.length, repaired.units.length)
   assert.equal(store.approved(initial), false)
   assert.equal(store.approved(repaired), true)
@@ -133,7 +133,7 @@ it('只修改其他批次不能重抽未变的拒绝或存疑结论', async t =>
 })
 
 it('中断地图改稿后可复用已落盘回复；未完整解析的批次仍须补查', async t => {
-  const { gate, store, records } = setup(t, content => content.units.some(unit => unit.id === 'node:n2') ? { units: [] } : reviewFor(content))
+  const { gate, store, records } = setup(t, content => content.units.some(unit => unit.id === 'node:n2' || unit.id === 'node:n3') ? { units: [] } : reviewFor(content))
   const course: KnowledgeMap = { verified: false, nodes: Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, title: `节点${i}` })), edges: [] }
   await assert.rejects(gate.review(mapContent(course, profile)), /未完成/)
   const original = records()[0]
@@ -151,10 +151,10 @@ it('中断地图改稿后可复用已落盘回复；未完整解析的批次仍�
     return json(reviewFor(content))
   }, `resumed-${++serial}`))
   assert.equal((await resumed.review(changed)).approved, true)
-  assert.deepEqual(requested, [['node:n2', 'node:n3'], ['resource:0']])
+  assert.deepEqual(requested, [['node:n2'], ['node:n3'], ['resource:n0:0']])
   assert.equal(store.approved(changed), true)
   const approved = records().find(record => record.status === 'approved')!
-  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 2)
+  assert.equal(approved.calls.filter(call => call.reusedFrom === original.id).length, 3, '骨架与两个已完整回复的节点复用')
   assert.equal(approved.review!.units.length, changed.units.length)
 })
 
@@ -199,7 +199,7 @@ it('分批审查资料时提供完整课程节点和当前资料归属，避免�
   const withResources = mapContent({ ...map, resources: Array.from({ length: 3 }, (_, i) => ({ node: 'die', title: `来源 ${i}`, url: `https://example.org/${i}` })) }, profile)
   assert.equal((await gate.review(withResources)).approved, true)
   const sourceRequests = requests.filter(request => JSON.parse(request.prompt).resourceScopeContract)
-  assert.equal(sourceRequests.length, 2)
+  assert.equal(sourceRequests.length, 3, '资料按单元逐个复核，不再按位置配对')
   for (const request of sourceRequests) {
     const data = JSON.parse(request.prompt)
     assert.deepEqual(data.content.context.nodes, [{ id: 'die', title: '一次掷骰' }])
@@ -231,10 +231,13 @@ it('摘要批次带完整清单；旧空上下文批准失效，仅重审失配�
   assert.equal(store.approved(content), false, '仅有内容哈希一致不足以继续使用旧批准')
   const before = requests.length
   assert.equal((await gate.review(content)).approved, true)
-  assert.equal(requests.length - before, 1, '骨架与资料请求仍逐字匹配，只重审节点摘要')
-  const request = JSON.parse(requests.at(-1)!.prompt)
+  assert.equal(requests.length - before, 2, '骨架与资料请求仍逐字匹配，只重审两个失配的节点批次')
+  const nodeRequests = requests.slice(before).map(request => JSON.parse(request.prompt))
+    .filter(request => request.content.units.some((unit: { id: string }) => unit.id.startsWith('node:')))
+  assert.equal(nodeRequests.length, 2)
+  const request = nodeRequests.find(item => item.content.units.some((unit: { id: string }) => unit.id === 'node:next'))!
   assert.deepEqual(request.content.context.nodes, [{ id: 'die', title: '一次掷骰' }, { id: 'next', title: '下一课' }])
-  assert.deepEqual(request.content.context.activeNodes, ['die', 'next'])
+  assert.deepEqual(request.content.context.activeNodes, ['next'])
   assert.match(request.nodeScopeContract, /不要求一个节点覆盖整门课程/)
   assert.equal(fs.readFileSync(store.evidenceFile(original.id), 'utf8'), evidence)
   assert.equal(store.approved(content), true)
@@ -274,17 +277,18 @@ it('修复空上下文可重审节点，但仍复用同一资料的语义拒绝�
     assert.equal((await gate.review(content)).approved, false)
     writeLegacyNodeContext(store, records()[0])
     const requested: string[][] = []
+    let resumedSerial = 0
     const resumed = new ContentGate(store, async () => mockChat(prompt => {
       const data = JSON.parse(prompt)
       requested.push(data.content.units.map((unit: { id: string }) => unit.id))
       return json(reviewFor(data.content))
-    }, 'fixed-node-context'))
+    }, `fixed-node-context-${++resumedSerial}`))
     const verdict = await resumed.review(content)
-    assert.deepEqual(requested, [['node:die', 'node:next']])
+    assert.deepEqual(requested, [['node:die'], ['node:next']])
     assert.equal(verdict.approved, !resourceRejected)
     assert.equal(store.approved(content), !resourceRejected)
     if (resourceRejected) {
-      assert.match(verdict.issues.join(''), /resource:0.*错误事实/)
+      assert.match(verdict.issues.join(''), /resource:die:0.*错误事实/)
       assert.doesNotMatch(verdict.issues.join(''), /缺少完整课程清单/)
       const noResampling = new ContentGate(store, async () => { throw new Error('不能重抽拒绝') })
       assert.equal((await noResampling.review(content)).approved, false)
@@ -680,4 +684,38 @@ it('被拒讲授不发布；恢复只回放持久化且匹配的已批准回复'
   assert.equal(replayApprovedReply('旧的未审查回复'), null)
   assert.equal(replayApprovedReply(saved.reply, saved), saved.reply)
   assert.equal(store.approved(teachingContent(saved, 'die', profile, map)), true)
+})
+
+it('在中间位置补充资料不会使旧单元的检查错位重判，旧资料不被重新抽检', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-quality-shift-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const store = new QualityStore(root, 'course')
+  const prompts: string[] = []
+  let strict = false
+  let serial = 0
+  const gate = new ContentGate(store, async (role) => mockChat(prompt => {
+    prompts.push(prompt)
+    const data = JSON.parse(prompt)
+    if (role === 'solver') return json({ solutions: data.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '独立解答', arithmetic: [] })) })
+    if (role === 'facts') return json({ claims: data.claims.map((claim: { id: string }) => ({ id: claim.id,
+      // 旧资料若被重新抽检（位置错位复发），严格模式会给出不确定结论把整图拒掉——本测试据此发现回归。
+      verdict: strict && claim.id.startsWith('resource:n1:') ? 'uncertain' : 'pass',
+      explanation: '核查断言', arithmetic: [] })) })
+    return json(reviewFor(data.content))
+  }, `shift-${++serial}`))
+  const base: KnowledgeMap = { verified: false, nodes: Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, title: `节点${i}`, summary: `摘要${i}` })), edges: [],
+    resources: [
+      { node: 'n0', title: '来源甲', url: 'https://example.org/a', note: '本资料必须离线可读' },
+      { node: 'n1', title: '旧来源', url: 'https://example.org/b', note: '该标准必须保持稳定' },
+    ] }
+  assert.equal((await gate.review(mapContent(base, profile))).approved, true)
+  const before = prompts.length
+  strict = true
+  const updated = structuredClone(base)
+  updated.resources!.splice(1, 0, { node: 'n0', title: '来源乙', url: 'https://example.org/c', note: '另一份必须核对的资料' })
+  const result = await gate.review(mapContent(updated, profile))
+  assert.equal(result.approved, true, '旧资料不应因新增资料而重新抽检')
+  const fresh = prompts.slice(before).map(prompt => JSON.parse(prompt))
+  assert.ok(!fresh.some(item => item.claims?.some((claim: { id: string }) => claim.id.startsWith('resource:n1:'))), '旧资料的反例核查应被复用而非重问')
+  assert.equal(store.approved(mapContent(updated, profile)), true)
 })

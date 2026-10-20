@@ -21,6 +21,19 @@ function batches<T>(items: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size))
 }
 
+// 按单元稳定分批：同一单元的断言永远落在同一个请求里，不受其他单元增删影响。
+// （旧版按全局位置两两配对，某节点补资料会让后续所有批次错位，导致旧单元的已完成检查无法复用、被重新判定。）
+function unitBatches<T extends { id: string }>(items: T[], size: number): T[][] {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const separator = item.id.lastIndexOf('/')
+    const unit = separator > 0 ? item.id.slice(0, separator) : item.id
+    if (!groups.has(unit)) groups.set(unit, [])
+    groups.get(unit)!.push(item)
+  }
+  return [...groups.values()].flatMap(group => batches(group, size))
+}
+
 async function parallelParts<T, R>(parts: T[], work: (part: T) => Promise<R>, stop: () => boolean = () => false): Promise<R[]> {
   const results: R[] = new Array(parts.length)
   let next = 0
@@ -156,7 +169,7 @@ export class ContentGate {
       const earlyIssues = contentIssues(input, [], record.review)
       if (!earlyIssues.length) {
         const contradicted = () => contentIssues(input, [], { units: [] }, record.facts).length > 0
-        await parallelParts(batches(factProbes(input), 2), async claims => {
+        await parallelParts(unitBatches(factProbes(input), 2), async claims => {
           record.facts!.push(...await checkPart('facts', claims, items => JSON.stringify({
             outputContract: '返回核查结果，不要回显输入 claims。每项必须含 id、verdict（pass/fail/uncertain）、explanation 和 arithmetic。arithmetic 无运算时为 []；有运算时每项必须同时写 expression 与 result，例如 [{"expression":"3-1","result":"2"}]，不能只给算式字符串。',
             claims: items,
@@ -168,7 +181,9 @@ export class ContentGate {
             record.solutions!.push(...await checkPart('solver', questions, items => JSON.stringify({ questions: items }),
               (value, items) => parseBlindSolutions(value, { ...input, units: input.units.filter(unit => items.some(q => q.id === unit.id)) })))
           })
-          await parallelParts(batches(remaining, input.kind === 'map' || input.kind === 'plan' ? 2 : 1), reviewPart)
+          // 地图按单元逐个复核（单元稳定，可跨版本复用）；其余内容类型批次本就是单单元。
+          const parts = input.kind === 'map' || input.kind === 'plan' ? remaining.map(unit => [unit]) : batches(remaining, 1)
+          await parallelParts(parts, reviewPart)
         }
       }
       record.issues = contentIssues(input, record.solutions, record.review, record.facts)
