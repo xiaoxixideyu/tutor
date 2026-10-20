@@ -387,12 +387,14 @@ it('审查算式接受有限 JSON 数字结果，错误数值仍由精确运算�
   }
 })
 
-it('审查响应不完整和网络错误时关闭准入，保留失败证据和用量', async t => {
+it('审查响应不完整时重问一次仍关闭准入，保留全部失败证据和用量', async t => {
   const { gate, store, records } = setup(t, () => ({ units: [] }))
   await assert.rejects(gate.review(input), /未完成，未发布/)
   assert.equal(store.approved(input), false)
   assert.equal(records()[0].status, 'error')
-  assert.equal(records()[0].calls.length, 2)
+  // 第 2 次审查请求是结构失配后的重问；两次失败都必须留证。
+  assert.equal(records()[0].calls.length, 3)
+  assert.deepEqual(records()[0].calls.map(call => call.role), ['solver', 'reviewer', 'reviewer'])
   assert.equal(records()[0].calls[1].usage.outputTokens, 10)
   const broken = new ContentGate(store, async () => { throw new Error('网络中断') })
   await assert.rejects(broken.review(input), /网络中断/)
@@ -408,6 +410,54 @@ it('反例检查显式要求算式和结果，裸算式与回显输入仍不能�
   const claim = request.claims[0]
   assert.throws(() => parseFactChecks({ claims: [{ id: claim.id, verdict: 'pass', explanation: '3-1=2', arithmetic: ['3-1'] }] }, [claim.id]), /expression 和 result/)
   assert.throws(() => parseFactChecks({ claims: request.claims }, [claim.id]), /结论非法/)
+})
+
+it('核查回显输入而不给结论时重问一次，不让整份审查报废', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-quality-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const store = new QualityStore(root, 'course')
+  const content = teachingContent({ reply: '在这个长度为 2 的切片里，只有 2 个可索引元素。', learnerMessage: '解释边界', previousReply: '' }, 'die', profile, map)
+  const requestJson = (prompt: string) => JSON.parse(prompt.split('\n\n只输出')[0]) as { claims: { id: string }[]; content: ContentInput }
+  const verdicts = (claims: { id: string }[]) => json({ claims: claims.map(claim => ({ id: claim.id, verdict: 'pass', explanation: '核查断言', arithmetic: [] })) })
+  const facts: string[] = []
+  let seq = 0
+  // 第一轮把待核查条目原样回显（真实模型会出现这种输出）；重问后给出结论。
+  const gate = new ContentGate(store, async (role) => mockChat(prompt => {
+    if (role !== 'facts') return json(reviewFor(requestJson(prompt).content))
+    facts.push(prompt)
+    return facts.length === 1 ? json({ claims: requestJson(prompt).claims }) : verdicts(requestJson(prompt).claims)
+  }, `session-${++seq}`))
+  assert.equal((await gate.review(content)).approved, true)
+  assert.equal(facts.length, 2)
+  assert.match(facts[1], /不要回显输入内容/)
+
+  // 换一份干净证据目录：同一内容已被上面的 gate 批准，复用旧批准会跳过重问。
+  const freshRoot = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    return new QualityStore(dir, 'course')
+  }
+  seq = 0
+  facts.length = 0
+  const alwaysEcho = new ContentGate(freshRoot('tutor-quality-echo-'), async (role) => mockChat(prompt => {
+    if (role !== 'facts') return json(reviewFor(requestJson(prompt).content))
+    facts.push(prompt)
+    return json({ claims: requestJson(prompt).claims })
+  }, `session-again-${++seq}`))
+  await assert.rejects(alwaysEcho.review(content), /未完成，未发布/)
+  assert.equal(facts.length, 2, '重问只做一次')
+
+  // 回复里根本没有可提取的 JSON 代码块：同样只重问一次，第二次给出结论就应通过。
+  seq = 0
+  facts.length = 0
+  const bareJsonGate = new ContentGate(freshRoot('tutor-quality-format-'), async (role) => mockChat(prompt => {
+    if (role !== 'facts') return json(reviewFor(requestJson(prompt).content))
+    facts.push(prompt)
+    return facts.length === 1 ? '{ 这条我核不出来，先说明理由。' : verdicts(requestJson(prompt).claims)
+  }, `session-format-${++seq}`))
+  assert.equal((await bareJsonGate.review(content)).approved, true)
+  assert.equal(facts.length, 2)
+  assert.match(facts[1], /只输出一个完整 JSON 代码块/)
 })
 
 it('生成后审查中断保留待审草稿，续跑重新校验与审查而不重复生成', async t => {
@@ -663,6 +713,45 @@ it('输出截断后拆小盲解批次并保留失败；完整复核后才批准�
   assert.equal(record.solutions?.length, 5)
   assert.ok(record.calls.some(call => call.error && call.splitAfterError))
   assert.ok(record.calls.every(call => typeof call.elapsedMs === 'number'))
+})
+
+it('单条审查拆不动时改要紧凑结论重问一次，不报废已花掉的检查', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-quality-compact-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const store = new QualityStore(dir, 'course')
+  const reviewerPrompts: string[] = []
+  let serial = 0
+  let reviewerTries = 0
+  const answering = (role: 'solver' | 'reviewer' | 'facts', prompt: string): string => {
+    if (role === 'facts') throw new Error('本用例的题库不应触发反例检查')
+    const data = JSON.parse(prompt.split('\n\n只审查这一条')[0])
+    return json(role === 'solver'
+      ? { solutions: data.questions.map((q: { id: string }) => ({ id: q.id, status: 'solved', answer: 'A', reasoning: '六个等可能结果中一个有利结果', arithmetic: [] })) }
+      : reviewFor(data.content as ContentInput))
+  }
+  const gate = new ContentGate(store, async role => ({ ...mockChat(() => '', `compact-${++serial}`), ask: async prompt => {
+    if (role === 'reviewer') { reviewerPrompts.push(prompt); if (++reviewerTries === 1) throw new OutputLimitError() }
+    return answering(role, prompt)
+  } }))
+  assert.equal((await gate.review(input)).approved, true)
+  assert.equal(reviewerPrompts.length, 2)
+  assert.match(reviewerPrompts[1], /只审查这一条/)
+  const record = JSON.parse(fs.readFileSync(path.join(store.directory, 'approved', `${contentKey(input)}.json`), 'utf8')) as QualityRecord
+  const failed = record.calls.filter(call => call.error)
+  assert.equal(failed.length, 1)
+  assert.match(String(failed[0].error), /token 上限/)
+  assert.equal(failed[0].splitAfterError, true, '失败必须由紧凑重问接管，否则批准校验不认这份证据')
+
+  // 两次都超限才允许报废整份审查，且必须保留原始错误而不是重问的细节。
+  const brokenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-quality-compact-broken-'))
+  t.after(() => fs.rmSync(brokenDir, { recursive: true, force: true }))
+  let brokenTries = 0
+  const broken = new ContentGate(new QualityStore(brokenDir, 'course'), async role => ({ ...mockChat(() => '', `broken-${++serial}`), ask: async prompt => {
+    if (role === 'reviewer' && ++brokenTries <= 2) throw new OutputLimitError()
+    return answering(role, prompt)
+  } }))
+  await assert.rejects(broken.review(input), /token 上限/)
+  assert.equal(brokenTries, 2, '超限只做一次紧凑重问')
 })
 
 it('课程地图明确每节点一课，骨架越界即可提前拒绝但不能提前批准', async t => {

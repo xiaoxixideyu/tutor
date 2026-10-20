@@ -80,7 +80,7 @@ export class ContentGate {
     const used = new Set<string>()
     this.store.save(record)
     this.onStart(record)
-    const ask = async (role: QualityRecord['calls'][number]['role'], prompt: string, splittable: boolean): Promise<unknown> => {
+    const ask = async (role: QualityRecord['calls'][number]['role'], prompt: string, takeOverAfterError: boolean): Promise<string> => {
       const started = Date.now()
       const call = { role, prompt, startedAt: new Date(started).toISOString(), usage: { inputTokens: 0, outputTokens: 0 } } as QualityRecord['calls'][number]
       record.calls.push(call)
@@ -92,13 +92,11 @@ export class ContentGate {
         call.sessionId = chat.sessionId; call.model = chat.model
         if (!call.sessionId || record.calls.some(c => c !== call && c.sessionId === call.sessionId)) throw new Error('审查必须使用独立新会话')
         call.reply = await chat.ask(prompt)
-        const parsed = parseJsonBlock(call.reply)
-        if (!parsed.ok) throw new Error(parsed.error)
-        return parsed.value
+        return call.reply
       } catch (error) {
         failed = true
         call.error = error instanceof Error ? error.message : String(error)
-        if (chat && splittable && (error instanceof OutputLimitError || error instanceof TurnTimeoutError)) call.splitAfterError = true
+        if (chat && takeOverAfterError && (error instanceof OutputLimitError || error instanceof TurnTimeoutError)) call.splitAfterError = true
         throw error
       } finally {
         if (chat) {
@@ -116,6 +114,11 @@ export class ContentGate {
       parse: (value: unknown, items: T[]) => R[], stop: () => boolean = () => false): Promise<R[]> => {
       if (stop()) return []
       const request = prompt(items)
+      const parseReply = (text: string): R[] => {
+        const parsed = parseJsonBlock(text)
+        if (!parsed.ok) throw new Error(parsed.error)
+        return parse(parsed.value, items)
+      }
       const saved = reusableHistory.flatMap(record => record.calls.map(call => ({ ...call, reusedFrom: call.reusedFrom ?? record.id })))
         .find(call => call.role === role && call.prompt === request && call.reply && !call.error
           && call.sessionId && !used.has(call.sessionId) && this.store.reusable(call, input))
@@ -138,10 +141,22 @@ export class ContentGate {
         return [...await checkPart(role, items.slice(0, middle), prompt, parse, stop), ...await checkPart(role, items.slice(middle), prompt, parse, stop)]
       }
       if (items.length > 1 && history.some(record => record.calls.some(call => call.role === role && call.prompt === request && call.splitAfterError))) return split()
-      try { return parse(await ask(role, request, items.length > 1), items) }
+      let reply: string
+      // 超限/超时的失败总是由更小任务接管（拆小或紧凑重问），因此标记可接管，批准校验才认这条证据。
+      try { reply = await ask(role, request, true) }
       catch (error) {
-        if (items.length <= 1 || !(error instanceof OutputLimitError || error instanceof TurnTimeoutError)) throw error
-        return split()
+        if (!(error instanceof OutputLimitError || error instanceof TurnTimeoutError)) throw error
+        if (items.length > 1) return split()
+        // 单条任务已经拆不动了：换成明确要求紧凑结论的一次重问。直接上抛会让此前所有检查报废。
+        const compact = `${request}\n\n只审查这一条并给出结论：explanation 一句话内，不要复述或逐项抄写被审查内容。`
+        try { return parseReply(await ask(role, compact, false)) } catch { throw error }
+      }
+      try { return parseReply(reply) }
+      catch (first) {
+        // 模型偶尔回显输入而不给结论，或漏掉/多写 JSON 括号。重问一次比把整份已花掉的审查报废便宜；
+        // 重问仍不合格就保留首次错误，语义拒绝不会被这层重问绕过。
+        const reminder = `${request}\n\n只输出一个完整 JSON 代码块，按 outputContract 给出结论字段，不要回显输入内容，也不要多余的收尾括号。`
+        try { return parseReply(await ask(role, reminder, items.length > 1)) } catch { throw first }
       }
     }
     let failure: unknown
