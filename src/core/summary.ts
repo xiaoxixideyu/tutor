@@ -16,6 +16,8 @@ export interface ProgressNode {
   review_due?: string
   // 今日记忆保留率估计（仅在存有实测锚点时给出）：看板据此提示"可能已生锈"。
   retention?: number
+  // 该节点的已收录资料条数：与 researchStatus 一起判断"已保存但一条来源都没有"的节点。
+  researchResources?: number
   practiceCount: number
   researchStatus?: 'pending' | 'saved' | 'verified'
 }
@@ -108,6 +110,7 @@ export function courseProgress(store: CourseStore, id: string, today = new Date(
       status: entry?.status ?? 'unknown',
       practiceCount: practice?.tasks.filter((task) => task.node === nodeId).length ?? 0,
       ...(researchStatus ? { researchStatus } : {}),
+      ...(researchStatus ? { researchResources: (map?.resources ?? []).filter(resource => resource.node === nodeId).length } : {}),
       ...(entry?.score !== undefined ? { score: entry.score } : {}),
       ...(entry?.review_due !== undefined ? { review_due: entry.review_due } : {}),
       ...(card !== undefined ? { retention: card.retention } : {}),

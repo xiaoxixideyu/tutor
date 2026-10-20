@@ -580,6 +580,22 @@ it('强断言定位到具体分句，缺漏反例核查时不能批准；干扰�
   assert.deepEqual(requiredAssertions(copy, copy.units[0]), [])
 })
 
+it('条件从句与结论不拆半句：只要/如果 整句送检，缺结论的半句不进反例检查', () => {
+  const turn = teachingContent({
+    reply: '只要任一 ISR 副本存活，已提交消息不会丢失。一旦取消，发送立刻退出。如果下游提前不收了，上游必须退出而不是阻塞。copy复制较短长度，因此目标必须与源等长。',
+    learnerMessage: '', previousReply: '',
+  }, 'die', profile, map)
+  const quotes = requiredAssertions(turn, turn.units[0]).map(a => a.quote)
+  assert.deepEqual(quotes, [
+    '只要任一 ISR 副本存活，已提交消息不会丢失',
+    '如果下游提前不收了，上游必须退出而不是阻塞',
+    '因此目标必须与源等长',
+  ])
+  // 旧缺陷形态：只抽前半句"只要任一 ISR 副本存活"（无结论）送检必然被判 uncertain 而误拦。
+  assert.ok(!quotes.includes('只要任一 ISR 副本存活'))
+  assert.ok(!quotes.includes('如果下游提前不收了'))
+})
+
 it('“才能”等必要条件也先交给独立反例检查，不能被一般审查漏过', async t => {
   const { store } = setup(t)
   const turn = teachingContent({ reply: '副本长度要和源切片一致，copy 才能把元素全部搬过去。', learnerMessage: '请继续', previousReply: '' }, 'die', profile, map)

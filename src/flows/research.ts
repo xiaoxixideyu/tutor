@@ -55,6 +55,7 @@ export function nodePrompt(profile: Profile, node: { id: string; title?: string;
     '- 两个独立来源相互印证才标 verified=true；系统要求至少两个不同注册域名（同站不同页面或子域不算两个来源）。不够则保留 verified=false，不要编造来源',
     '- summary 只写有来源支撑的事实；两个来源冲突时在 resources[].note 注明分歧',
     '- 区分必要条件与常用做法，不把示例中的写法概括成“必须”；material 只摘录本课范围内需要的事实与例子，排除项不进入摘要',
+    '- resources 只收直接支撑本知识点结论的资料：讲前置或后续课内容的资料不要挂到本知识点（整图复审判为越界会要求删改，浪费返工）',
     '- 引用稳定的页面标题与链接，不写与知识内容无关的章节编号；版本相关结论必须写明版本，不能混用不同版本的编号或行为',
     '- 选型类课程以任务需求、实测质量、延迟、成本、数据与部署约束为主；未经本次来源核实的型号、价格、窗口长度、显存或许可数字不要写入，不凭记忆补全产品排行表',
     '- resources 最多 3 条；summary 是学习范围摘要，最多 120 字符。每条 material 只保留最多 3 个核心事实、180 字符以内，note 一句话且最多 120 字符，title 最多 120 字符；程序会校验长度，缺少足够证据时提交现有资料并保持 verified=false',
@@ -241,7 +242,8 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
       else if (event.type === 'failed') io.out(`  ${event.node} 未完成：${event.error}。已保存的知识点保留。\n`)
       else {
         const verified = map.nodes.find(node => node.id === event.node)?.verified
-        io.out(`  ${event.node} 已保存：${verified ? '来源已验证' : `来源待交叉验证（${sourceDomains(map.resources ?? [], event.node).length} 个独立域名）`}。\n`)
+        const domains = sourceDomains(map.resources ?? [], event.node).length
+        io.out(`  ${event.node} 已保存：${verified ? '来源已验证' : domains > 0 ? `来源待交叉验证（${domains} 个独立域名，需 ≥2）` : '本次未取得可用来源，可稍后单点补查'}。\n`)
       }
     },
   })

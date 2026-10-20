@@ -132,6 +132,10 @@ export const TEACHING_REVIEW_CONTRACT = '这是单轮课堂对话，不是整节
 export const PRACTICE_REVIEW_CONTRACT = '实践测试必须拒绝常见错误答案。主动构造数值前后多一位、分母错误、集合漏项或多项等反例，逐条推演命令是否误通过。expect_output_contains 和未加 -x 或行边界的 grep 只做子串匹配：例如正确分数的前缀会匹配错误分母，要求的容量也会匹配多一位数字。若末条行为检查仅靠这类子串证明完整答案正确，应 fail 并给出具体反例。验证完整值应在命令内按完整行、严格结构或数值比较，并保留被测程序失败的退出状态；可用 grep -qxF 或等效的有边界检查。源代码关键词查找和无数值的成功标记可用子串，不能把它们当作行为正确的全部证据。验收依据题目明确给出的接口；固定 main 输出任务可以严格比较所要求的完整输出及顺序。当前是练习自检，不是抗作弊系统，不要求证明任意程序的内部实现或抵御有意伪造全部输出，也不能为此要求新增函数接口、活动或未学知识。'
 
 const NECESSARY_CONDITION = /才能|才可|才会|才算/
+// 条件从句引导词：这类分句只有条件没有结论（如"只要任一 ISR 副本存活"），
+// 按逗号拆开单独送去反例检查会因"缺少结论"被判 uncertain 而误拦，必须与后续分句合并。
+const SUBORDINATE_CLAUSE = /^(只要|只有|除非|如果|若|一旦|即使|无论|由于|因为|当)/
+const STRONG_ASSERTION = /必须|只要|只有|唯一|一定|必然|证明|总是|绝不|\b(always|must|only|prove)\b/i
 export const NECESSARY_CONDITION_CONTRACT = '按完整条件句核查逻辑方向：“A，才 B”声称 A 是 B 的必要条件，即 B 成立要求 A 成立。主动寻找 A 不成立但 B 仍成立的反例；仅证明 A 成立时 B 也成立，不能支持必要条件。不能把“才”删掉改读成“此时可以”，也不能将限定前置条件的“才”误读成限定后面动作的唯一性。若属于被明确否定的误区或任务要求，按上下文辨别；若实际声称必要性，就在 explanation 写明所检查的条件及反例或理由。'
 interface RequiredAssertion { id: string; quote: string; path: string; conditionCheck?: string }
 export function requiredAssertions(input: ContentInput, unit: ContentUnit): RequiredAssertion[] {
@@ -152,9 +156,16 @@ export function requiredAssertions(input: ContentInput, unit: ContentUnit): Requ
           found.push({ id: `a${found.length}`, quote: sentence, path: trail, conditionCheck: NECESSARY_CONDITION_CONTRACT })
           continue
         }
-        for (const quote of sentence.split('，').map(s => s.trim()).filter(Boolean)) {
-          if (QUIZ_OPTION.test(quote)) continue
-          if (/必须|只要|只有|唯一|一定|必然|证明|总是|绝不|\b(always|must|only|prove)\b/i.test(quote)) found.push({ id: `a${found.length}`, quote, path: trail })
+        const parts = sentence.split('，').map(s => s.trim()).filter(Boolean)
+        for (let index = 0; index < parts.length; index++) {
+          if (QUIZ_OPTION.test(parts[index])) continue
+          let quote = parts[index]
+          // 条件从句与结论不能拆开（"只要 A，B"整句送检）；半句会被反例检查判无法判断而误拦。
+          if (SUBORDINATE_CLAUSE.test(quote) && index + 1 < parts.length) {
+            quote = parts.slice(index).join('，')
+            index = parts.length
+          }
+          if (STRONG_ASSERTION.test(quote)) found.push({ id: `a${found.length}`, quote, path: trail })
         }
       }
     } else if (Array.isArray(value)) value.forEach((entry, i) => visit(entry, `${trail}[${i}]`))
