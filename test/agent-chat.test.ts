@@ -123,6 +123,12 @@ it('审查截断不重复原请求，404 等永久错误不重试，失败用量
   assert.equal(lengthChat.totalUsage().outputTokens, 4096)
   const unavailable = (await runtimeWith(queueTransport([failure('PI_AI_ERROR', '404 model is not found')]), root).createChat())!
   await assert.rejects(unavailable.ask('请求'), /404 model is not found/)
+  const noChannel = (await runtimeWith(queueTransport([{
+    finish: 'error',
+    error: { code: 'SERVER', status: 503, message: '503: {"error":{"message":"No available channel for model deepseek-v4-flash","code":"model_not_found"}}' },
+  }]), root).createChat())!
+  // 若回合层错误地重试，queueTransport 会因为第二次请求抛出“不应发起额外请求”。
+  await assert.rejects(noChannel.ask('请求'), /model_not_found/)
   for (const code of [401, 403, 404]) {
     const denied = (await runtimeWith(queueTransport([failure('PI_AI_ERROR', `${code}: unavailable`)]), root).createChat())!
     await assert.rejects(denied.ask('请求'), new RegExp(String(code)))

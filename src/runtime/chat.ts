@@ -69,7 +69,7 @@ export function permanentModelError(error: unknown): boolean {
     if (error instanceof ModelRecoveryError || error instanceof ModelRequestQueueError || error instanceof ModelWaitTimeoutError) return true
     const transientRoute = /404:\s*\{\s*"message"\s*:\s*"404 Route Not Found"/i.test(error.message)
       && /"type"\s*:\s*"bad_response_status_code"/i.test(error.message)
-    if (!transientRoute && /\b(400|401|403|404|422)\b|model is not found|not_found_error|UNSUPPORTED_REASONING_EFFORT/i.test(error.message)) return true
+    if (!transientRoute && /\b(400|401|403|404|422)\b|model is not found|model_not_found|no available channel for model|not_found_error|UNSUPPORTED_REASONING_EFFORT/i.test(error.message)) return true
     error = error.cause as Error
   }
   return false
