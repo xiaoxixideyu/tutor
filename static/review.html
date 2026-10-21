@@ -59,6 +59,8 @@
 </header>
 <main id="main"></main>
 <script src="/md.js"></script>
+<script src="/ui/dom.js"></script>
+<script src="/ui/rpc.js"></script>
 <script>
 const params = new URLSearchParams(location.search)
 const courseId = params.get('course')
@@ -66,20 +68,6 @@ const $main = document.getElementById('main')
 const $title = document.getElementById('title')
 const $state = document.getElementById('state')
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
-
-function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
-function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
-
-async function rpc(method, rpcParams) {
-  const response = await fetch('/rpc', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params: rpcParams }),
-  })
-  const body = await response.json()
-  if (body.error) throw new Error(body.error.message)
-  return body.result
-}
 
 let items = []
 let titles = new Map()
@@ -91,8 +79,8 @@ async function boot() {
   try {
     // courseStatus 仅用来把节点 id 换成可读标题，失败不阻断复习
     const [status, review] = await Promise.all([
-      rpc('courseStatus', { id: courseId }).catch(() => null),
-      rpc('reviewQuestions', { id: courseId }),
+      TutorRpc('courseStatus', { id: courseId }).catch(() => null),
+      TutorRpc('reviewQuestions', { id: courseId }),
     ])
     if (status) titles = new Map(status.nodes.map((n) => [n.id, n.title]))
     const all = review.items ?? []
@@ -101,8 +89,8 @@ async function boot() {
     if (skipped.length) $state.textContent = `${skipped.length} 个到期知识点缺少题库，暂未纳入本轮`
     if (items.length === 0) {
       const msg = skipped.length ? '到期知识点缺少题库，暂无法复习。' : '🎉 没有到期的复习。'
-      const card = el(`<div class="card"><div class="empty">${msg}</div><div class="chips"></div></div>`)
-      const back = el('<button class="next">← 课程列表</button>')
+      const card = TutorDom.el(`<div class="card"><div class="empty">${msg}</div><div class="chips"></div></div>`)
+      const back = TutorDom.el('<button class="next">← 课程列表</button>')
       back.addEventListener('click', () => { location.href = '/' })
       card.querySelector('.chips').appendChild(back)
       $main.appendChild(card)
@@ -111,7 +99,7 @@ async function boot() {
     $state.textContent = `${items.length} 个知识点待复习${skipped.length ? `，另 ${skipped.length} 个缺少题库` : ''}`
     renderNode()
   } catch (error) {
-    $main.innerHTML = `<div class="err">加载失败：${esc(error.message)}</div>`
+    $main.innerHTML = `<div class="err">加载失败：${TutorDom.esc(error.message)}</div>`
   }
 }
 
@@ -119,23 +107,23 @@ function renderNode() {
   const item = items[cur]
   const title = titles.get(item.node) || item.node
   const answers = new Array(item.questions.length).fill('')
-  const card = el('<div class="card"></div>')
-  card.appendChild(el(`<div class="nodehead">${esc(title)}</div>`))
+  const card = TutorDom.el('<div class="card"></div>')
+  card.appendChild(TutorDom.el(`<div class="nodehead">${TutorDom.esc(title)}</div>`))
   // 记忆状态：逾期天数与保留率估计（旧数据无锚点时只显示题量）。
   const memory = [
     item.overdue_days > 0 ? `逾期 ${item.overdue_days} 天` : '',
     item.retention !== undefined ? `预计保留 ≈${Math.round(item.retention * 100)}%` : '',
   ].filter(Boolean).join(' · ')
-  card.appendChild(el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
+  card.appendChild(TutorDom.el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
   item.questions.forEach((q, qi) => {
-    const qDiv = el('<div class="q"></div>')
+    const qDiv = TutorDom.el('<div class="q"></div>')
     // 题干可能是含代码块的 Markdown（题库原文），必须渲染而不是转义成纯文本。
-    qDiv.appendChild(el(`<div class="qtext"><span class="idx">${qi + 1}.</span><div class="qbody">${TutorMd.toHtml(q.question)}</div></div>`))
+    qDiv.appendChild(TutorDom.el(`<div class="qtext"><span class="idx">${qi + 1}.</span><div class="qbody">${TutorMd.toHtml(q.question)}</div></div>`))
     if (q.type === 'choice' && Array.isArray(q.choices)) {
-      const wrap = el('<div class="choices"></div>')
+      const wrap = TutorDom.el('<div class="choices"></div>')
       q.choices.forEach((choiceText, ci) => {
         const letter = LETTERS[ci]
-        const btn = el(`<button class="choice">${TutorMd.inlineText(choiceText)}</button>`)
+        const btn = TutorDom.el(`<button class="choice">${TutorMd.inlineText(choiceText)}</button>`)
         btn.addEventListener('click', () => {
           if (btn.classList.contains('disabled')) return
           answers[qi] = letter
@@ -146,13 +134,13 @@ function renderNode() {
       })
       qDiv.appendChild(wrap)
     } else {
-      const box = el('<div class="short"><input placeholder="输入你的答案…"></div>')
+      const box = TutorDom.el('<div class="short"><input placeholder="输入你的答案…"></div>')
       box.querySelector('input').addEventListener('input', (e) => { answers[qi] = e.target.value })
       qDiv.appendChild(box)
     }
     card.appendChild(qDiv)
   })
-  const submit = el('<button class="submit">提交本节</button>')
+  const submit = TutorDom.el('<button class="submit">提交本节</button>')
   submit.addEventListener('click', async () => {
     if (answers.some((answer) => !answer.trim())) {
       $state.textContent = '请完成全部题目后提交'
@@ -162,13 +150,13 @@ function renderNode() {
     for (const c of card.querySelectorAll('.choice')) c.classList.add('disabled')
     for (const i of card.querySelectorAll('input')) i.disabled = true
     try {
-      const out = await rpc('submitReview', { id: courseId, node: item.node, attemptId: item.attemptId, answers })
+      const out = await TutorRpc('submitReview', { id: courseId, node: item.node, attemptId: item.attemptId, answers })
       showResult(card, item, out)
     } catch (error) {
       submit.disabled = false
       for (const c of card.querySelectorAll('.choice')) c.classList.remove('disabled')
       for (const i of card.querySelectorAll('input')) i.disabled = false
-      card.appendChild(el(`<div class="err">提交失败：${esc(error.message)}</div>`))
+      card.appendChild(TutorDom.el(`<div class="err">提交失败：${TutorDom.esc(error.message)}</div>`))
     }
   })
   card.appendChild(submit)
@@ -187,24 +175,24 @@ function showResult(card, item, out) {
       if (idx >= 0 && q.choices[idx]) answerText = q.choices[idx]
     }
     const tail = pq.correct ? '' : `　<span class="ans">正确答案：${TutorMd.inlineText(answerText)}</span>`
-    const v = el(`<div class="verdict ${pq.correct ? 'ok' : 'no'}">${pq.correct ? '✓ 正确' : '✗ 错误'}${tail}</div>`)
+    const v = TutorDom.el(`<div class="verdict ${pq.correct ? 'ok' : 'no'}">${pq.correct ? '✓ 正确' : '✗ 错误'}${tail}</div>`)
     if (qDivs[i]) qDivs[i].appendChild(v)
   })
   const pct = Math.round(out.score * 100)
-  const result = el('<div class="result"></div>')
-  result.appendChild(el(`<div class="score">得分 ${out.correct}/${out.total}（${pct}%）</div>`))
-  result.appendChild(el(`<div class="due">下次复习：${esc(out.entry.review_due)}（状态 ${esc(out.entry.status)}）</div>`))
-  const row = el('<div class="chips"></div>')
+  const result = TutorDom.el('<div class="result"></div>')
+  result.appendChild(TutorDom.el(`<div class="score">得分 ${out.correct}/${out.total}（${pct}%）</div>`))
+  result.appendChild(TutorDom.el(`<div class="due">下次复习：${TutorDom.esc(out.entry.review_due)}（状态 ${TutorDom.esc(out.entry.status)}）</div>`))
+  const row = TutorDom.el('<div class="chips"></div>')
   if (cur < items.length - 1) {
-    const next = el('<button class="next">下一节 →</button>')
+    const next = TutorDom.el('<button class="next">下一节 →</button>')
     next.addEventListener('click', () => { cur += 1; window.scrollTo(0, 0); renderNode() })
     row.appendChild(next)
   } else {
-    const done = el('<button class="next">全部完成 → 课程列表</button>')
+    const done = TutorDom.el('<button class="next">全部完成 → 课程列表</button>')
     done.addEventListener('click', () => { location.href = '/' })
     row.appendChild(done)
   }
-  const back = el('<button class="next secondary">← 课程列表</button>')
+  const back = TutorDom.el('<button class="next secondary">← 课程列表</button>')
   back.addEventListener('click', () => { location.href = '/' })
   row.appendChild(back)
   result.appendChild(row)

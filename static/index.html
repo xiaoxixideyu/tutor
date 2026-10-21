@@ -60,6 +60,8 @@
   <section id="panel"></section>
 </main>
 <script src="/research-progress.js"></script>
+<script src="/ui/dom.js"></script>
+<script src="/ui/rpc.js"></script>
 <script>
 const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
 const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
@@ -77,27 +79,10 @@ function flowHref(flow) {
   return `/wizard.html?course=${course}&resume=${encodeURIComponent(flow.kind)}${flow.nodeId ? `&node=${encodeURIComponent(flow.nodeId)}` : ''}`
 }
 
-async function rpc(method, params) {
-  const response = await fetch('/rpc', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-  })
-  const body = await response.json()
-  if (body.error) throw new Error(body.error.message)
-  return body.result
-}
-
-function esc(text) {
-  const div = document.createElement('div')
-  div.textContent = String(text ?? '')
-  return div.innerHTML
-}
-
 async function renderList() {
   researchLive.connect(null)
-  const courses = await rpc('listCourses')
-  const due = await rpc('dueReviews')
+  const courses = await TutorRpc('listCourses')
+  const due = await TutorRpc('dueReviews')
   const state = await fetch('/flow/state').then((response) => response.json()).catch(() => ({ flows: [] }))
   const flowByCourse = new Map((state.flows ?? []).map((flow) => [flow.courseId, flow]))
   const dueById = new Map((due ?? []).map((c) => [c.id, c]))
@@ -109,14 +94,14 @@ async function renderList() {
         const running = flowByCourse.get(c.id)
         const runningBadge = running ? `<span class="badge run">▶ ${FLOW_LABEL[running.kind] ?? running.kind}进行中</span>` : ''
         const reviewLine = dueById.has(c.id)
-          ? `<div class="meta review-line">待复习：${esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
+          ? `<div class="meta review-line">待复习：${TutorDom.esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
           : ''
         // 内容主闸（地图）未过审：摸底/计划/上课/复习都会 gate.require 地图，任一点进去都会 dead-end；看板先提示而非假装可用。
         const warnLine = !c.error && c.contentReady === false
           ? '<div class="meta" style="color:#b45309">⚠ 课程内容未通过当前审查，摸底/上课/复习等环节可能无法进入——需重新审查后再用</div>'
           : ''
         const errorLine = c.error
-          ? `<div class="meta" style="color:#b91c1c">⚠ 课程数据无法读取：${esc(c.error)}</div>`
+          ? `<div class="meta" style="color:#b91c1c">⚠ 课程数据无法读取：${TutorDom.esc(c.error)}</div>`
           : ''
         // CTA 按阶段分流：有计划才进课堂；半成品课导去向导补齐（摸底/计划），不再把用户丢进「缺计划」死路。
         // 全部已掌握且无待学指针：上课只会得到「无课可上」，如实显示完成态并给复习/重测出口。
@@ -135,10 +120,10 @@ async function renderList() {
         const reviewBtn = c.dueCount
           ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
           : ''
-        return `<div class="course" data-id="${esc(c.id)}" data-error="${c.error ? '1' : ''}">
-          <div class="row1"><span class="id">${esc(c.id)}</span><span class="goal">${esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${esc(cta.href)}">${esc(cta.label)}</button>` : ''}</div>
+        return `<div class="course" data-id="${TutorDom.esc(c.id)}" data-error="${c.error ? '1' : ''}">
+          <div class="row1"><span class="id">${TutorDom.esc(c.id)}</span><span class="goal">${TutorDom.esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${TutorDom.esc(cta.href)}">${TutorDom.esc(cta.label)}</button>` : ''}</div>
           <div class="bar"><span style="width:${pct}%"></span></div>
-          <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${esc(c.current)}` : ''}</div>
+          <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${TutorDom.esc(c.current)}` : ''}</div>
           ${reviewLine}
           ${warnLine}
           ${errorLine}
@@ -157,25 +142,25 @@ async function renderList() {
 }
 
 async function renderStatus(id) {
-  const p = await rpc('courseStatus', { id })
+  const p = await TutorRpc('courseStatus', { id })
   researchLive.connect(id)
   // 展开课程详情时拉取"当前内容里哪条没过审"（地图/计划/各节点题库），省得用户去翻 JSON 证据文件。
-  const issues = await rpc('contentIssues', { id }).catch(() => [])
+  const issues = await TutorRpc('contentIssues', { id }).catch(() => [])
   // 学习曲线数据来自事件流（mastery-events.jsonl）；旧课程没有事件流时优雅降级。
-  const history = await rpc('masteryHistory', { id, days: 30 }).catch(() => null)
+  const history = await TutorRpc('masteryHistory', { id, days: 30 }).catch(() => null)
   const maxCount = history ? Math.max(1, ...history.activity.map((d) => d.count)) : 1
   const curveSection = !history || !history.activity.some((d) => d.count > 0)
     ? `<h2 style="margin-top:16px">学习曲线</h2><div class="empty">事件流从本次更新后开始积累：上完一节课、做一次复习或大考后，这里会出现逐日活动与成绩轨迹。</div>`
     : `<h2 style="margin-top:16px">学习曲线（近 ${history.days} 天）</h2>
-       <div class="bars">${history.activity.map((d) => `<span class="${d.count === 0 ? 'zero' : ''}" style="height:${d.count === 0 ? 2 : Math.max(4, Math.round((d.count / maxCount) * 42))}px" title="${esc(d.date)} · ${d.count} 次活动${d.count > 0 ? `（${Object.entries(d.kinds).map(([k, v]) => `${k}×${v}`).join('、')}）` : ''}"></span>`).join('')}</div>
+       <div class="bars">${history.activity.map((d) => `<span class="${d.count === 0 ? 'zero' : ''}" style="height:${d.count === 0 ? 2 : Math.max(4, Math.round((d.count / maxCount) * 42))}px" title="${TutorDom.esc(d.date)} · ${d.count} 次活动${d.count > 0 ? `（${Object.entries(d.kinds).map(([k, v]) => `${k}×${v}`).join('、')}）` : ''}"></span>`).join('')}</div>
        <div class="meta">近 14 天学习 ${history.pace.sessions} 天${history.pace.averageGapDays !== undefined ? `，平均间隔 ${history.pace.averageGapDays} 天` : ''}　（柱=当天活动次数：小测/回访/复习/实践/大考）</div>
-       ${history.nodes.length ? `<div class="trail" style="margin-top:8px">${history.nodes.map((n) => `<div class="meta">${esc(n.node)}：${n.points.map((pt) => `<span class="sym ${pt.passed === false ? 's-weak' : 's-mastered'}" title="${esc(pt.at)} · ${esc(pt.kind)} · ${pt.score}">${pt.passed === false ? '✗' : '✓'}</span>`).join('')}</div>`).join('')}</div>` : ''}`
+       ${history.nodes.length ? `<div class="trail" style="margin-top:8px">${history.nodes.map((n) => `<div class="meta">${TutorDom.esc(n.node)}：${n.points.map((pt) => `<span class="sym ${pt.passed === false ? 's-weak' : 's-mastered'}" title="${TutorDom.esc(pt.at)} · ${TutorDom.esc(pt.kind)} · ${pt.score}">${pt.passed === false ? '✗' : '✓'}</span>`).join('')}</div>`).join('')}</div>` : ''}`
   const KIND_LABEL = { map: '知识地图', bank: '摸底题库', lesson: '教案', plan: '教学计划', teaching: '课堂讲授', exam: '大考', practice: '实践任务' }
   const issuesSection = issues.length
     ? `<div style="margin-top:12px;padding:10px 12px;border:1px solid #f1c084;background:#fffbeb;border-radius:8px">
         <div style="color:#b45309;font-weight:600;margin-bottom:6px">⚠ 以下内容未通过审查，修复后需重新审查</div>
-        ${issues.map((it) => `<div class="meta" style="margin:4px 0">· <strong>${esc(KIND_LABEL[it.kind] ?? it.kind)}${it.node ? '（' + esc(it.node) + '）' : ''}</strong>：${(it.issues || []).map(esc).join('；')}</div>`).join('')}
-        <div class="meta" style="margin-top:6px">修复对应 YAML 后运行 <code>npm run agent -- audit-content ${esc(p.id)}</code> 重新审查。</div>
+        ${issues.map((it) => `<div class="meta" style="margin:4px 0">· <strong>${TutorDom.esc(KIND_LABEL[it.kind] ?? it.kind)}${it.node ? '（' + TutorDom.esc(it.node) + '）' : ''}</strong>：${(it.issues || []).map(TutorDom.esc).join('；')}</div>`).join('')}
+        <div class="meta" style="margin-top:6px">修复对应 YAML 后运行 <code>npm run agent -- audit-content ${TutorDom.esc(p.id)}</code> 重新审查。</div>
       </div>`
     : ''
   const nodeRows = p.nodes.map((n) => {
@@ -192,9 +177,9 @@ async function renderStatus(id) {
       : ''
     return `<tr>
       <td><span class="sym ${cls}">${sym}</span></td>
-      <td>${esc(n.status)}</td><td>${esc(n.id)}</td><td>${esc(n.title ?? '')}</td>
-      <td>${n.score !== undefined ? esc(n.score) : ''}</td>
-      <td>${n.review_due !== undefined ? `复习→${esc(n.review_due)}${retention}` : ''}</td>
+      <td>${TutorDom.esc(n.status)}</td><td>${TutorDom.esc(n.id)}</td><td>${TutorDom.esc(n.title ?? '')}</td>
+      <td>${n.score !== undefined ? TutorDom.esc(n.score) : ''}</td>
+      <td>${n.review_due !== undefined ? `复习→${TutorDom.esc(n.review_due)}${retention}` : ''}</td>
       <td>${n.researchStatus ? `${researchLabel} <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research&node=${encodeURIComponent(n.id)}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
       <td>${p.hasPlan ? `<button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}&node=${encodeURIComponent(n.id)}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
     </tr>`
@@ -209,7 +194,7 @@ async function renderStatus(id) {
     } else if (m.examable) {
       tail = `<button class="enter ms-exam" data-href="/exam.html?course=${encodeURIComponent(p.id)}&milestone=${encodeURIComponent(m.id)}">参加大考 →</button>`
     }
-    return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${esc(m.id)} ${esc(m.title)}　${frac}</span>${tail}</div>`
+    return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
   }).join('')
   const c = p.counts
   // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（practice.html 内部再兜底判定）。
@@ -223,8 +208,8 @@ async function renderStatus(id) {
   const resetBtn = `<button class="enter" id="reset-breaks" style="margin-left:8px">清理中断的摸底/考试断点</button>`
   $panel.innerHTML = `
     <button class="back" id="back">← 返回课程列表</button>
-    <h2 style="margin-top:12px">${esc(p.id)}${p.goal ? ` · ${esc(p.goal)}` : ''}</h2>
-    <div class="meta">指针：${p.current ? esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
+    <h2 style="margin-top:12px">${TutorDom.esc(p.id)}${p.goal ? ` · ${TutorDom.esc(p.goal)}` : ''}</h2>
+    <div class="meta">指针：${p.current ? TutorDom.esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
     <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
     ${auditBtn}
     ${resetBtn}
@@ -244,7 +229,7 @@ async function renderStatus(id) {
     if (!confirm('将归档并清理未完成的摸底/考试断点；掌握度、计划和已通过成绩不受影响。继续？')) return
     try {
       const [assessment, exam] = await Promise.all([
-        rpc('resetAssessment', { id: p.id }), rpc('discardAttempt', { id: p.id }),
+        TutorRpc('resetAssessment', { id: p.id }), TutorRpc('discardAttempt', { id: p.id }),
       ])
       const lines = [
         assessment.reset ? '已清理未完成的摸底进度。' : assessment.message,
@@ -260,7 +245,7 @@ async function renderStatus(id) {
 
 const requestedCourse = new URLSearchParams(location.search).get('course')
 ;(requestedCourse ? renderStatus(requestedCourse) : renderList()).catch((error) => {
-  $panel.innerHTML = `<div class="err">加载失败：${esc(error.message)}</div>`
+  $panel.innerHTML = `<div class="err">加载失败：${TutorDom.esc(error.message)}</div>`
 })
 </script>
 </body>

@@ -70,10 +70,12 @@
   </div>
 </footer>
 <script src="/flow-client.js"></script>
+<script src="/ui/dom.js"></script>
+<script src="/ui/rpc.js"></script>
 <script>
 const flowClient = new TutorFlowClient((message) => {
   setRunning(false)
-  $log.appendChild(el(`<div class="errline">${esc(message)}</div>`))
+  $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(message)}</div>`))
 })
 // 实践页：与 lesson/exam 不同——practice 是零模型交互 runner，提示符是内联 `…> `（无独占一行的 `>` 哨兵），
 // 所以这里不走哨兵机制，而是把 stdout 当终端流原样渲染，靠识别已知提示符（回车运行测试 / 选择任务序号）切回「就绪」。
@@ -102,19 +104,10 @@ let canSend = false
 let busyTimer = null
 let busySeconds = 0
 
-function el(html) { const d = document.createElement('div'); d.innerHTML = html; return d.firstChild }
-function esc(text) { const d = document.createElement('div'); d.textContent = String(text ?? ''); return d.innerHTML }
-function scrollToEnd() { if ($log.scrollHeight - $log.scrollTop - $log.clientHeight < 120) $log.scrollTop = $log.scrollHeight }
 function showBanner(t) { $banner.textContent = t; $banner.style.display = 'block' }
 function hideBanner() { $banner.style.display = 'none' }
 function labelFor(kind, courseId) { return `${KIND_LABEL[kind] || kind}进行中：${courseId}` }
 
-async function rpc(method, params) {
-  const response = await fetch('/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }) })
-  const body = await response.json()
-  if (body.error) throw new Error(body.error.message)
-  return body.result
-}
 async function api(path, body) {
   const result = await flowClient.request(path, body)
   if (path === '/flow/start' && result.ok) startSse()
@@ -132,7 +125,7 @@ function appendLine(text, cls) {
   span.textContent = text
   term.appendChild(span)
   term.appendChild(document.createTextNode('\n'))
-  scrollToEnd()
+  TutorDom.scrollToEnd($log)
 }
 
 function renderStreamLine(line) {
@@ -218,32 +211,32 @@ function startSse() {
     if (msg.type === 'out') feed(msg.text)
     else if (msg.type === 'err') appendLine(String(msg.text).replace(/\n$/, ''), 'no')
     else if (msg.type === 'exit') handleExit(msg.kind, msg.code)
-    scrollToEnd()
+    TutorDom.scrollToEnd($log)
   }
   es.onerror = () => { canSend = false; setRunning(false); $state.textContent = '连接中断，重连中…' }
 }
 function renderDone() {
-  const row = el('<div class="chips"></div>')
-  const again = el('<button class="chip">重新进入实践</button>')
+  const row = TutorDom.el('<div class="chips"></div>')
+  const again = TutorDom.el('<button class="chip">重新进入实践</button>')
   again.addEventListener('click', async () => { $log.innerHTML = ''; term = null; pending = ''; await startPractice() })
-  const back = el('<button class="chip">← 课程列表</button>')
+  const back = TutorDom.el('<button class="chip">← 课程列表</button>')
   back.addEventListener('click', () => { location.href = '/' })
-  row.appendChild(again); row.appendChild(back); $log.appendChild(row); scrollToEnd()
+  row.appendChild(again); row.appendChild(back); $log.appendChild(row); TutorDom.scrollToEnd($log)
 }
 function renderRetry() {
-  const row = el('<div class="chips"></div>')
-  const retry = el('<button class="chip">重试生成</button>')
+  const row = TutorDom.el('<div class="chips"></div>')
+  const retry = TutorDom.el('<button class="chip">重试生成</button>')
   retry.addEventListener('click', async () => { $log.innerHTML = ''; term = null; pending = ''; await startPracticeGen() })
-  const back = el('<button class="chip">← 课程列表</button>')
+  const back = TutorDom.el('<button class="chip">← 课程列表</button>')
   back.addEventListener('click', () => { location.href = '/' })
-  row.appendChild(retry); row.appendChild(back); $log.appendChild(row); scrollToEnd()
+  row.appendChild(retry); row.appendChild(back); $log.appendChild(row); TutorDom.scrollToEnd($log)
 }
 function renderGenPrompt() {
   $log.innerHTML = ''; term = null
-  const card = el('<div class="intro"></div>')
-  card.appendChild(el('<div>这个知识点还没有实践任务。</div>'))
-  card.appendChild(el('<div style="color:var(--muted);margin-top:6px">实践任务通过内容核对后即可开始练习。准备期间会显示进度，失败后可重试。</div>'))
-  const btn = el('<button class="big">生成实践任务</button>')
+  const card = TutorDom.el('<div class="intro"></div>')
+  card.appendChild(TutorDom.el('<div>这个知识点还没有实践任务。</div>'))
+  card.appendChild(TutorDom.el('<div style="color:var(--muted);margin-top:6px">实践任务通过内容核对后即可开始练习。准备期间会显示进度，失败后可重试。</div>'))
+  const btn = TutorDom.el('<button class="big">生成实践任务</button>')
   btn.addEventListener('click', async () => { btn.disabled = true; if (await startPracticeGen()) startSse(); else btn.disabled = false })
   card.appendChild(btn); $log.appendChild(card)
 }
@@ -267,7 +260,7 @@ function renderFlowMismatch(runningFlow) {
   $banner.innerHTML = ''
   $banner.appendChild(document.createTextNode(
     `「${runningFlow.courseId}」正在进行${runLabel}${runningFlow.nodeId ? ' · ' + runningFlow.nodeId : ''}。要练习「${wantedCourse} · ${wantedNode}」，请先结束它。`))
-  const btn = el('<button style="margin-top:8px;cursor:pointer">结束当前流程并开始实践</button>')
+  const btn = TutorDom.el('<button style="margin-top:8px;cursor:pointer">结束当前流程并开始实践</button>')
   btn.addEventListener('click', async () => {
     btn.disabled = true; btn.textContent = '正在结束当前流程…'
     await api('/flow/stop')
@@ -286,7 +279,7 @@ function renderFlowMismatch(runningFlow) {
 // 有 practice.yaml → 直接练；没有 → 先给「生成实践任务」入口（不擅自烧模型额度）。返回是否已起流程（决定要不要连 SSE）。
 async function enterPractice() {
   let hasPractice = false
-  try { hasPractice = !!(await rpc('courseStatus', { id: wantedCourse })).nodes.find((node) => node.id === wantedNode)?.practiceCount }
+  try { hasPractice = !!(await TutorRpc('courseStatus', { id: wantedCourse })).nodes.find((node) => node.id === wantedNode)?.practiceCount }
   catch (e) { showBanner('读取课程状态失败：' + e.message); return false }
   if (hasPractice) return await startPractice()
   renderGenPrompt(); return false
@@ -300,7 +293,7 @@ async function enterPractice() {
   const flows = state.flows ?? []
   const act = flows.find((flow) => ['practice', 'practice-gen'].includes(flow.kind) && flow.courseId === wantedCourse)
   const busySameCourse = flows.find((flow) => flow.courseId === wantedCourse && flow !== act)
-  const course = await rpc('courseStatus', { id: wantedCourse })
+  const course = await TutorRpc('courseStatus', { id: wantedCourse })
   if (!course.hasPlan) { showBanner('请先完成课程规划，再选择知识点实践。'); return }
   const sameCourse = !!act
   wantedNode ||= (act && act.nodeId) || course.current || course.nodes[0]?.id
