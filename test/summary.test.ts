@@ -3,10 +3,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { CourseStore } from '../src/core/store.ts'
-import { courseProgress, listCourseSummaries, listDueReviews } from '../src/core/summary.ts'
+import { courseContentIssues, courseProgress, listCourseSummaries, listDueReviews } from '../src/core/summary.ts'
 import { ResearchProgressStore } from '../src/core/research.ts'
-import type { KnowledgeMap } from '../src/core/schema.ts'
+import { approveFixture } from './fixtures/quality.ts'
+import { contentKey, lessonContent, mapContent, practiceContent, QUALITY_POLICY } from '../src/core/content-quality.ts'
+import { QualityStore } from '../src/core/quality-store.ts'
+import type { KnowledgeMap, PracticeTask, Profile } from '../src/core/schema.ts'
 
 function makeStore(): CourseStore {
   return new CourseStore(fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-summary-')))
@@ -178,6 +182,39 @@ describe('listCourseSummaries', () => {
     assert.equal(items[0].total, 0)
     assert.equal(items[1].goal, '正常课程')
     assert.equal(items[1].error, undefined)
+  })
+})
+
+describe('courseContentIssues', () => {
+  it('教案与实践任务被拒时也要在看板上出现', () => {
+    const store = makeStore()
+    store.create('alpha', { goal: 'x', daily_minutes: 60 })
+    const map: KnowledgeMap = { verified: false, nodes: [{ id: 'a1', title: 'A1' }], edges: [], resources: [] }
+    store.write('alpha', 'knowledge-map', map)
+    const profile = store.read('alpha', 'profile') as Profile
+    const draft = { node: 'a1', title: 'A1', hook: '开场', structure: ['要点'], example: 'demo',
+      practice: [{ question: 'q', answer: 'a' }], quiz: [{ question: 'q1', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'A' }, { question: 'q2', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'A' }] }
+    store.write('alpha', 'lesson', { node: 'a1', started_at: '2026-10-08', draft: draft as never })
+    store.write('alpha', 'practice', { generated_at: '2026-10-08', tasks: [{ id: 'a1-task', node: 'a1', title: '任务',
+      prompt: '写点东西', tests: [{ name: 'file', command: 'test -f answer.txt' }] }] })
+    approveFixture(store.root, 'alpha', mapContent(map, profile))
+    // 手工写入"被拒"的审查记录，模拟教案与实践任务未通过准入。
+    const quality = new QualityStore(store.root, 'alpha')
+    const storedLesson = store.read('alpha', 'lesson') as { draft: never }
+    const storedPractice = store.read('alpha', 'practice') as { tasks: PracticeTask[] }
+    for (const [input, issues] of [
+      [lessonContent(storedLesson.draft, profile, map), ['教案超出范围']],
+      [practiceContent(storedPractice.tasks, 'a1', profile, map), ['实践任务验收不严']],
+    ] as const) {
+      quality.save({
+        id: randomUUID(), key: contentKey(input), policy: QUALITY_POLICY, status: 'rejected', input,
+        startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:00:01Z', calls: [], issues: [...issues],
+      })
+    }
+    const issues = courseContentIssues(store, 'alpha')
+    const kinds = issues.map((item) => item.kind)
+    assert.ok(kinds.includes('lesson'), '教案未通过审查应出现在看板')
+    assert.ok(kinds.includes('practice'), '实践任务未通过审查应出现在看板')
   })
 })
 

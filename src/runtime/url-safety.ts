@@ -35,8 +35,11 @@ function privateIPv6(address: string): boolean {
   const lower = address.toLowerCase()
   if (lower === '::' || lower === '::1') return true
   if (lower.startsWith('::ffff:')) return privateIPv4(lower.slice('::ffff:'.length))
-  return lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe8')
-    || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb') || lower.startsWith('ff')
+  // IPv4-compatible（::/96，如 ::127.0.0.1、::7f00:1）同样指向本机/内网，必须拦截。
+  if (lower.startsWith('::')) return true
+  // fc00::/7 唯一本地地址；fe00::/9 链路本地与站点本地；ff00::/8 组播。
+  return lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe')
+    || lower.startsWith('ff')
 }
 
 export function isPrivateAddress(address: string): boolean {

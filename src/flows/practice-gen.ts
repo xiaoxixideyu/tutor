@@ -10,7 +10,6 @@ import { applyPracticeEdits, PRACTICE_REPAIR_PERSONA, practiceRepairPrompt } fro
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { requirePlanMapConsistency } from './consistency.ts'
-import { today } from './deps.ts'
 
 export async function runPracticeGen(deps: FlowDeps, config: { courseId: string; batchSize?: number; nodeId?: string }): Promise<void> {
   const batchSize = config.batchSize ?? 3
@@ -32,7 +31,7 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
   await gate.require(planContent(plan, profile, map))
   const file: PracticeTaskFile = store.has(config.courseId, 'practice')
     ? (store.read(config.courseId, 'practice') as PracticeTaskFile)
-    : { generated_at: today(), tasks: [] }
+    : { generated_at: deps.today(), tasks: [] }
   if (store.has(config.courseId, 'practice')) io.out(`已有实践任务（${file.tasks.length} 个），继续补齐。\n`)
 
   const queue = practiceGenerationNodes(plan, map, file, config.nodeId)
@@ -52,8 +51,6 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
   }
   io.out(`待生成实践任务的知识点 ${queue.length} 个（${queue.join('、')}）。\n`)
 
-  const chat = await deps.createChat()
-
   const titles = new Map(map.nodes.map((n) => [n.id, n]))
   for (let i = 0; i < queue.length; i += batchSize) {
     const batch = queue.slice(i, i + batchSize)
@@ -66,35 +63,40 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
         const repairChat = await deps.createChat({ isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 8192, retryOnLength: false })
         result = await generateApproved<PracticeTaskFile>(repairChat, practiceRepairPrompt(oldTasks, profile, issues), text => {
           const data = parseJsonBlock(text)
-          return data.ok ? applyPracticeEdits(oldTasks, data.value, node, today()) : data
+          return data.ok ? applyPracticeEdits(oldTasks, data.value, node, deps.today()) : data
         }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+        await repairChat.flush()
         recordChatTotal(deps.costs, repairChat, 'practice-repair')
         printSessionTotal(repairChat, deps)
-      } else result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
-        courseId: config.courseId,
-        node,
-        title: titles.get(node)?.title,
-        summary: titles.get(node)?.summary,
-        goal: profileScope(profile),
-        background: profile.background,
-        style: profile.style,
-      }), (text) => {
-        const data = parseJsonBlock(text)
-        if (!data.ok) return data
-        // 校验单节点任务（node 不匹配、任务数超限等由 validatePracticeTasks 拦）
-        return validatePracticeTasks({ generated_at: today(), tasks: (data.value as { tasks?: unknown[] }).tasks ?? data.value }, node)
-      }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+      } else {
+        // 每个知识点独立会话：避免上一个知识点的任务 JSON、测试命令和提示词污染下一个。
+        const chat = await deps.createChat()
+        result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
+          courseId: config.courseId,
+          node,
+          title: titles.get(node)?.title,
+          summary: titles.get(node)?.summary,
+          goal: profileScope(profile),
+          background: profile.background,
+          style: profile.style,
+        }), (text) => {
+          const data = parseJsonBlock(text)
+          if (!data.ok) return data
+          // 校验单节点任务（node 不匹配、任务数超限等由 validatePracticeTasks 拦）
+          return validatePracticeTasks({ generated_at: deps.today(), tasks: (data.value as { tasks?: unknown[] }).tasks ?? data.value }, node)
+        }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+        await chat.flush()
+        recordChatTotal(deps.costs, chat, 'practice-gen')
+        printSessionTotal(chat, deps)
+      }
       file.tasks = file.tasks.filter(task => task.node !== node)
       file.tasks.push(...result.tasks)
-      file.generated_at = today()
+      file.generated_at = deps.today()
       store.write(config.courseId, 'practice', file)
       io.out(`  已保存（practice.yaml 累计 ${file.tasks.length} 个任务，可随时中断）\n`)
     }
   }
 
   io.out(`\n实践任务生成完成：覆盖 ${new Set(file.tasks.map((t) => t.node)).size} 个知识点。\n`)
-  await chat.flush()
-  recordChatTotal(deps.costs, chat, 'practice-gen')
-  printSessionTotal(chat, deps)
   throw new FlowExit(0)
 }

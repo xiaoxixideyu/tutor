@@ -155,6 +155,7 @@ export function createRpcMethods(
       if (!DOC_KINDS.includes(kind as DocKind)) {
         throw rpcError(RPC_ERRORS.invalidParams, `未知的文档类型 "${kind}"`)
       }
+      requireCourse(store, id)
       return store.read(id, kind as DocKind)
     },
     // 学习曲线数据：事件流聚合的日活跃量与每节点成绩轨迹（旧课程无事件流时返回空）。

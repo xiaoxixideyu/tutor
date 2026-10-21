@@ -116,6 +116,33 @@ it('完成归档写入失败时保留提交断点，恢复不重复推进掌握�
   assert.ok(fs.existsSync(path.join(archiveDir, `${attempt.id}.json`)))
 })
 
+it('主观题草稿单独存放：暂停不写进 answers，恢复时读回草稿', t => {
+  const { store, attempts, attempt } = fixture(t)
+  attempt.pending = { questionId: 'q4', answer: '第一行\n第二行' }
+  attempts.save(attempt)
+  const resumed = attempts.read()!
+  assert.deepEqual(resumed.pending, { questionId: 'q4', answer: '第一行\n第二行' })
+  // 草稿不是已完成的作答：提交仍然判为不完整。
+  assert.throws(() => applyExamAttempt(resumed, attempts, store, 'alpha', { verified: false, nodes: [{ id: 'topic', title: '基础运算' }], edges: [] }, '2026-10-08'), /作答不完整/)
+})
+
+it('非法的主观题草稿（指向客观题/未知题号/非作答态）被拒绝', t => {
+  const { attempts, attempt } = fixture(t)
+  for (const pending of [
+    { questionId: 'q1', answer: 'x' },
+    { questionId: 'ghost', answer: 'x' },
+    { questionId: 'q4', answer: '  ' },
+  ]) {
+    attempt.pending = pending as never
+    attempts.save(attempt)
+    assert.throws(() => attempts.read(), /考试断点无法读取/)
+  }
+  attempt.pending = { questionId: 'q4', answer: 'x' }
+  attempt.status = 'graded'
+  attempts.save(attempt)
+  assert.throws(() => attempts.read(), /考试断点无法读取/)
+})
+
 it('损坏、未知作答题号或缺失提交记录的考试断点被拒绝且原文件保留', t => {
   const { attempts, attempt, finishAnswers } = fixture(t)
   finishAnswers()

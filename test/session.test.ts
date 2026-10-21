@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { decodeZstdFrames, SessionLog } from '../src/runtime/session.ts'
+import { decodeZstdFrames, encodeWorkspace, legacyEncodeWorkspace, SessionLog } from '../src/runtime/session.ts'
 
 it('多帧 zstd 按帧头解码，压缩内容含魔数也不会错切', () => {
   const frames = ['第一帧\n', '第二帧\n', '第三帧\n'].map((text) => zlib.zstdCompressSync(Buffer.from(text)))
@@ -25,4 +25,18 @@ it('SessionLog 追加的事件帧可以完整读回', (t) => {
   assert.equal(events[0].type, 'turn/end')
   assert.equal(events[1].type, 'user/message')
   assert.equal(events[1].seq, 1)
+})
+
+it('工作区目录名不会把 /a-b 与 /a/b 撞到同一目录，旧目录名仍可读取', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-session-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  assert.notEqual(encodeWorkspace('/a-b'), encodeWorkspace('/a/b'))
+  const legacy = new SessionLog(root, '/a-b', 'session-legacy', legacyEncodeWorkspace('/a-b'))
+  legacy.appendEvent('turn/end', { reason: { kind: 'completed' } })
+  fs.writeFileSync(path.join(legacy.directory, 'messages.jsonl'), JSON.stringify({ role: 'user', content: 'hi' }) + '\n')
+  const loaded = SessionLog.load(root, '/a-b', 'session-legacy')
+  assert.ok(loaded, '旧目录名的历史会话应仍可恢复')
+  assert.equal(loaded!.events.length, 1)
+  const fresh = new SessionLog(root, '/a-b')
+  assert.match(fresh.directory, new RegExp(encodeWorkspace('/a-b').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })

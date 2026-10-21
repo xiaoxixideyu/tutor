@@ -9,7 +9,6 @@ import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { requirePlanMapConsistency } from './consistency.ts'
-import { today } from './deps.ts'
 
 // 从测试命令提取已知工具并探测可用性（学员机器没装就给指引，不产生任务状态）
 const KNOWN_TOOLS: Record<string, string> = { go: 'brew install go', node: 'brew install node', python3: 'xcode-select --install', cargo: 'brew install rust' }
@@ -96,7 +95,7 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
   const matchingState = prevState?.task_id === task.id && prevState.content_key === taskKey ? prevState : undefined
   if (prevState?.task_id === task.id && !matchingState) io.out('任务内容已更新，本次重新验收；工作目录中的作答保留。\n')
   if (!matchingState) store.write(courseId, 'practice-state', {
-    node, task_id: task.id, updated_at: today(), done_tests: [], done: false, attempts: 0, content_key: taskKey,
+    node, task_id: task.id, updated_at: deps.today(), done_tests: [], done: false, attempts: 0, content_key: taskKey,
   })
   if (matchingState && !matchingState.done && matchingState.done_tests.length > 0) {
     io.out(`（续做：上次已通过 ${matchingState.done_tests.join('、')}）\n`)
@@ -127,7 +126,7 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
     store.write(courseId, 'practice-state', {
       node,
       task_id: task.id,
-      updated_at: today(),
+      updated_at: deps.today(),
       done_tests: judge.perTest.filter((i) => i.passed).map((i) => i.name),
       done: judge.done,
       attempts,
@@ -137,10 +136,10 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
       io.out(`未全部通过（${judge.perTest.filter((i) => i.passed).length}/${task.tests.length}）。修改代码后再按回车。\n`)
       continue
     }
-    const updatedMastery = applyPracticeResult(mastery ?? {}, node, judge.score, today())
+    const updatedMastery = applyPracticeResult(mastery ?? {}, node, judge.score, deps.today())
     store.write(courseId, 'mastery', updatedMastery)
     try {
-      appendMasteryEvent(store.root, courseId, { key: `practice:${task.id}:${taskKey}`, at: today(), node, kind: 'practice', score: judge.score, passed: true })
+      appendMasteryEvent(store.root, courseId, { key: `practice:${task.id}:${taskKey}`, at: deps.today(), node, kind: 'practice', score: judge.score, passed: true })
     } catch { /* 辅助数据写入失败忽略 */ }
     const entry = updatedMastery[node]
     io.out(

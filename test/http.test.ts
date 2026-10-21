@@ -10,6 +10,9 @@ import { request as httpRequest } from 'node:http'
 import { CourseStore } from '../src/core/store.ts'
 import { createTutorServer, type FlowStart } from '../src/server/http.ts'
 import type { FlowIO } from '../src/flows/io.ts'
+import { approveFixture } from './fixtures/quality.ts'
+import { practiceContent } from '../src/core/content-quality.ts'
+import type { Profile } from '../src/core/schema.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -378,4 +381,50 @@ it('RPC 与流程端点拒绝跨站请求，并强制 JSON Content-Type', async 
   })
   assert.equal(sameOrigin.status, 200)
   assert.deepEqual((await sameOrigin.json() as any).result, { ok: true })
+})
+
+it('真实流程读写与宿主同一份课程目录，并使用宿主注入的日期', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-http-real-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const store = new CourseStore(dir)
+  store.create('alpha', { goal: '测试课程', daily_minutes: 60 })
+  const map = { verified: false, nodes: [{ id: 'basics', title: '基础' }], edges: [], resources: [] }
+  store.write('alpha', 'knowledge-map', map)
+  store.write('alpha', 'plan', { path: ['basics'], scope: ['basics'], milestones: [], current: 'basics' })
+  store.write('alpha', 'practice', {
+    generated_at: '2026-10-08',
+    tasks: [{ id: 'basics-task', node: 'basics', title: '写个文件', prompt: '创建 answer.txt',
+      tests: [{ name: 'file', command: 'test -f answer.txt' }] }],
+  })
+  const profile = store.read('alpha', 'profile') as Profile
+  approveFixture(dir, 'alpha', practiceContent((store.read('alpha', 'practice') as { tasks: never[] }).tasks, 'basics', profile, map as never))
+  const app = createTutorServer({
+    root, coursesRoot: dir, modelConfigFile: path.join(dir, 'model-config.json'),
+    modelEnvironment: { TUTOR_LLM_BASE_URL: '', TUTOR_LLM_MODEL: '', TUTOR_LLM_API_KEY: '' },
+    today: () => '2026-10-08',
+  })
+  app.server.listen(0, '127.0.0.1')
+  await once(app.server, 'listening')
+  const address = app.server.address()
+  assert.ok(address && typeof address !== 'string')
+  const base = `http://127.0.0.1:${address.port}`
+  t.after(async () => { await app.close() })
+  const started = await (await fetch(`${base}/flow/start`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'practice', courseId: 'alpha', nodeId: 'basics' }),
+  })).json() as { ok: boolean; flowId: string; error?: string }
+  assert.equal(started.ok, true, started.error)
+  await (await fetch(`${base}/flow/input`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ flowId: started.flowId, line: '' }),
+  })).json()
+  // 流程状态写进宿主同一份课程目录，而不是 root/courses。
+  const statePath = path.join(dir, 'alpha', 'practice-state.yaml')
+  for (let attempt = 0; attempt < 50 && !fs.existsSync(statePath); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert.equal(fs.existsSync(statePath), true, '实践流程应写入宿主指定的课程目录')
+  assert.equal(fs.existsSync(path.join(root, 'courses', 'alpha')), false, '不应写入默认课程目录')
+  // 流程使用宿主注入的日期。
+  assert.match(fs.readFileSync(statePath, 'utf8'), /updated_at: 2026-10-08/)
 })

@@ -14,6 +14,9 @@ export interface ExamAttempt {
   contentKey: string
   paper: ExamPaper
   answers: Record<string, string>
+  // 主观题多行输入暂停时的草稿。草稿不算已完成作答，恢复后继续录入；
+  // 只允许出现在 status=answering 的断点中。
+  pending?: { questionId: string; answer: string }
   gradings?: ExamGrading[]
   result?: {
     date: string
@@ -45,6 +48,17 @@ export class ExamAttemptStore {
       if (problem) throw new Error(problem)
       if (!value.answers || typeof value.answers !== 'object' || Array.isArray(value.answers)
         || Object.entries(value.answers).some(([id, answer]) => !value.paper.questions.some(q => q.id === id) || typeof answer !== 'string' || !answer.trim())) throw new Error('考试作答记录非法')
+      if (value.pending !== undefined) {
+        const pending = value.pending as { questionId?: unknown; answer?: unknown } | null
+        const question = pending && typeof pending === 'object'
+          ? value.paper.questions.find(q => q.id === pending.questionId)
+          : undefined
+        if (value.status !== 'answering' || !pending || typeof pending !== 'object'
+          || typeof pending.questionId !== 'string' || typeof pending.answer !== 'string' || !pending.answer.trim()
+          || question?.type !== 'subjective' || Object.hasOwn(value.answers, pending.questionId)) {
+          throw new Error('主观题断点草稿非法')
+        }
+      }
       if (value.status === 'answering' && value.result) throw new Error('作答中的考试不能含提交记录')
       if (value.status !== 'answering') {
         if (value.paper.questions.some(q => !Object.hasOwn(value.answers, q.id))) throw new Error('考试作答不完整')
@@ -94,6 +108,7 @@ interface LearningStore {
 // 先保存目标状态，再写两份 YAML。任一写入中断后按同一目标补齐，不再次推进复习阶梯。
 export function applyExamAttempt(attempt: ExamAttempt, attempts: ExamAttemptStore, store: LearningStore, courseId: string, map: KnowledgeMap, date: string): NonNullable<ExamAttempt['result']> {
   if (attempt.paper.questions.some(q => !Object.hasOwn(attempt.answers, q.id))) throw new Error('考试作答不完整，不能提交')
+  delete attempt.pending
   const grades = validateSubjectiveGradings({ gradings: attempt.gradings }, attempt.paper.questions)
   if (!grades.ok) throw new Error(grades.error)
   const before = attempt.result?.before ?? {

@@ -1,5 +1,5 @@
 import { AssessmentEngine, formatChoice } from '../core/assessment.ts'
-import { topoOrder, validateBank } from '../core/knowledge.ts'
+import { assertKnowledgeMap, topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { printSessionTotal } from './cost-line.ts'
@@ -9,7 +9,6 @@ import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
-import { today } from './deps.ts'
 
 function mapPrompt(profile: Profile): string {
   return [
@@ -137,7 +136,15 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
     const mapValue = await generateApproved<KnowledgeMap>(chat, mapPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
-      return trySchema(KnowledgeMapSchema, data.value)
+      const schemaResult = trySchema(KnowledgeMapSchema, data.value)
+      if (!schemaResult.ok) return schemaResult
+      // 地图必须自洽（依赖与资料指向存在的知识点、依赖不成环），否则在生成环节就回炉。
+      try {
+        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+      return schemaResult
     }, gate, value => mapContent(value, profile))
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
@@ -182,7 +189,7 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
   io.out(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；随时 Ctrl-C 中断，进度已保存）。\n')
   await runQuiz(deps, config.courseId, engine, map, prepareNode)
 
-  const learner = engine.buildLearnerProfile(today())
+  const learner = engine.buildLearnerProfile(deps.today())
   // 摸底成功后才归档旧状态：中途失败/中断保留原掌握度、计划与断点，不提前清空。
   // 旧计划/实践/考试与新掌握度不再匹配，归档后要求重新规划。
   const hasPriorState = store.has(config.courseId, 'mastery') || store.has(config.courseId, 'learner-profile')

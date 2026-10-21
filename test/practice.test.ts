@@ -42,12 +42,30 @@ describe('validatePracticeTasks', () => {
   it('node 不匹配报错；tests 空报错；空命令报错', () => {
     assert.equal(validatePracticeTasks(validFile, 'goroutines').ok, false)
     const noTests = { ...validFile, tasks: [{ ...validFile.tasks[0], tests: [] }] }
-    assert.match(String((validatePracticeTasks(noTests) as { error?: string }).error ?? ''), /tests/)
+    assert.match(String((validatePracticeTasks(noTests) as { error?: string })?.error ?? ''), /tests/)
     const emptyCommand = {
       ...validFile,
       tasks: [{ ...validFile.tasks[0], tests: [{ name: 'x', command: '  ' }] }],
     }
     assert.equal(validatePracticeTasks(emptyCommand).ok, false)
+  })
+
+  it('空测试名与空输出期望被拒绝（否则 output.includes("") 恒真，会假通过）', () => {
+    const emptyNeedle = {
+      ...validFile,
+      tasks: [{
+        ...validFile.tasks[0],
+        tests: [{ name: 't', command: 'true', expect_exit: 0, expect_output_contains: [''] }],
+      }],
+    }
+    const result = validatePracticeTasks(emptyNeedle)
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.error, /expect_output_contains/)
+    const emptyName = {
+      ...validFile,
+      tasks: [{ ...validFile.tasks[0], tests: [{ name: '  ', command: 'true' }] }],
+    }
+    assert.equal(validatePracticeTasks(emptyName).ok, false)
   })
 
   it('同知识点任务超过 2 个报错', () => {
@@ -77,6 +95,11 @@ describe('judgeTest', () => {
     const bare: Parameters<typeof judgeTest>[1] = { name: 't', command: 'x' }
     assert.equal(judgeTest({ exitCode: 0, output: '', timedOut: false }, bare), true)
     assert.equal(judgeTest({ exitCode: 1, output: '', timedOut: false }, bare), false)
+  })
+
+  it('空输出期望不算通过', () => {
+    const empty: Parameters<typeof judgeTest>[1] = { name: 't', command: 'x', expect_output_contains: [''] }
+    assert.equal(judgeTest({ exitCode: 0, output: '任意输出', timedOut: false }, empty), false)
   })
 })
 

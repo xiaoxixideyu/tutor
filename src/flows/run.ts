@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { CourseStore } from '../core/store.ts'
+import { localDate } from '../core/dates.ts'
 import { acquireCourseLock, type CourseLock } from '../core/course-lock.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { ChatRuntime, type AgentChat, type AttemptObservation, type CreateChatOptions, type ModelSettings } from '../runtime/chat.ts'
@@ -12,7 +13,6 @@ import { CostLedger } from './cost-ledger.ts'
 import { printCostLedger } from './cost-line.ts'
 import { FlowExit, type FlowIO } from './io.ts'
 import type { FlowDeps, FlowInput } from './deps.ts'
-import { today } from './deps.ts'
 import { runInterview } from './interview.ts'
 import { runAssess } from './assess.ts'
 import { runPlan } from './plan.ts'
@@ -43,6 +43,8 @@ export interface RunFlowOptions {
   resolveModel?: () => ModelSettings
   // 每回合重新解析教研搜索服务（MCP）；缺省沿用启动环境快照。
   resolveSearch?: () => SearchSettings | undefined
+  // 宿主注入的"今天"（网页宿主可与 RPC 使用同一来源）；缺省用本机时区的日历日。
+  today?: () => string
 }
 
 export function personaFor(root: string, kind: string): string {
@@ -75,6 +77,8 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
   const env = options.env
   const workspace = options.workspace ?? env.TUTOR_WORKSPACE ?? root
   const store = new CourseStore(env.TUTOR_COURSES_ROOT ?? path.join(root, 'courses'))
+  // 日历日以宿主注入为准；缺省时用环境里的时区（.env 中的 TUTOR_TIMEZONE 也能生效）。
+  const day = options.today ?? (() => localDate(new Date(), env.TUTOR_TIMEZONE))
   const status = createResearchStatus(env, io.out)
   // 教研流程可选记录 HTTP 层运输诊断（仅状态码与白名单响应头，不含正文与密钥）。
   if (input.kind === 'research' && env.TUTOR_CHANNEL_TRACE_FILE) {
@@ -101,7 +105,7 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
     return runtime.createChat(chatOptions)
   }
   const deps: FlowDeps = {
-    store, io, status, env, workspace, today,
+    store, io, status, env, workspace, today: day,
     createChat: createChat as FlowDeps['createChat'],
     costs: new CostLedger(),
   }

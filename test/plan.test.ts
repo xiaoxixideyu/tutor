@@ -143,4 +143,23 @@ describe('planMapMismatch', () => {
     const legacy = { path: ['basics'], milestones: [], current: 'basics' }
     assert.equal(planMapMismatch(legacy, map), null)
   })
+
+  it('旧计划经 PlanSchema 读回（scope 被补成空数组）仍按完整地图处理', () => {
+    // PlanSchema 会把缺失的 scope 补成 []；空数组不能被当成"显式空范围"。
+    const legacy = PlanSchema({ path: ['basics'], milestones: [], current: 'basics' })
+    assert.deepEqual(legacy.scope, [])
+    assert.equal(planMapMismatch(legacy, map), null)
+  })
+
+  it('current 为 null（历史数据）不当作节点引用', () => {
+    const legacy = PlanSchema({ path: [], milestones: [], current: null })
+    assert.equal(planMapMismatch(legacy, map), null)
+  })
+
+  it('单个里程碑节点数不能超过大考试卷容量', () => {
+    const many = Array.from({ length: 11 }, (_, index) => `n${index}`)
+    const result = validateMilestoneDraft({ milestones: [{ title: 'x', nodes: many }] }, many)
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.error, /超过单次大考上限/)
+  })
 })

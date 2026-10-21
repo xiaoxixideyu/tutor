@@ -4,6 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 import {
   assembleReport,
   parseLessonIntro,
@@ -17,21 +18,27 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = process.stdout
 const sessionsRoot = process.env.TUTOR_SESSIONS_ROOT ?? path.join(root, 'data', 'sessions')
 const workspace = path.resolve(process.env.TUTOR_AUDIT_WORKSPACE ?? process.cwd())
-const WORKSPACE_DIR = `-${workspace.replaceAll('/', '-')}--`
+// 会话目录名：新的带工作区摘要，旧的是纯替换斜杠的目录名（历史会话）。
+const WORKSPACE_DIRS = [
+  `-${workspace.replaceAll('/', '-')}--${createHash('sha256').update(workspace).digest('hex').slice(0, 12)}`,
+  `-${workspace.replaceAll('/', '-')}--`,
+]
 
 function findSessions(filter) {
-  const dir = path.join(sessionsRoot, WORKSPACE_DIR)
-  if (!fs.existsSync(dir)) return []
-  const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name.startsWith('session-'))
-  let sessions = entries.map((e) => {
-    const dirPath = path.join(dir, e.name)
-    return {
-      id: e.name.slice('session-'.length),
-      mtime: fs.statSync(dirPath).mtimeMs,
-      file: path.join(dirPath, 'session.v3.jsonl.zstd'),
-    }
+  const sessions = WORKSPACE_DIRS.flatMap((name) => {
+    const dir = path.join(sessionsRoot, name)
+    if (!fs.existsSync(dir)) return []
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && e.name.startsWith('session-'))
+    return entries.map((e) => {
+      const dirPath = path.join(dir, e.name)
+      return {
+        id: e.name.slice('session-'.length),
+        mtime: fs.statSync(dirPath).mtimeMs,
+        file: path.join(dirPath, 'session.v3.jsonl.zstd'),
+      }
+    })
   })
-  if (filter && filter !== 'latest') sessions = sessions.filter((s) => s.id.includes(filter))
+  if (filter && filter !== 'latest') return sessions.filter((s) => s.id.includes(filter)).sort((a, b) => b.mtime - a.mtime)
   return sessions.sort((a, b) => b.mtime - a.mtime)
 }
 

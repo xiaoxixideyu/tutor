@@ -168,8 +168,39 @@ it('正式考试暂停和阅卷失败后恢复同一试卷，跳过已答题并�
   assert.equal((store.read('alpha', 'plan') as Plan).milestones[0].exam_passed, true)
 })
 
-it('正式 practice-gen 会审查已有任务，修复通过才替换；失败时保留原任务', t => {
-  for (const behavior of ['repair', 'fail'] as const) {
+it('大考主观题中途暂停只保存草稿，恢复后可继续输入而不是把半截答案当最终答案', t => {
+  const { root, store, profile, map, run } = fixture(t)
+  const plan = store.read('alpha', 'plan') as Plan
+  const paper: ExamPaper = { milestone: 'm1', questions: [
+    ...Array.from({ length: 3 }, (_, i) => ({ id: `q${i + 1}`, node: 'topic', type: 'objective' as const,
+      question: `已批准第 ${i + 1} 题`, choices: ['2', '3', '4', '5'], answer: 'A', points: 1 })),
+    { id: 'q4', node: 'topic', type: 'subjective', question: '解释 1+1=2', answer: '两个一合起来是二', points: 2 },
+  ] }
+  const input = examContent(paper, profile, map, plan.milestones[0])
+  approveFixture(root, 'alpha', input)
+  const attempts = new ExamAttemptStore(root, 'alpha')
+  attempts.save(newExamAttempt(paper, contentKey(input)))
+
+  // 三道客观题作答后，主观题输入一半再暂停。
+  const paused = run('exam', 'grading-fail', 'A\nA\nA\n第一行\n/exit\n')
+  assert.equal(paused.status, 0, paused.stdout + paused.stderr)
+  assert.match(paused.stdout, /考试暂停/)
+  const saved = attempts.read()!
+  assert.deepEqual(saved.answers, { q1: 'A', q2: 'A', q3: 'A' })
+  assert.equal((saved.answers as Record<string, string | undefined>).q4, undefined, '半截答案不能写进已完成作答')
+  assert.deepEqual(saved.pending, { questionId: 'q4', answer: '第一行' })
+
+  // 恢复后继续输入剩余部分并提交。
+  const resumed = run('exam', 'grading-success', '第二行\n.\n')
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
+  assert.match(resumed.stdout, /继续上次未提交的主观题作答/)
+  const done = attempts.read()!
+  assert.equal((done.answers as Record<string, string>).q4, '第一行\n第二行')
+  assert.equal(done.pending, undefined)
+  assert.equal(done.status, 'completed')
+})
+
+it('正式 practice-gen 会审查已有任务，修复通过才替换；失败时保留原任务', t => {  for (const behavior of ['repair', 'fail'] as const) {
     const { store, run } = fixture(t)
     store.write('alpha', 'practice', { generated_at: '2026-10-08', tasks: [{ id: 'old-task', node: 'topic', title: '旧任务',
       prompt: 'REJECT_CANDIDATE 旧内容', tests: [{ name: 'test', command: 'true' }] }] })

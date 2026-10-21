@@ -180,9 +180,10 @@ export class AssessmentEngine {
 export function buildSummary(nodes: LearnerProfile['nodes']): string {
   const entries = Object.entries(nodes)
   if (entries.length === 0) return '本次未评估任何知识点。'
-  const strong = entries.filter(([, v]) => v.score >= 0.7).map(([k]) => k)
-  const medium = entries.filter(([, v]) => v.score >= 0.4 && v.score < 0.7).map(([k]) => k)
-  const weak = entries.filter(([, v]) => v.score < 0.4).map(([k]) => k)
+  // 摘要分档与掌握度口径保持一致：≥0.8 较强（mastered），≥0.5 一般（learning），其余薄弱。
+  const strong = entries.filter(([, v]) => v.score >= 0.8).map(([k]) => k)
+  const medium = entries.filter(([, v]) => v.score >= 0.5 && v.score < 0.8).map(([k]) => k)
+  const weak = entries.filter(([, v]) => v.score < 0.5).map(([k]) => k)
   const parts: string[] = [`共评估 ${entries.length} 个知识点`]
   if (strong.length > 0) parts.push(`较强：${strong.join('、')}`)
   if (medium.length > 0) parts.push(`一般：${medium.join('、')}`)

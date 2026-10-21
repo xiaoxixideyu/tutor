@@ -50,16 +50,26 @@ export function validateLessonDraft(
   if (expectedNode && value.node !== expectedNode) {
     return { ok: false, error: `备课产物 node 为 "${value.node}"，应为 "${expectedNode}"` }
   }
+  if (!value.title.trim()) return { ok: false, error: '备课产物缺少标题' }
+  if (!value.hook.trim()) return { ok: false, error: '备课产物缺少开场引入' }
+  if (!value.example.trim()) return { ok: false, error: '备课产物缺少核心例子' }
+  if (value.structure.some((point) => !point.trim())) {
+    return { ok: false, error: 'structure 中存在空要点' }
+  }
   if (value.structure.length < 1 || value.structure.length > maxStructure) {
     return { ok: false, error: `structure 需 1-${maxStructure} 个要点，当前 ${value.structure.length}（一次课容量上限）` }
   }
   if (value.practice.length < 1 || value.practice.length > 3) {
     return { ok: false, error: `practice 需 1-3 道课中练习，当前 ${value.practice.length}` }
   }
+  if (value.practice.some((item) => !item.question.trim() || !item.answer.trim())) {
+    return { ok: false, error: '课中练习的题干或参考答案为空' }
+  }
   if (value.quiz.length < 2 || value.quiz.length > 3) {
     return { ok: false, error: `quiz 需 2-3 道单元小测题，当前 ${value.quiz.length}` }
   }
   for (const item of value.quiz) {
+    if (!item.question.trim()) return { ok: false, error: '小测题题干为空' }
     if ((item.choices?.length ?? 0) > 0) {
       if (item.choices!.length !== 4) return { ok: false, error: `小测题"${item.question}"的选项数不是 4` }
       if (!/^[a-d]$/i.test(item.answer.trim())) return { ok: false, error: `小测题"${item.question}"的答案不是 A-D 字母` }

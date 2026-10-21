@@ -33,6 +33,12 @@ describe('gradeObjective', () => {
     assert.equal(gradeObjective(paper.questions[1], '0.5 ').correct, true)
     assert.equal(gradeObjective(paper.questions[1], 'mutex').correct, false)
   })
+
+  it('带标点的选项字母与课堂小测口径一致', () => {
+    assert.equal(gradeObjective(paper.questions[0], 'B.').correct, true)
+    assert.equal(gradeObjective(paper.questions[0], 'b、').correct, true)
+    assert.equal(gradeObjective(paper.questions[0], 'A.').correct, false)
+  })
 })
 
 describe('computeExamResult', () => {

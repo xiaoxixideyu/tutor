@@ -47,6 +47,23 @@ describe('LearnerNotesStore：错因档案', () => {
     store.recordStyle({ at: '2026-09-18', kind: 'confused', detail: '太快' })
     assert.equal(store.read().style.length, 1)
   })
+
+  it('结构畸形的记录被忽略：辅助数据不能阻塞教学', () => {
+    const { store } = makeStore()
+    fs.mkdirSync(path.dirname(store.file), { recursive: true })
+    fs.writeFileSync(store.file, JSON.stringify({
+      errors: { a: { question: 'x' }, b: [{ question: 'Q', your: 'y', answer: 'z', at: '2026-09-18', kind: 'quiz' }] },
+      calibration: [{ at: 'x' }],
+      style: [{ at: 'x', kind: 'unknown', detail: 'd' }],
+    }))
+    const notes = store.read()
+    assert.equal(notes.errors.a, undefined)
+    assert.equal(notes.errors.b.length, 1)
+    assert.equal(notes.calibration.length, 0)
+    assert.equal(notes.style.length, 0)
+    // 读取端不再对畸形结构抛错
+    assert.deepEqual(store.errorsFor(['a', 'b']), [{ node: 'b', question: 'Q', your: 'y' }])
+  })
 })
 
 describe('LearnerNotesStore：自评校准与课堂反馈', () => {

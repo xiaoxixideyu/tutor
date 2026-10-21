@@ -44,6 +44,49 @@ function emptyNotes(): LearnerNotes {
   return { errors: {}, calibration: [], style: [] }
 }
 
+function stringField(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function validErrorNote(value: unknown): value is ErrorNote {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Record<string, unknown>
+  return stringField(item.question) && stringField(item.your) && stringField(item.answer)
+    && stringField(item.at) && ['quiz', 'review', 'interleave', 'exam'].includes(String(item.kind))
+}
+
+function validCalibrationNote(value: unknown): value is CalibrationNote {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Record<string, unknown>
+  return stringField(item.at) && stringField(item.node)
+    && typeof item.predicted === 'number' && Number.isFinite(item.predicted)
+    && typeof item.actual === 'number' && Number.isFinite(item.actual)
+}
+
+function validStyleNote(value: unknown): value is StyleNote {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const item = value as Record<string, unknown>
+  return stringField(item.at) && stringField(item.detail)
+    && (item.kind === 'confused' || item.kind === 'resolved')
+}
+
+function normalizeNotes(value: unknown): LearnerNotes {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyNotes()
+  const raw = value as Record<string, unknown>
+  const errors: Record<string, ErrorNote[]> = {}
+  if (raw.errors && typeof raw.errors === 'object' && !Array.isArray(raw.errors)) {
+    for (const [node, entries] of Object.entries(raw.errors as Record<string, unknown>)) {
+      if (!Array.isArray(entries)) continue
+      errors[node] = entries.filter(validErrorNote).slice(-ERROR_CAP)
+    }
+  }
+  return {
+    errors,
+    calibration: Array.isArray(raw.calibration) ? raw.calibration.filter(validCalibrationNote).slice(-CALIBRATION_CAP) : [],
+    style: Array.isArray(raw.style) ? raw.style.filter(validStyleNote).slice(-STYLE_CAP) : [],
+  }
+}
+
 export class LearnerNotesStore {
   readonly file: string
 
@@ -55,12 +98,7 @@ export class LearnerNotesStore {
   read(): LearnerNotes {
     if (!fs.existsSync(this.file)) return emptyNotes()
     try {
-      const value = JSON.parse(fs.readFileSync(this.file, 'utf8')) as LearnerNotes
-      return {
-        errors: value?.errors && typeof value.errors === 'object' && !Array.isArray(value.errors) ? value.errors : {},
-        calibration: Array.isArray(value?.calibration) ? value.calibration : [],
-        style: Array.isArray(value?.style) ? value.style : [],
-      }
+      return normalizeNotes(JSON.parse(fs.readFileSync(this.file, 'utf8')))
     } catch {
       return emptyNotes()
     }

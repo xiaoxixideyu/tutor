@@ -69,7 +69,9 @@ export interface ReviewResult {
 export type Mastery = Record<string, MasteryEntry>
 
 export const ProfileSchema = z.object({
-  goal: z.string().required(),
+  // 目标必须是非空文本：空 goal 的档案能建档，却会在后续内容审查时报"缺少课程目标"，
+  // 课程会被卡在无法推进的状态。
+  goal: z.string().pattern(/\S/).required(),
   deadline: dateStr,
   daily_minutes: z.number().min(1).max(600),
   background: z.string(),

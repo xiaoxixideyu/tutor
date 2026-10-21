@@ -1,7 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 import { KnowledgeMapSchema, type KnowledgeMap, type Profile } from '../core/schema.ts'
-import { enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
+import { assertKnowledgeMap, enforceSourceVerification, mergeResearchBatch, sourceDomains, topoOrder } from '../core/knowledge.ts'
 import { permanentModelError } from '../runtime/chat.ts'
 import { safeFetch } from '../runtime/url-safety.ts'
 import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../core/research.ts'
@@ -13,7 +13,6 @@ import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
-import { today } from './deps.ts'
 
 interface BatchResult {
   nodes: { id: string; title?: string; summary?: string; verified?: boolean }[]
@@ -179,9 +178,17 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
     map = await generateApproved<KnowledgeMap>(chat, skeletonPrompt(profile), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
-      return trySchema(KnowledgeMapSchema, data.value)
+      const schemaResult = trySchema(KnowledgeMapSchema, data.value)
+      if (!schemaResult.ok) return schemaResult
+      // 骨架必须自洽：依赖与资料指向存在的知识点、依赖不成环。
+      try {
+        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+      return schemaResult
     }, gate, value => mapContent(value, profile), { out: io.out })
-    map.researched_at = today()
+    map.researched_at = deps.today()
     store.write(config.courseId, 'knowledge-map', map)
     io.out(`骨架完成：${map.nodes.length} 个知识点。\n`)
   }
@@ -196,7 +203,15 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
       '修复已有地图，保留仍在课程范围内的节点 id；返回完整地图并修正摘要与资料。',
       JSON.stringify(map), `独立审查发现：${previousReview.issues.join('\n')}`].join('\n'), text => {
       const data = parseJsonBlock(text)
-      return data.ok ? trySchema(KnowledgeMapSchema, data.value) : data
+      if (!data.ok) return data
+      const schemaResult = trySchema(KnowledgeMapSchema, data.value)
+      if (!schemaResult.ok) return schemaResult
+      try {
+        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+      return schemaResult
     }, gate, value => mapContent(value, profile), { out: io.out })
     store.write(config.courseId, 'knowledge-map', map)
   }
@@ -230,7 +245,7 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
           const batch = validated.value as BatchResult
           if (batch.resources?.length) await pruneDeadResources(batch.resources, io.out)
           // 教研补充摘要和资料，课程标题由已有骨架决定；无需为同义改写重跑模型。
-          return { ok: true, value: { ...mergeResearchBatch(current, batch, { preserveTitles: true }), researched_at: today() } }
+          return { ok: true, value: { ...mergeResearchBatch(current, batch, { preserveTitles: true }), researched_at: deps.today() } }
         }, gate, value => mapContent(value, profile), {
           reviewLimitRepair: '本知识点资料太长，独立审查达到预算。请只保留原课程要求的核心事实，summary 缩至 100 字以内，每条 material 缩至 150 字以内，note 一句话；去掉无关的章节编号和冗长方法清单。保留已取得的真实来源链接，不新增搜索，不扩大课程，不改变节点 id。返回原结构的完整 JSON，仍须接受完整内容审查。',
           out: io.out,

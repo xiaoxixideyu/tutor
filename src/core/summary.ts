@@ -2,12 +2,12 @@ import type { CourseStore } from './store.ts'
 import { localDate } from './dates.ts'
 import { dueReviews, type DueReview } from './review.ts'
 import { currentNode } from './lesson.ts'
-import type { KnowledgeMap, Mastery, Plan, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
+import type { KnowledgeMap, LessonState, Mastery, Plan, PracticeTaskFile, Profile, QuestionBank } from './schema.ts'
 import type { MasteryStatusId } from './schema.ts'
 import { ResearchProgressStore } from './research.ts'
 import { QualityStore } from './quality-store.ts'
 import { memoryCard } from './scheduler.ts'
-import { mapContent, bankContent, planContent, type ContentInput } from './content-quality.ts'
+import { mapContent, bankContent, lessonContent, planContent, practiceContent, teachingContent, type ContentInput } from './content-quality.ts'
 
 export interface ProgressNode {
   id: string
@@ -217,6 +217,22 @@ export function courseContentIssues(store: CourseStore, id: string): { kind: str
   const inputs: ContentInput[] = [mapContent(map, profile)]
   if (plan) inputs.push(planContent(plan, profile, map))
   if (bank) for (const node of map.nodes) if (bank[node.id]?.length) inputs.push(bankContent(bank, node.id, profile, map))
+  // 教案与实践任务同样是"会被教/被做"的内容：被拒时也要在看板上能看见。
+  if (store.has(id, 'lesson')) {
+    try {
+      const lesson = store.read(id, 'lesson') as LessonState
+      inputs.push(lessonContent(lesson.draft, profile, map))
+      if (lesson.approved_turn) inputs.push(teachingContent(lesson.approved_turn, lesson.node, profile, map))
+    } catch { /* 断点损坏：交给 audit-content 处理，不在这里报成内容问题 */ }
+  }
+  if (store.has(id, 'practice')) {
+    try {
+      const file = store.read(id, 'practice') as PracticeTaskFile
+      for (const node of new Set(file.tasks.map((task) => task.node))) {
+        inputs.push(practiceContent(file.tasks.filter((task) => task.node === node), node, profile, map))
+      }
+    } catch { /* 实践文件损坏：交给 audit-content 处理 */ }
+  }
   try { return new QualityStore(store.root, id).issuesFor(inputs) } catch { return [] }
 }
 

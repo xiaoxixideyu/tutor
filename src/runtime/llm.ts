@@ -250,6 +250,11 @@ export function openaiTransport(options: LlmTransportOptions): LlmTransport {
     const completeCalls = toolCalls.filter(call => call.id !== '' || call.function.name !== '')
     if (finishReason === 'length') return { finish: 'length', text, ...(usage ? { usage } : {}) }
     if (finishReason === 'tool_calls' || finishReason === 'function_call' || completeCalls.length > 0) {
+      // 网关声明 tool_calls 却没有给出任何有效调用时不能继续循环：
+      // 上层会把它当成"模型要求调用工具"，导致空转直到超时。
+      if (completeCalls.length === 0) {
+        return { finish: 'error', error: { code: 'PI_AI_ERROR', message: '模型返回 tool_calls 但没有可执行的工具调用' }, ...(usage ? { usage } : {}) }
+      }
       return { finish: 'tool_calls', text, toolCalls: completeCalls, ...(usage ? { usage } : {}) }
     }
     return { finish: 'stop', text, ...(usage ? { usage } : {}) }

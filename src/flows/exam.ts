@@ -13,7 +13,6 @@ import { appendMasteryEvent } from '../core/events.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { requirePlanMapConsistency } from './consistency.ts'
-import { today } from './deps.ts'
 
 function buildExamPrompt(milestone: { id: string; title: string; nodes: string[] }, map: KnowledgeMap, profile: Profile): string {
   const nodeLines = milestone.nodes.map((id) => {
@@ -138,7 +137,9 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   let index = 0
   for (const question of paper.questions) {
     index++
-    if (Object.hasOwn(attempt.answers, question.id)) {
+    // pending 是上次暂停时保存的主观题草稿：它不算已完成作答，恢复后继续多行录入。
+    const pending = attempt.pending?.questionId === question.id ? attempt.pending.answer : undefined
+    if (Object.hasOwn(attempt.answers, question.id) && pending === undefined) {
       if (attempt.status !== 'graded') {
         if (question.type === 'objective') gradings.push(gradeObjective(question, attempt.answers[question.id]))
         else subjectiveAnswers.set(question.id, attempt.answers[question.id])
@@ -147,17 +148,17 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
     }
     io.out(`【第 ${index}/${paper.questions.length} 题 · ${question.node} · ${question.points} 分】\n${question.question}\n`)
     for (const [i, choice] of (question.choices ?? []).entries()) io.out(`  ${formatChoice(choice, i)}\n`)
-    // 与 learn 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
-    // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
-    io.out('\n> ')
-    const answer = await io.readLine()
-    if (!answer || !answer.trim() || answer.trim() === '/exit') {
-      io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
-      recordChatTotal(deps.costs, chat, 'exam-paused')
-      io.closeInput()
-      throw new FlowExit(0)
-    }
     if (question.type === 'objective') {
+      // 与 learn 对齐：读取前吐出独立一行 `>` 哨兵，让 Web 端（exam.html）据此退出 busy、
+      // 把选项渲染成可点 chips、放开输入。CLI 端只多一行提示，无害。
+      io.out('\n> ')
+      const answer = await io.readLine()
+      if (!answer || !answer.trim() || answer.trim() === '/exit') {
+        io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        recordChatTotal(deps.costs, chat, 'exam-paused')
+        io.closeInput()
+        throw new FlowExit(0)
+      }
       attempt.answers[question.id] = answer.trim()
       attempts.save(attempt)
       const grading = gradeObjective(question, answer)
@@ -166,16 +167,30 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
       continue
     }
     // 主观题答案（如完整程序）天然多行：持续读取直到出现单独一行 `.`（提交）或 `/exit`（暂停）。
-    // 单行输入者不受影响——立即以 `.` 提交即可；此前"每行覆盖、判分只见最后一行/第一行"是判分重大失真。
-    io.out('（可逐行输入多行；输入单独一行 . 提交，/exit 暂停）\n')
-    const lines: string[] = [answer.trim()]
+    // 暂停只写 pending 草稿，不能写进 answers；否则再次运行会把半截答案当成最终答案。
+    let lines: string[]
+    if (pending !== undefined) {
+      lines = pending.split('\n')
+      io.out('（继续上次未提交的主观题作答；输入单独一行 . 提交，/exit 暂停）\n')
+    } else {
+      io.out('\n> ')
+      const answer = await io.readLine()
+      if (!answer || !answer.trim() || answer.trim() === '/exit') {
+        io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        recordChatTotal(deps.costs, chat, 'exam-paused')
+        io.closeInput()
+        throw new FlowExit(0)
+      }
+      lines = [answer.trim()]
+      io.out('（可逐行输入多行；输入单独一行 . 提交，/exit 暂停）\n')
+    }
     for (;;) {
       io.out('\n> ')
       const extra = await io.readLine()
       if (extra === null || extra.trim() === '/exit') {
-        attempt.answers[question.id] = lines.join('\n')
+        attempt.pending = { questionId: question.id, answer: lines.join('\n') }
         attempts.save(attempt)
-        io.out('考试暂停，试卷与已作答均已保存；重新运行 exam 继续。本次尚未产生成绩。\n')
+        io.out('考试暂停，试卷与主观题草稿均已保存；重新运行 exam 从本题继续。本次尚未产生成绩。\n')
         recordChatTotal(deps.costs, chat, 'exam-paused')
         io.closeInput()
         throw new FlowExit(0)
@@ -185,6 +200,7 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
     }
     const merged = lines.join('\n')
     attempt.answers[question.id] = merged
+    delete attempt.pending
     attempts.save(attempt)
     subjectiveAnswers.set(question.id, merged)
     io.out('已记录，稍后统一判分。\n')
@@ -207,7 +223,7 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   await chat.flush()
 
   attempt.gradings = gradings
-  const { score, passed, date, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, today())
+  const { score, passed, date, after } = applyExamAttempt(attempt, attempts, store, config.courseId, map, deps.today())
   // 事件流与错因档案：按节点记录成绩、客观题错答留档；辅助数据失败不影响成绩展示（事件按 key 去重）。
   try {
     const notes = new LearnerNotesStore(store.root, config.courseId)

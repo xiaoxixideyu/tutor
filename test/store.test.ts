@@ -124,4 +124,35 @@ describe('CourseStore', () => {
     assert.match(fs.readFileSync(path.join(directory, 'plan.yaml'), 'utf8'), /a/)
     assert.match(fs.readFileSync(path.join(directory, 'mastery.yaml'), 'utf8'), /mastered/)
   })
+
+  it('写 plan 时省略 current 会删除该键，不会落成 current: null', () => {
+    const store = makeStore()
+    store.create('golang', profile)
+    store.write('golang', 'plan', { path: ['a'], scope: ['a'], milestones: [], current: 'a' })
+    const { current: _current, ...rest } = { path: ['a'], scope: ['a'], milestones: [], current: 'a' } as const
+    store.write('golang', 'plan', rest)
+    const text = fs.readFileSync(path.join(store.root, 'golang', 'plan.yaml'), 'utf8')
+    assert.doesNotMatch(text, /current/)
+    const read = store.read('golang', 'plan') as Record<string, unknown>
+    assert.equal('current' in read, false)
+  })
+
+  it('知识地图写入需要自洽：空地图、重复 id、坏依赖、坏资料都被拒绝', () => {
+    const store = makeStore()
+    store.create('golang', profile)
+    assert.throws(() => store.write('golang', 'knowledge-map', { verified: false, nodes: [], edges: [] }), /校验失败/)
+    assert.throws(() => store.write('golang', 'knowledge-map', {
+      verified: false, nodes: [{ id: 'a', title: 'A' }, { id: 'a', title: 'A2' }], edges: [],
+    }), /校验失败/)
+    assert.throws(() => store.write('golang', 'knowledge-map', {
+      verified: false, nodes: [{ id: 'a', title: 'A' }], edges: [['b', 'a']],
+    }), /校验失败/)
+    assert.throws(() => store.write('golang', 'knowledge-map', {
+      verified: false, nodes: [{ id: 'a', title: 'A' }], edges: [], resources: [{ node: 'ghost', title: 'T' }],
+    }), /校验失败/)
+    assert.throws(() => store.write('golang', 'knowledge-map', {
+      verified: false, nodes: [{ id: 'a', title: '' }], edges: [],
+    }), /校验失败/)
+    store.write('golang', 'knowledge-map', { verified: false, nodes: [{ id: 'a', title: 'A' }], edges: [] })
+  })
 })

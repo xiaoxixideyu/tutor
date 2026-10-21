@@ -24,7 +24,9 @@ function requirePracticeNode(map: KnowledgeMap, node: string): string {
 
 export function selectPracticeNode(plan: Plan, map: KnowledgeMap, mastery?: Mastery, requested?: string, previous?: PracticeTaskState): string | null {
   if (requested) return requirePracticeNode(map, requested)
-  if (previous && map.nodes.some((node) => node.id === previous.node)) return previous.node
+  // 只续做未完成的任务；已完成任务仍保留 done 状态供再次打开同一任务，
+  // 但默认入口应跟随计划指针去下一个知识点。
+  if (previous && !previous.done && map.nodes.some((node) => node.id === previous.node)) return previous.node
   const node = currentNode(plan, mastery, map) ?? courseNodeOrder(plan, map)[0]
   return node ? requirePracticeNode(map, node) : null
 }
@@ -70,7 +72,11 @@ export function validatePracticeTasks(file: unknown, expectedNode?: string): { o
     if ((task.starter_files ?? []).some(file => !safeStarterPath(file.path))) return { ok: false, error: `任务 "${task.id}" 的初始文件必须使用任务目录内的相对路径` }
     if (new Set(task.starter_files?.map(file => file.path)).size !== (task.starter_files?.length ?? 0)) return { ok: false, error: `任务 "${task.id}" 的初始文件路径不能重复` }
     for (const test of task.tests) {
+      if (test.name.trim() === '') return { ok: false, error: `任务 "${task.id}" 存在空测试名` }
       if (test.command.trim() === '') return { ok: false, error: `任务 "${task.id}" 存在空测试命令` }
+      if ((test.expect_output_contains ?? []).some(needle => typeof needle !== 'string' || needle.trim() === '')) {
+        return { ok: false, error: `任务 "${task.id}" 的 expect_output_contains 不能包含空字符串` }
+      }
     }
   }
   return { ok: true, value }
@@ -85,7 +91,9 @@ export interface TestResult {
 export function judgeTest(result: TestResult, test: PracticeTest): boolean {
   if (result.timedOut) return false
   if (result.exitCode !== (test.expect_exit ?? 0)) return false
-  return (test.expect_output_contains ?? []).every((needle) => result.output.includes(needle))
+  const needles = test.expect_output_contains ?? []
+  if (needles.some(needle => needle.trim() === '')) return false
+  return needles.every((needle) => result.output.includes(needle))
 }
 
 export interface PracticeJudgeItem {

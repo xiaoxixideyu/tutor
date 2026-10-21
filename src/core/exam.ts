@@ -1,6 +1,6 @@
 import type { Mastery, Plan } from './schema.ts'
 import { updateMasteryForNode } from './assessment.ts'
-import { matchesRuleAnswer, ruleAnswerIssue } from './rule-grading.ts'
+import { matchesRuleAnswer, normalizeRuleText, ruleAnswerIssue } from './rule-grading.ts'
 import z from '@deepseek-ai/schemastery'
 import type Schema from '@deepseek-ai/schemastery'
 
@@ -71,7 +71,8 @@ export function paperTotalPoints(paper: ExamPaper): number {
 export function gradeObjective(q: ExamQuestion, raw: string): ExamGrading {
   if ((q.choices?.length ?? 0) > 0) {
     const letter = q.answer.trim().toLowerCase()
-    const normalized = raw.trim().toLowerCase()
+    // 与课堂小测用同一套归一化："B"、"B."、"b、" 都算同一个字母。
+    const normalized = normalizeRuleText(raw)
     if (/^[a-d]$/.test(normalized)) {
       const correct = normalized === letter
       return { questionId: q.id, correct, score: correct ? 1 : 0 }

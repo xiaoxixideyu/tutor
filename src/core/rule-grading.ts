@@ -15,13 +15,15 @@ export function ruleAnswerIssue(item: { answer: string; choices?: string[] }): s
 }
 
 export function normalizeRuleText(value: string): string {
-  return value.trim().toLowerCase().replace(/[\s，。,.;；:：!！?？"'“”‘’（）()[\]【】]+/g, '')
+  // 统一去掉中英文标点与空白，使 "B."、"B、"、"b．" 都被归一为字母本身。
+  return value.trim().toLowerCase().replace(/[\s，。,.;；:：!！?？"'“”‘’（）()[\]【】、．]+/g, '')
 }
 
 export function matchesRuleAnswer(raw: string, candidates: string[]): boolean {
   if (!raw.trim()) return false
   const number = numericAnswer(raw)
   return candidates.some(candidate => {
+    if (!candidate || !candidate.trim()) return false
     const expected = numericAnswer(candidate)
     // 数值必须在移除标点之前判断，否则 0.5 会和 05 错误地变成同一答案。
     if (expected !== undefined) return number !== undefined && number === expected

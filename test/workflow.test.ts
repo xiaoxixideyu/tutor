@@ -66,3 +66,14 @@ it('已掌握及被重规划跳过的知识点仍可生成、选择和重复实�
   assert.throws(() => selectPracticeNode(plan, map, initial, 'other-course-node'), /知识地图/)
   assert.throws(() => practiceGenerationNodes(plan, map, empty, 'other-course-node'), /知识地图/)
 })
+
+it('默认实践入口跟随计划指针：已完成的旧任务不再粘住流程', () => {
+  const plan = assemblePlan(['advanced'], [], ['basics', 'advanced'])
+  const mastery = { basics: { status: 'mastered' as const }, advanced: { status: 'learning' as const } }
+  const donePrevious = { node: 'basics', task_id: 'basics-task', updated_at: '2026-10-08', done_tests: ['t'], done: true, attempts: 1 }
+  // 已完成的旧任务：默认入口应去计划指针指向的下一个知识点。
+  assert.equal(selectPracticeNode(plan, map, mastery, undefined, donePrevious), 'advanced')
+  // 未完成的任务仍然续做原节点。
+  const pendingPrevious = { ...donePrevious, done: false }
+  assert.equal(selectPracticeNode(plan, map, mastery, undefined, pendingPrevious), 'basics')
+})

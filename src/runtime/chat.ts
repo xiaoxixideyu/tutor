@@ -410,6 +410,11 @@ class Chat implements AgentChat {
         }
         if (result.finish === 'tool_calls') {
           const calls = result.toolCalls ?? []
+          if (calls.length === 0) {
+            // 空工具调用会让回合反复空转；直接按错误结束，交给上层重试或报错。
+            this.log.appendEvent('turn/end', { reason: { kind: 'error', error: { code: 'PI_AI_ERROR', message: '模型返回空的工具调用' } } })
+            return { text, error: 'PI_AI_ERROR: 模型返回空的工具调用' }
+          }
           const assistant: ApiMessage = { role: 'assistant', content: result.text || null,
             tool_calls: calls.map(call => ({ id: call.id || `call-${calls.indexOf(call)}`, type: 'function' as const,
               function: { name: call.function.name, arguments: call.function.arguments } })) }

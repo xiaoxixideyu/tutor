@@ -15,7 +15,6 @@ import { createContentGate, generateApproved, generateApprovedTeaching, type Con
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 import { requirePlanMapConsistency } from './consistency.ts'
-import { today } from './deps.ts'
 
 async function publishTeaching(deps: FlowDeps, gate: ContentGate, chat: AgentChat, turn: ApprovedTeachingTurn, node: string, profile: Profile, map: KnowledgeMap, text: string): Promise<void> {
   const seq = chat.lastReplySeq()
@@ -29,10 +28,16 @@ async function publishTeaching(deps: FlowDeps, gate: ContentGate, chat: AgentCha
 async function runWarmup(deps: FlowDeps, courseId: string, node: string, map: KnowledgeMap, mastery: Mastery | undefined): Promise<WarmupRecord[]> {
   const { store, io } = deps
   if (!mastery || !store.has(courseId, 'question-bank')) return []
-  const bank = store.read(courseId, 'question-bank') as QuestionBank
+  let bank: QuestionBank
+  try {
+    bank = store.read(courseId, 'question-bank') as QuestionBank
+  } catch {
+    // 热身是可选步骤：题库损坏/未通过 schema 时不应阻塞开课。
+    return []
+  }
   let picks: ReturnType<typeof selectWarmupQuestions>
   try {
-    picks = selectWarmupQuestions(map, mastery, bank, node, today())
+    picks = selectWarmupQuestions(map, mastery, bank, node, deps.today())
     for (const pick of picks) requireReviewedBank(store, courseId, bank, pick.node)
   } catch {
     return []
@@ -60,8 +65,8 @@ async function runWarmup(deps: FlowDeps, courseId: string, node: string, map: Kn
   try {
     for (const [index, result] of results.entries()) {
       appendMasteryEvent(store.root, courseId, {
-        key: `warmup:${courseId}:${node}:${today()}:${picks[index].question.id}`,
-        at: today(), node: result.node, kind: 'warmup', passed: result.correct,
+        key: `warmup:${courseId}:${node}:${deps.today()}:${picks[index].question.id}`,
+        at: deps.today(), node: result.node, kind: 'warmup', passed: result.correct,
       })
     }
   } catch { /* 辅助数据写入失败忽略 */ }
@@ -88,7 +93,7 @@ async function startFreshLesson(
     const prepChat = await deps.createChat()
     io.out(`正在备课：${node}…\n`)
     const cap = lessonStructureCap(profile.daily_minutes)
-    draft = await withChatUsage(deps.costs, prepChat, 'prep', () => generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery, today: today(), ...prepNotes }), (text) => {
+    draft = await withChatUsage(deps.costs, prepChat, 'prep', () => generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery, today: deps.today(), ...prepNotes }), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       return validateLessonDraft(data.value, node, cap)
@@ -97,13 +102,13 @@ async function startFreshLesson(
     printSessionTotal(prepChat, deps)
     // 没有可恢复的已批准讲授时，先保存新教案；被拒旧教案不能阻止落盘。
     // 可用的已批准课堂断点仍由后续新讲授替换，不能在尝试恢复时提前覆盖。
-    if (!previousTurn) store.write(config.courseId, 'lesson', { node, started_at: today(), draft })
+    if (!previousTurn) store.write(config.courseId, 'lesson', { node, started_at: deps.today(), draft })
     io.out('备课完成并通过审查，准备开课。\n')
   }
 
   // 新开课先做前置回忆热身（续讲/恢复不重复做），结果与记忆状态一起注入导师首消息。
   const warmup = previousTurn ? [] : await runWarmup(deps, config.courseId, node, map, mastery)
-  const memory = memoryNotes(map, mastery, node, today())
+  const memory = memoryNotes(map, mastery, node, deps.today())
   const teachChat = await deps.createChat()
   const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources,
     ...(memory.length > 0 ? { memory } : {}), ...(warmup.length > 0 ? { warmup } : {}) })
@@ -113,7 +118,7 @@ async function startFreshLesson(
   store.write(config.courseId, 'lesson', {
     session_id: teachChat.sessionId,
     node,
-    started_at: today(),
+    started_at: deps.today(),
     draft,
     approved_turn: turn,
   })
@@ -142,7 +147,7 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
   const notes = new LearnerNotesStore(store.root, config.courseId)
   // 观察记录与事件流是辅助数据：写失败不阻塞课堂（YAML 状态才是事实来源）。
   const bestEffort = (work: () => void) => { try { work() } catch { /* 辅助数据写入失败忽略 */ } }
-  const due = mastery ? dueReviews(mastery, today()) : []
+  const due = mastery ? dueReviews(mastery, deps.today()) : []
   if (due.length > 0) {
     const listed = due.map((d) => (d.overdue_days > 0 ? `${d.node}（逾期 ${d.overdue_days} 天）` : d.node)).join('、')
     const severe = due.filter((d) => d.overdue_days >= 7).length
@@ -162,37 +167,48 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
   let resumed = false
   const hadLesson = store.has(config.courseId, 'lesson')
   if (hadLesson) {
-    const lesson = store.read(config.courseId, 'lesson') as LessonState
-    const draftValid = validateLessonDraft(lesson.draft, lesson.node, lessonStructureCap(profile.daily_minutes)).ok
-    if (draftValid && lesson.node === node) {
-      const admitted = await gate.review(lessonContent(lesson.draft, profile, map))
-      if (admitted.approved) {
-        draft = lesson.draft
-        if (lesson.approved_turn && lesson.session_id && (await gate.review(teachingContent(lesson.approved_turn, node, profile, map))).approved) {
-          approvedTurn = lesson.approved_turn
-          const adopted = await deps.createChat({ resumeSessionId: lesson.session_id })
-          const replay = adopted ? replayApprovedReply(adopted.lastReply(), approvedTurn) : null
-          if (adopted && replay !== null) {
-            chat = adopted; resumed = true
-            await publishTeaching(deps, gate, chat, approvedTurn, node, profile, map, `从上次断点继续本课（${node}）。\n\n${replay}`)
-          } else if (adopted) {
-            const pending = gate.store.unfinishedTeaching(node, adopted.lastReply(), approvedTurn.reply)
-            if (pending && (await gate.review(teachingContent(pending, node, profile, map))).approved) {
-              chat = adopted; resumed = true; approvedTurn = pending
-              store.write(config.courseId, 'lesson', { ...lesson, approved_turn: pending })
-              await publishTeaching(deps, gate, chat, pending, node, profile, map, `上次回复的内容核对已完成，继续本课（${node}）。\n\n${pending.reply}`)
+    // 断点文件损坏时不能整门课卡死：归档后按新课继续。
+    let lesson: LessonState | undefined
+    try {
+      lesson = store.read(config.courseId, 'lesson') as LessonState
+    } catch (error) {
+      io.err(`tutor: 课堂断点无法读取（${error instanceof Error ? error.message : String(error)}），已归档并按新课开始。\n`)
+      try {
+        store.archive(config.courseId, ['lesson'], { label: 'broken-lesson', removeKinds: ['lesson'] })
+      } catch { try { store.remove(config.courseId, 'lesson') } catch { /* 归档失败也继续开新课 */ } }
+    }
+    if (lesson) {
+      const draftValid = validateLessonDraft(lesson.draft, lesson.node, lessonStructureCap(profile.daily_minutes)).ok
+      if (draftValid && lesson.node === node) {
+        const admitted = await gate.review(lessonContent(lesson.draft, profile, map))
+        if (admitted.approved) {
+          draft = lesson.draft
+          if (lesson.approved_turn && lesson.session_id && (await gate.review(teachingContent(lesson.approved_turn, node, profile, map))).approved) {
+            approvedTurn = lesson.approved_turn
+            const adopted = await deps.createChat({ resumeSessionId: lesson.session_id })
+            const replay = adopted ? replayApprovedReply(adopted.lastReply(), approvedTurn) : null
+            if (adopted && replay !== null) {
+              chat = adopted; resumed = true
+              await publishTeaching(deps, gate, chat, approvedTurn, node, profile, map, `从上次断点继续本课（${node}）。\n\n${replay}`)
+            } else if (adopted) {
+              const pending = gate.store.unfinishedTeaching(node, adopted.lastReply(), approvedTurn.reply)
+              if (pending && (await gate.review(teachingContent(pending, node, profile, map))).approved) {
+                chat = adopted; resumed = true; approvedTurn = pending
+                store.write(config.courseId, 'lesson', { ...lesson, approved_turn: pending })
+                await publishTeaching(deps, gate, chat, pending, node, profile, map, `上次回复的内容核对已完成，继续本课（${node}）。\n\n${pending.reply}`)
+              }
             }
           }
         }
       }
-    }
-    if (!resumed) {
-      io.out('正在从可用的已审查内容恢复课堂…\n')
+      if (!resumed) {
+        io.out('正在从可用的已审查内容恢复课堂…\n')
+      }
     }
   }
-  // 前置新鲜度软门：只拦全新开课；可输入 c 越权继续（随后仍会做回忆热身）。
-  if (!resumed && !hadLesson) {
-    const stale = mastery ? stalePrerequisites(map, mastery, node, today()) : []
+  // 前置新鲜度软门：只有确实恢复到原课堂时才跳过；旧断点（其他节点/已失效）同样要提示。
+  if (!resumed) {
+    const stale = mastery ? stalePrerequisites(map, mastery, node, deps.today()) : []
     if (stale.length > 0) {
       const described = stale.map((item) => {
         const detail = item.retention !== undefined
@@ -279,17 +295,17 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
         if (!ok) wrongItems.push({ question: item.question, your: answer.trim(), answer: correctAnswer })
       }
       const score = Math.round((correct / draft.quiz.length) * 100) / 100
-      let updatedMastery = updateMasteryForNode(mastery, node, score, today())
+      let updatedMastery = updateMasteryForNode(mastery, node, score, deps.today())
       store.write(config.courseId, 'mastery', updatedMastery)
       bestEffort(() => {
-        notes.recordErrors(node, wrongItems, today(), 'quiz')
-        if (predicted !== undefined) notes.recordCalibration({ at: today(), node, predicted, actual: score })
-        appendMasteryEvent(store.root, config.courseId, { key: `quiz:${chat.sessionId}`, at: today(), node, kind: 'quiz', score, passed: score >= 0.5 })
+        notes.recordErrors(node, wrongItems, deps.today(), 'quiz')
+        if (predicted !== undefined) notes.recordCalibration({ at: deps.today(), node, predicted, actual: score })
+        appendMasteryEvent(store.root, config.courseId, { key: `quiz:${chat.sessionId}`, at: deps.today(), node, kind: 'quiz', score, passed: score >= 0.5 })
       })
 
       // 旧知识回访（交错练习）：只取已掌握节点的一题；失败按复习对待（衰减并可能回退指针）。
       const bank = store.has(config.courseId, 'question-bank') ? (store.read(config.courseId, 'question-bank') as QuestionBank) : {}
-      const interleave = selectInterleaveQuestion(map, updatedMastery, bank, node, today(), warmupQuestionIds)
+      const interleave = selectInterleaveQuestion(map, updatedMastery, bank, node, deps.today(), warmupQuestionIds)
       let interleaveNote = ''
       if (interleave) {
         try {
@@ -304,20 +320,27 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
             const ok = judgeQuizAnswer(interleave.question, answer)
             const correctAnswer = (interleave.question.choices?.length ?? 0) > 0 ? interleave.question.answer.toUpperCase() : interleave.question.answer
             io.out(ok ? '✓ 正确\n' : `✗ 错误（正确答案：${correctAnswer}）\n`)
-            updatedMastery = applyReviewResult(updatedMastery, interleave.node, ok ? 1 : 0, today())
+            updatedMastery = applyReviewResult(updatedMastery, interleave.node, ok ? 1 : 0, deps.today())
             store.write(config.courseId, 'mastery', updatedMastery)
             const entry = updatedMastery[interleave.node]
             interleaveNote = `旧知识回访：${interleave.node} → ${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，复习到期 ${entry.review_due}` : ''}\n`
             bestEffort(() => {
-              if (!ok) notes.recordErrors(interleave.node, [{ question: interleave.question.question, your: answer.trim(), answer: correctAnswer }], today(), 'interleave')
-              appendMasteryEvent(store.root, config.courseId, { key: `interleave:${chat.sessionId}`, at: today(), node: interleave.node, kind: 'interleave', score: ok ? 1 : 0, passed: ok })
+              if (!ok) notes.recordErrors(interleave.node, [{ question: interleave.question.question, your: answer.trim(), answer: correctAnswer }], deps.today(), 'interleave')
+              appendMasteryEvent(store.root, config.courseId, { key: `interleave:${chat.sessionId}`, at: deps.today(), node: interleave.node, kind: 'interleave', score: ok ? 1 : 0, passed: ok })
             })
           }
         } catch { /* 题库未过审或读取失败：跳过回访，不影响小测结算 */ }
       }
 
       const pointer = currentNode(plan, updatedMastery, map)
-      const updatedPlan: Plan = pointer ? { ...plan, current: pointer } : { ...plan, current: undefined }
+      // 课程完成时不能写 current: undefined：YAML 层的旧实现会把它落成 null，
+      // 而 planMapMismatch 会把 null 当成一个不存在的节点。直接省略字段。
+      const updatedPlan: Plan = pointer
+        ? { ...plan, current: pointer }
+        : (() => {
+            const { current: _current, ...rest } = plan
+            return rest
+          })()
       store.write(config.courseId, 'plan', updatedPlan)
       store.remove(config.courseId, 'lesson')
       const entry = updatedMastery[node]
@@ -336,13 +359,13 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
       throw new FlowExit(0)
     }
     const signal = detectStyleSignal(command)
-    if (signal) bestEffort(() => notes.recordStyle({ at: today(), kind: signal.kind, detail: signal.detail }))
+    if (signal) bestEffort(() => notes.recordStyle({ at: deps.today(), kind: signal.kind, detail: signal.detail }))
     if (!approvedTurn) throw new Error('tutor: 缺少已通过审查的讲授断点')
     const previousReply: string = approvedTurn.reply
     const nextTurn: ApprovedTeachingTurn = await withChatUsage<ApprovedTeachingTurn>(deps.costs, chat, 'teach',
       () => generateApprovedTeaching(chat, command, gate, { node, profile, map, learnerMessage: command, previousReply }))
     approvedTurn = nextTurn
-    store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: today(), draft, approved_turn: approvedTurn })
+    store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: deps.today(), draft, approved_turn: approvedTurn })
     approvedTurns.push(approvedTurn)
     await publishTeaching(deps, gate, chat, approvedTurn, node, profile, map, `\n${approvedTurn.reply}`)
     io.out(`\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)

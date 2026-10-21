@@ -13,7 +13,7 @@ import { searchSettingsFromEnv } from '../runtime/tools.ts'
 
 export const FLOW_PROTOCOL_VERSION = 1
 const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice', 'audit-content'])
-const STOP_LINES: Record<string, string> = { learn: '/exit', exam: '', practice: 'q' }
+const STOP_LINES: Record<string, string> = { learn: '/exit', exam: '/exit', practice: 'q' }
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }
 
 export interface FlowStart {
@@ -108,7 +108,10 @@ export function createTutorServer(options: TutorServerOptions) {
     io,
     // 模型与搜索设置均按回合热更新：进行中的流程读取最新保存的配置（practice 零模型，不接渠道）。
     {
-      root, env,
+      root,
+      // 流程必须读写与宿主同一份课程状态，并使用同一份"今天"。
+      env: { ...env, TUTOR_COURSES_ROOT: store.root },
+      today,
       ...(input.kind === 'practice' ? {} : {
         resolveModel: () => modelSettingsFromEnv(models.environment()),
         resolveSearch: () => { try { return searchSettingsFromEnv(models.environment()) } catch { return undefined } },

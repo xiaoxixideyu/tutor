@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { ApiMessage } from './llm.ts'
 
 // 按 zstd 帧头/块头计算帧边界。不能搜索魔数：压缩数据内部可能偶然出现同样的 4 字节，
@@ -64,7 +64,15 @@ export interface SessionEvent {
   at: string
 }
 
+// 工作区目录名：旧实现只把 "/" 换成 "-"，/a-b 与 /a/b 会落到同一目录，
+// 不同工作区的会话可能被互相读到。新目录名附带工作区摘要，旧目录名仍可读取（历史会话）。
 export function encodeWorkspace(workspace: string): string {
+  const flat = workspace.replaceAll('/', '-')
+  const digest = createHash('sha256').update(workspace).digest('hex').slice(0, 12)
+  return `-${flat}--${digest}`
+}
+
+export function legacyEncodeWorkspace(workspace: string): string {
   return `-${workspace.replaceAll('/', '-')}--`
 }
 
@@ -85,9 +93,9 @@ export class SessionLog {
   readonly events: SessionEvent[] = []
   messages: ApiMessage[] = []
 
-  constructor(sessionsRoot: string, workspace: string, id?: string) {
+  constructor(sessionsRoot: string, workspace: string, id?: string, directoryName: string = encodeWorkspace(workspace)) {
     this.id = id ?? `session-${randomUUID()}`
-    this.directory = path.join(sessionsRoot, encodeWorkspace(workspace), this.id)
+    this.directory = path.join(sessionsRoot, directoryName, this.id)
     this.eventFile = path.join(this.directory, 'session.v3.jsonl.zstd')
   }
 
@@ -106,11 +114,20 @@ export class SessionLog {
   }
 
   // 恢复已有会话：事件与消息任一缺失都视为不可恢复（返回 null）。
+  // 先按新目录名查找，找不到再回退到旧目录名（历史会话仍可续讲）。
   static load(sessionsRoot: string, workspace: string, id: string): SessionLog | null {
     // 会话 id 来自课程 YAML，必须限制为单段目录名，防止被篡改成路径穿越。
     if (!/^session-[A-Za-z0-9._-]+$/.test(id)) return null
+    for (const directoryName of [encodeWorkspace(workspace), legacyEncodeWorkspace(workspace)]) {
+      const log = SessionLog.loadFrom(sessionsRoot, workspace, id, directoryName)
+      if (log) return log
+    }
+    return null
+  }
+
+  private static loadFrom(sessionsRoot: string, workspace: string, id: string, directoryName: string): SessionLog | null {
     try {
-      const log = new SessionLog(sessionsRoot, workspace, id)
+      const log = new SessionLog(sessionsRoot, workspace, id, directoryName)
       const eventsText = decodeZstdFrames(fs.readFileSync(log.eventFile))
       for (const line of eventsText.split('\n')) {
         if (!line.trim()) continue

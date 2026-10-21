@@ -89,6 +89,15 @@ describe('validateLessonDraft', () => {
     void example
     assert.equal(validateLessonDraft(noExample).ok, false)
   })
+
+  it('空标题/开场/例子/空要点/空题干被拒绝', () => {
+    assert.equal(validateLessonDraft({ ...draft, title: '  ' }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, hook: '' }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, example: ' ' }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, structure: ['要点', ''] }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, practice: [{ question: '', answer: 'a' }] }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, quiz: [{ question: ' ', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'A' }, draft.quiz[1]] }).ok, false)
+  })
 })
 
 describe('lessonStructureCap', () => {
