@@ -10,9 +10,9 @@
   let railTimer = null
 
   const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
-  // 画布内可直接承载的流程；其余情况回落到独立页面，避免死胡同。
+  // 画布内可直接承载的流程；其余情况回落到单壳的对应路由，避免死胡同。
   const LEGACY = {
-    'practice-gen': (courseId, node) => `/practice.html?course=${encodeURIComponent(courseId)}${node ? `&node=${encodeURIComponent(node)}` : ''}`,
+    'practice-gen': (courseId, node) => `#/course/${encodeURIComponent(courseId)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`,
   }
 
   function navigate(href) {
@@ -25,8 +25,15 @@
     const parts = hash.split('/').filter(Boolean).map((part) => decodeURIComponent(part))
     if (parts.length === 0) return { view: 'home' }
     if (parts[0] === 'settings') return { view: 'settings' }
+    if (parts[0] === 'new') return { view: 'new' }
     if (parts[0] === 'course' && parts[1]) {
-      return { view: parts[2] ?? 'detail', courseId: parts[1], milestone: parts[3], node: parts[4] }
+      return {
+        view: parts[2] ?? 'detail',
+        courseId: parts[1],
+        milestone: parts[3],
+        node: parts[4],
+        flowId: new URLSearchParams(location.search).get('flowId'),
+      }
     }
     return { view: 'home' }
   }
@@ -161,11 +168,17 @@
     }
 
     if (['assess', 'plan', 'research', 'audit-content', 'new'].includes(route.view)) {
-      titleEl.textContent = `${courseId ?? '新课程'} · 向导`
+      const isNew = route.view === 'new'
+      titleEl.textContent = isNew ? '新课程向导' : `${courseId} · 向导`
       current = TutorViews.wizard({
         root: canvas,
-        courseId,
-        search: `#/course/${encodeURIComponent(courseId ?? '')}/${route.view}${route.node ? `/${encodeURIComponent(route.node)}` : ''}`,
+        courseId: isNew ? undefined : courseId,
+        route: {
+          course: isNew ? undefined : courseId,
+          resume: route.view,
+          node: route.node,
+          flowId: route.flowId,
+        },
         navigate,
         lessonHref: (id) => `#/course/${encodeURIComponent(id)}/learn`,
         onStatus: ({ text, busy }) => setStatus(text, busy),
@@ -244,7 +257,7 @@
       const items = [
         { title: '课程列表', hint: '工作区首页', run: () => navigate('#/') },
         { title: '模型设置', hint: '渠道与教研搜索', run: () => setDrawer(true) },
-        { title: '开设新课程', hint: '需求访谈', run: () => { location.href = '/wizard.html' } },
+        { title: '开设新课程', hint: '需求访谈', run: () => navigate('#/new') },
       ]
       for (const course of railCourseList) {
         const id = course.id

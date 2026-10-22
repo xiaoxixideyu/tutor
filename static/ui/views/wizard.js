@@ -427,7 +427,9 @@
 
     $send.addEventListener('click', send)
     $input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) send() })
-    $gotoBtn.addEventListener('click', () => navigate(options.lessonHref ? options.lessonHref(courseName) : `/lesson.html?course=${encodeURIComponent(courseName)}`))
+    $gotoBtn.addEventListener('click', () => navigate(options.lessonHref
+      ? options.lessonHref(courseName)
+      : `#/course/${encodeURIComponent(courseName)}/learn`))
     $researchBtn.addEventListener('click', () => startFlow('research'))
     $startBtn.addEventListener('click', async () => {
       const id = $courseInput.value.trim()
@@ -464,10 +466,15 @@
       startFlow(kind, nodeId)
     }
 
-    const entryParams = new URLSearchParams(options.search ?? location.search)
-    const ready = flowClient.state(entryParams.get('flowId')).then((state) => {
+    // 入口来自单壳的 hash 路由（{ course, resume, node, flowId }），不是查询串。
+    const entry = options.route ?? {}
+    const entryCourse = entry.course ?? null
+    const entryResume = entry.resume ?? null
+    const entryNode = entry.resume === 'research' ? (entry.node ?? '') : ''
+    const entryFlowId = entry.flowId ?? null
+    const ready = flowClient.state(entryFlowId).then((state) => {
       if (!state) return
-      const requestedCourse = entryParams.get('course')
+      const requestedCourse = entryCourse
       const available = state.flow ?? (state.flows ?? []).find((flow) =>
         WIZARD_KINDS.includes(flow.kind) && (!requestedCourse || flow.courseId === requestedCourse))
       if (available) {
@@ -485,15 +492,15 @@
         startSse()
         return
       }
-      const course = entryParams.get('course')
-      const resume = entryParams.get('resume')
-      const nodeId = resume === 'research' ? entryParams.get('node') || '' : ''
+      const course = entryCourse
+      const resume = entryResume
+      const nodeId = entryNode
       if (nodeId && !/^[a-z0-9][a-z0-9-]*$/.test(nodeId)) {
         $err.textContent = '知识点参数非法'
         return
       }
       if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && WIZARD_KINDS.includes(resume)) {
-        if (entryParams.has('flowId')) {
+        if (entryFlowId) {
           currentKind = resume; courseName = course; showConsole()
           $footer.style.display = 'none'
           $log.appendChild(TutorDom.el('<div class="sysline">流程回放已过期。可从课程已保存的进度继续。</div>'))

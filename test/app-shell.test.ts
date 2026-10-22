@@ -77,7 +77,7 @@ function startServer(): Promise<{ port: number; close: () => Promise<void> }> {
         </script></body></html>`)
       return
     }
-    const file = path.join(root, 'static', url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, ''))
+    const file = path.join(root, 'static', url.pathname === '/' ? 'app.html' : url.pathname.replace(/^\/+/, ''))
     if (!file.startsWith(path.join(root, 'static')) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404); res.end('404'); return
     }

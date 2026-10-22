@@ -16,6 +16,41 @@ const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', '
 const STOP_LINES: Record<string, string> = { learn: '/exit', exam: '/exit', practice: 'q' }
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }
 
+// 旧版单页（/index.html、/lesson.html…）已合并进单壳 /app.html。
+// 旧链接按原语义重定向到对应 hash 路由，避免书签、文档和外部链接直接 404。
+function legacyRedirect(url: URL): string | undefined {
+  const path = url.pathname
+  const course = url.searchParams.get('course')
+  const node = url.searchParams.get('node')
+  const milestone = url.searchParams.get('milestone')
+  const resume = url.searchParams.get('resume')
+  const hash = (route: string) => `/app.html#${route}`
+  switch (path) {
+    case '/index.html':
+      return hash(course ? `/course/${encodeURIComponent(course)}` : '/')
+    case '/lesson.html':
+      return course ? hash(`/course/${encodeURIComponent(course)}/learn`) : hash('/')
+    case '/exam.html':
+      return course
+        ? hash(`/course/${encodeURIComponent(course)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`)
+        : hash('/')
+    case '/practice.html':
+      return course
+        ? hash(`/course/${encodeURIComponent(course)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`)
+        : hash('/')
+    case '/review.html':
+      return course ? hash(`/course/${encodeURIComponent(course)}/review`) : hash('/')
+    case '/wizard.html':
+      return course && resume
+        ? hash(`/course/${encodeURIComponent(course)}/${encodeURIComponent(resume)}${node ? `/${encodeURIComponent(node)}` : ''}`)
+        : hash('/')
+    case '/settings.html':
+      return hash('/settings')
+    default:
+      return undefined
+  }
+}
+
 export interface FlowStart {
   kind: string
   courseId: string
@@ -289,7 +324,14 @@ export function createTutorServer(options: TutorServerOptions) {
         json(res, 200, { ok: true, ...snapshot(flow) }); return
       }
       if (req.method === 'GET') {
-        const relative = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '')
+        // 旧版单页 UI 已下线：把旧地址重定向到单壳的对应路由，书签与文档链接不会失效。
+        const legacy = legacyRedirect(url)
+        if (legacy) {
+          res.writeHead(302, { location: legacy })
+          res.end()
+          return
+        }
+        const relative = url.pathname === '/' ? 'app.html' : url.pathname.replace(/^\/+/, '')
         const file = path.resolve(staticDir, relative)
         if (!file.startsWith(staticDir + path.sep)) { res.writeHead(403).end(); return }
         if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end('404'); return }

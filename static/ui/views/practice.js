@@ -273,7 +273,9 @@
     }
 
     $select.addEventListener('change', () => {
-      navigate(options.nodeHref ? options.nodeHref(courseId, $select.value) : `/practice.html?course=${encodeURIComponent(courseId)}&node=${encodeURIComponent($select.value)}`)
+      navigate(options.nodeHref
+        ? options.nodeHref(courseId, $select.value)
+        : `#/course/${encodeURIComponent(courseId)}/practice/${encodeURIComponent($select.value)}`)
     })
     $run.addEventListener('click', () => sendLine('', '> 〔运行测试〕'))
     $rerun.addEventListener('click', () => sendLine('r', '> r 〔重跑〕'))

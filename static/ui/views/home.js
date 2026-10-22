@@ -4,27 +4,28 @@
   const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
   const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
 
-  // 单壳里跳的是 hash 路由，独立页面跳的是旧地址；由宿主决定。
+  // 视图只存在于单壳里：默认链接就是 hash 路由（宿主可再覆盖）。
   function defaultFlowHref(flow) {
     const course = encodeURIComponent(flow.courseId)
-    if (flow.kind === 'learn') return `/lesson.html?course=${course}`
-    if (flow.kind === 'exam') return `/exam.html?course=${course}&milestone=${encodeURIComponent(flow.milestoneId || '')}`
-    if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `/practice.html?course=${course}`
-    return `/wizard.html?course=${course}&resume=${encodeURIComponent(flow.kind)}${flow.nodeId ? `&node=${encodeURIComponent(flow.nodeId)}` : ''}`
+    if (flow.kind === 'learn') return `#/course/${course}/learn`
+    if (flow.kind === 'exam') return `#/course/${course}/exam${flow.milestoneId ? `/${encodeURIComponent(flow.milestoneId)}` : ''}`
+    if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${course}/practice${flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''}`
+    return `#/course/${course}/${encodeURIComponent(flow.kind)}${flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''}`
   }
 
   V.home = function (options) {
     const root = options.root
     const researchLive = options.researchLive ?? null
     const flowHref = options.flowHref ?? defaultFlowHref
-    const courseHref = options.courseHref ?? ((id) => `/?course=${encodeURIComponent(id)}`)
-    const lessonHref = options.lessonHref ?? ((id) => `/lesson.html?course=${encodeURIComponent(id)}`)
-    const planHref = options.planHref ?? ((id) => `/wizard.html?course=${encodeURIComponent(id)}&resume=plan`)
-    const assessHref = options.assessHref ?? ((id) => `/wizard.html?course=${encodeURIComponent(id)}&resume=assess`)
-    const practiceHref = options.practiceHref ?? ((id, node) => `/practice.html?course=${encodeURIComponent(id)}${node ? `&node=${encodeURIComponent(node)}` : ''}`)
-    const researchHref = options.researchHref ?? ((id, node) => `/wizard.html?course=${encodeURIComponent(id)}&resume=research${node ? `&node=${encodeURIComponent(node)}` : ''}`)
-    const auditHref = options.auditHref ?? ((id) => `/wizard.html?course=${encodeURIComponent(id)}&resume=audit-content`)
-    const reviewHref = options.reviewHref ?? ((id) => `/review.html?course=${encodeURIComponent(id)}`)
+    const courseHref = options.courseHref ?? ((id) => `#/course/${encodeURIComponent(id)}`)
+    const lessonHref = options.lessonHref ?? ((id) => `#/course/${encodeURIComponent(id)}/learn`)
+    const planHref = options.planHref ?? ((id) => `#/course/${encodeURIComponent(id)}/plan`)
+    const assessHref = options.assessHref ?? ((id) => `#/course/${encodeURIComponent(id)}/assess`)
+    const practiceHref = options.practiceHref ?? ((id, node) => `#/course/${encodeURIComponent(id)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`)
+    const researchHref = options.researchHref ?? ((id, node) => `#/course/${encodeURIComponent(id)}/research${node ? `/${encodeURIComponent(node)}` : ''}`)
+    const auditHref = options.auditHref ?? ((id) => `#/course/${encodeURIComponent(id)}/audit-content`)
+    const reviewHref = options.reviewHref ?? ((id) => `#/course/${encodeURIComponent(id)}/review`)
+    const examHref = options.examHref ?? ((id, milestone) => `#/course/${encodeURIComponent(id)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`)
     const go = options.navigate ?? ((href) => { if (href) location.href = href })
 
     async function renderList() {
@@ -140,12 +141,12 @@
           const pctText = m.examScore !== undefined ? `（${Math.round(m.examScore * 100)} 分）` : ''
           tail = `<span style="color:var(--mastered)">✓ 大考通过${pctText}</span>`
         } else if (m.examable) {
-          tail = `<button class="enter ms-exam" data-href="${TutorDom.esc(options.examHref ? options.examHref(p.id, m.id) : `/exam.html?course=${encodeURIComponent(p.id)}&milestone=${encodeURIComponent(m.id)}`)}">参加大考 →</button>`
+          tail = `<button class="enter ms-exam" data-href="${TutorDom.esc(examHref(p.id, m.id))}">参加大考 →</button>`
         }
         return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
       }).join('')
       const c = p.counts
-      // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（practice.html 内部再兜底判定）。
+      // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（实践视图内部再兜底判定）。
       const practiceRow = p.hasPlan
         ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id))}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
         : ''

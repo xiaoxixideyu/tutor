@@ -7,7 +7,7 @@
 - **设计参考**：Reasonix 的缓存优先循环、工具调用修复、成本控制；当前已实现按课组织上下文和成本估算，完整自定义循环与分级调度仍待实现
 - **模型接入**：OpenAI 兼容接口（base_url + api_key + model），不绑定单一供应商
 - **交互形态**：命令行 + 本地网页，单用户，可管理多门课程；同一门课程同时运行一个教学流程，不同课程可并行（每条流程按课程独立恢复与回放）
-- **网页形态**：`/app.html` 是单壳工作区——左栏课程与进行中流程、顶部一条状态、中间画布按哈希路由渲染视图（看板/课堂/大考/实践/复习/向导），底部常驻输入区；模型设置是右侧抽屉（`#/settings`），⌘K / Ctrl+K 打开命令面板，输入框支持 Enter 发送、Shift+Enter 换行；`lesson.html` / `exam.html` / `index.html` / `practice.html` / `review.html` / `wizard.html` / `settings.html` 等旧地址仍可用，且与单壳共用同一批视图控制器（`static/ui/views/*`）
+- **网页形态**：只有一个单壳工作区 `/app.html`——左栏课程与进行中流程、顶部一条状态、中间画布按哈希路由渲染视图（看板/课堂/大考/实践/复习/向导），底部常驻输入区；模型设置是右侧抽屉（`#/settings`），⌘K / Ctrl+K 打开命令面板，输入框支持 Enter 发送、Shift+Enter 换行。旧版单页（`/index.html`、`/lesson.html`…）已下线，按原语义 302 重定向到对应 hash 路由，视图控制器只有一份（`static/ui/views/*`）
 
 ## 状态
 
@@ -86,7 +86,7 @@ npm run agent -- audit-content golang # 审查旧课程内容并保存准入；�
 npm run agent -- "..."          # 一次性 agent 任务
 ```
 
-- 网页入口：`/app.html`（单壳工作区，推荐，`#/settings` 打开设置抽屉，⌘K 命令面板）；旧页面仍可直达：`/index.html` 看板、`/lesson.html?course=<id>` 课堂、`/exam.html?course=<id>` 大考、`/practice.html` 实践、`/review.html` 复习、`/wizard.html` 引导
+- 网页入口：`/` 或 `/app.html`（同一个单壳工作区；`#/settings` 打开设置抽屉，⌘K 命令面板，`#/course/<id>/learn|exam|practice|review|plan` 等路由）
 - 网页模型设置：[使用说明](docs/model-settings.md)；保存在本机 `data/model-config.json`，后续网页和 CLI 模型流程共用；服务仅本机访问，端口可设 `TUTOR_SERVER_PORT`
 - 人格提示词：`config/persona/*.md`（各流程系统提示词，直接读取）
 - 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）

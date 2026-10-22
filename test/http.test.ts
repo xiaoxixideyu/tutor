@@ -107,7 +107,7 @@ async function stream(t: TestContext, base: string, flowId: string) {
 
 it('自定义课程目录、网页资源与坏请求均走真实 HTTP', async (t) => {
   const { base, post } = await fixture(t)
-  for (const page of ['/', '/wizard.html', '/lesson.html', '/exam.html', '/practice.html', '/review.html', '/flow-client.js', '/settings.html', '/settings.js', '/ui/dom.js', '/ui/rpc.js', '/ui/chat.js', '/ui/chat.css', '/ui/app.js', '/ui/home.css', '/ui/app.css', '/ui/views/home.js', '/ui/views/learn.js', '/ui/views/exam.js', '/ui/views/practice.js', '/ui/views/review.js', '/ui/views/wizard.js', '/ui/wizard.css', '/ui/practice.css', '/ui/review.css', '/app.html']) {
+  for (const page of ['/', '/flow-client.js', '/md.js', '/ui/dom.js', '/ui/rpc.js', '/ui/chat.js', '/ui/chat.css', '/ui/app.js', '/ui/home.css', '/ui/app.css', '/ui/settings.js', '/ui/palette.js', '/ui/views/home.js', '/ui/views/learn.js', '/ui/views/exam.js', '/ui/views/practice.js', '/ui/views/review.js', '/ui/views/wizard.js', '/ui/wizard.css', '/ui/practice.css', '/ui/review.css', '/app.html']) {
     assert.equal((await fetch(base + page)).status, 200)
   }
   const list = await post('/rpc', { method: 'listCourses', id: 1 })
@@ -366,6 +366,28 @@ it('流程输入允许一条多行消息，但拒绝超长输入', async (t) => 
   const echoed = await post('/flow/input', { flowId: flow.flowId, line: 'x'.repeat(20_001) })
   assert.equal(echoed.status, 400)
   assert.match(echoed.body.error, /过长/)
+})
+
+it('旧版单页地址重定向到单壳对应路由，不直接 404', async (t) => {
+  const { base } = await fixture(t)
+  const cases: [string, string][] = [
+    ['/index.html', '/app.html#/'],
+    ['/lesson.html?course=alpha', '/app.html#/course/alpha/learn'],
+    ['/exam.html?course=alpha&milestone=m1', '/app.html#/course/alpha/exam/m1'],
+    ['/practice.html?course=alpha&node=basics', '/app.html#/course/alpha/practice/basics'],
+    ['/review.html?course=alpha', '/app.html#/course/alpha/review'],
+    ['/wizard.html?course=alpha&resume=plan', '/app.html#/course/alpha/plan'],
+    ['/settings.html', '/app.html#/settings'],
+  ]
+  for (const [from, to] of cases) {
+    const response = await fetch(base + from, { redirect: 'manual' })
+    assert.equal(response.status, 302, from)
+    assert.equal(response.headers.get('location'), to, from)
+  }
+  // 根路径直接给单壳。
+  const root = await fetch(base + '/')
+  assert.equal(root.status, 200)
+  assert.match(await root.text(), /id="app-canvas"/)
 })
 
 it('RPC 与流程端点拒绝跨站请求，并强制 JSON Content-Type', async (t) => {
