@@ -10,6 +10,7 @@ const pages = ['index.html', 'wizard.html', 'lesson.html', 'exam.html', 'practic
 const sharedScripts = [
   'ui/dom.js', 'ui/rpc.js', 'ui/chat.js', 'ui/app.js',
   'ui/views/home.js', 'ui/views/learn.js', 'ui/views/exam.js',
+  'ui/views/practice.js', 'ui/views/review.js', 'ui/views/wizard.js',
   'flow-client.js', 'md.js', 'research-progress.js', 'settings.js',
 ]
 
@@ -51,9 +52,12 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('lesson.html'), /TutorViews\.learn\(/, 'lesson.html 应挂载共享课堂视图')
     assert.match(read('exam.html'), /TutorViews\.exam\(/, 'exam.html 应挂载共享大考视图')
     assert.match(read('index.html'), /TutorViews\.home\(/, 'index.html 应挂载共享看板视图')
-    for (const file of ['lesson.html', 'exam.html', 'index.html']) {
+    assert.match(read('practice.html'), /TutorViews\.practice\(/, 'practice.html 应挂载共享实践视图')
+    assert.match(read('review.html'), /TutorViews\.review\(/, 'review.html 应挂载共享复习视图')
+    assert.match(read('wizard.html'), /TutorViews\.wizard\(/, 'wizard.html 应挂载共享向导视图')
+    for (const file of ['lesson.html', 'exam.html', 'index.html', 'practice.html', 'review.html', 'wizard.html']) {
       const html = read(file)
-      assert.equal(/function renderList|function renderStatus|function maybeChips|function handleLine/.test(html), false, `${file} 不应再内联视图实现`)
+      assert.equal(/function renderList|function renderStatus|function maybeChips|function handleLine|function renderNode/.test(html), false, `${file} 不应再内联视图实现`)
     }
   })
 
@@ -63,7 +67,7 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(shell, /id="app-rail"|class="app-rail"/, '单壳应有左栏')
     assert.match(shell, /id="app-canvas"/, '单壳应有画布')
     const app = read('ui/app.js')
-    for (const view of ['TutorViews.home', 'TutorViews.learn', 'TutorViews.exam']) {
+    for (const view of ['TutorViews.home', 'TutorViews.learn', 'TutorViews.exam', 'TutorViews.practice', 'TutorViews.review', 'TutorViews.wizard']) {
       assert.ok(app.includes(view), `单壳应挂载 ${view}`)
     }
     assert.match(app, /LEGACY/, '未迁入单壳的流程应回落到旧页面而不是死胡同')

@@ -10,14 +10,9 @@
   let railTimer = null
 
   const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
-  // 尚未迁入单壳的流程先走旧页面，避免出现死胡同。
+  // 画布内可直接承载的流程；其余情况回落到独立页面，避免死胡同。
   const LEGACY = {
-    practice: (courseId, node) => `/practice.html?course=${encodeURIComponent(courseId)}${node ? `&node=${encodeURIComponent(node)}` : ''}`,
-    review: (courseId) => `/review.html?course=${encodeURIComponent(courseId)}`,
-    assess: (courseId) => `/wizard.html?course=${encodeURIComponent(courseId)}&resume=assess`,
-    plan: (courseId) => `/wizard.html?course=${encodeURIComponent(courseId)}&resume=plan`,
-    research: (courseId, node) => `/wizard.html?course=${encodeURIComponent(courseId)}&resume=research${node ? `&node=${encodeURIComponent(node)}` : ''}`,
-    'audit-content': (courseId) => `/wizard.html?course=${encodeURIComponent(courseId)}&resume=audit-content`,
+    'practice-gen': (courseId, node) => `/practice.html?course=${encodeURIComponent(courseId)}${node ? `&node=${encodeURIComponent(node)}` : ''}`,
   }
 
   function navigate(href) {
@@ -72,6 +67,7 @@
         practiceHref: (id, node) => `#/course/${encodeURIComponent(id)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`,
         researchHref: (id, node) => `#/course/${encodeURIComponent(id)}/research${node ? `/${encodeURIComponent(node)}` : ''}`,
         auditHref: (id) => `#/course/${encodeURIComponent(id)}/audit-content`,
+        reviewHref: (id) => `#/course/${encodeURIComponent(id)}/review`,
         examHref: (id, milestone) => `#/course/${encodeURIComponent(id)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`,
         flowHref: (flow) => {
           if (flow.kind === 'learn') return `#/course/${encodeURIComponent(flow.courseId)}/learn`
@@ -105,6 +101,7 @@
         practiceHref: (id, node) => `#/course/${encodeURIComponent(id)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`,
         researchHref: (id, node) => `#/course/${encodeURIComponent(id)}/research${node ? `/${encodeURIComponent(node)}` : ''}`,
         auditHref: (id) => `#/course/${encodeURIComponent(id)}/audit-content`,
+        reviewHref: (id) => `#/course/${encodeURIComponent(id)}/review`,
         examHref: (id, milestone) => `#/course/${encodeURIComponent(id)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`,
       })
       return
@@ -129,6 +126,43 @@
         milestoneId: route.milestone ?? '',
         onStatus: ({ text, busy }) => setStatus(text, busy),
         onExit: ({ kind }) => { if (kind === 'list') navigate('#/') },
+      })
+      return
+    }
+
+    if (route.view === 'practice') {
+      titleEl.textContent = `${courseId} · 实践`
+      current = TutorViews.practice({
+        root: canvas,
+        courseId,
+        nodeId: route.node ?? '',
+        navigate,
+        nodeHref: (id, node) => `#/course/${encodeURIComponent(id)}/practice/${encodeURIComponent(node)}`,
+        onStatus: ({ text, busy }) => setStatus(text, busy),
+      })
+      return
+    }
+
+    if (route.view === 'review') {
+      titleEl.textContent = `${courseId} · 复习`
+      current = TutorViews.review({
+        root: canvas,
+        courseId,
+        navigate,
+        onStatus: ({ text, busy }) => setStatus(text, busy),
+      })
+      return
+    }
+
+    if (['assess', 'plan', 'research', 'audit-content', 'new'].includes(route.view)) {
+      titleEl.textContent = `${courseId ?? '新课程'} · 向导`
+      current = TutorViews.wizard({
+        root: canvas,
+        courseId,
+        search: `#/course/${encodeURIComponent(courseId ?? '')}/${route.view}${route.node ? `/${encodeURIComponent(route.node)}` : ''}`,
+        navigate,
+        lessonHref: (id) => `#/course/${encodeURIComponent(id)}/learn`,
+        onStatus: ({ text, busy }) => setStatus(text, busy),
       })
       return
     }

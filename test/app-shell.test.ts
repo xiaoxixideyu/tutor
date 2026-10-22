@@ -103,4 +103,15 @@ it('单壳工作区：左栏课程、路由与看板视图都能渲染（浏览�
   assert.match(learn, /chat-surface/, '课堂视图应挂载对话面')
   assert.match(learn, /chat-inputrow/, '课堂视图应有常驻输入区')
   assert.match(learn, /换个讲法/, '课堂视图应带快捷指令')
+
+  const practice = await render('#/course/demo/practice')
+  assert.match(practice, /practice-run/, '实践视图应挂载终端操作')
+  assert.match(practice, /practice-select/, '实践视图应能选择知识点')
+
+  const review = await render('#/course/demo/review')
+  assert.match(review, /review-panel/, '复习视图应挂载复习面')
+
+  const wizard = await render('#/course/demo/plan')
+  assert.match(wizard, /wizard-steps/, '向导视图应挂载分步条')
+  assert.match(wizard, /wizard-setup|wizard-log/, '向导视图应有主体区域')
 })

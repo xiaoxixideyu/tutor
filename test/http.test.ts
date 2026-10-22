@@ -107,7 +107,7 @@ async function stream(t: TestContext, base: string, flowId: string) {
 
 it('自定义课程目录、网页资源与坏请求均走真实 HTTP', async (t) => {
   const { base, post } = await fixture(t)
-  for (const page of ['/', '/wizard.html', '/lesson.html', '/exam.html', '/practice.html', '/review.html', '/flow-client.js', '/settings.html', '/settings.js', '/ui/dom.js', '/ui/rpc.js', '/ui/chat.js', '/ui/chat.css', '/ui/app.js', '/ui/home.css', '/ui/app.css', '/ui/views/home.js', '/ui/views/learn.js', '/ui/views/exam.js', '/app.html']) {
+  for (const page of ['/', '/wizard.html', '/lesson.html', '/exam.html', '/practice.html', '/review.html', '/flow-client.js', '/settings.html', '/settings.js', '/ui/dom.js', '/ui/rpc.js', '/ui/chat.js', '/ui/chat.css', '/ui/app.js', '/ui/home.css', '/ui/app.css', '/ui/views/home.js', '/ui/views/learn.js', '/ui/views/exam.js', '/ui/views/practice.js', '/ui/views/review.js', '/ui/views/wizard.js', '/ui/wizard.css', '/ui/practice.css', '/ui/review.css', '/app.html']) {
     assert.equal((await fetch(base + page)).status, 200)
   }
   const list = await post('/rpc', { method: 'listCourses', id: 1 })

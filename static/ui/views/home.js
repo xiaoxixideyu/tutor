@@ -24,6 +24,7 @@
     const practiceHref = options.practiceHref ?? ((id, node) => `/practice.html?course=${encodeURIComponent(id)}${node ? `&node=${encodeURIComponent(node)}` : ''}`)
     const researchHref = options.researchHref ?? ((id, node) => `/wizard.html?course=${encodeURIComponent(id)}&resume=research${node ? `&node=${encodeURIComponent(node)}` : ''}`)
     const auditHref = options.auditHref ?? ((id) => `/wizard.html?course=${encodeURIComponent(id)}&resume=audit-content`)
+    const reviewHref = options.reviewHref ?? ((id) => `/review.html?course=${encodeURIComponent(id)}`)
     const go = options.navigate ?? ((href) => { if (href) location.href = href })
 
     async function renderList() {
@@ -65,7 +66,7 @@
                     ? { label: '生成计划 →', href: planHref(c.id) }
                     : { label: '去摸底 →', href: assessHref(c.id) }
             const reviewBtn = c.dueCount
-              ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
+              ? `<button class="enter review-btn" data-href="${TutorDom.esc(reviewHref(c.id))}">复习 ${c.dueCount} →</button>`
               : ''
             return `<div class="course" data-id="${TutorDom.esc(c.id)}" data-error="${c.error ? '1' : ''}">
               <div class="row1"><span class="id">${TutorDom.esc(c.id)}</span><span class="goal">${TutorDom.esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${TutorDom.esc(cta.href)}">${TutorDom.esc(cta.label)}</button>` : ''}</div>
