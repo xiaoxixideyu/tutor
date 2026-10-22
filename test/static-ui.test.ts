@@ -6,8 +6,12 @@ import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const pages = ['index.html', 'wizard.html', 'lesson.html', 'exam.html', 'practice.html', 'review.html', 'settings.html']
-const sharedScripts = ['ui/dom.js', 'ui/rpc.js', 'ui/chat.js', 'flow-client.js', 'md.js', 'research-progress.js', 'settings.js']
+const pages = ['index.html', 'wizard.html', 'lesson.html', 'exam.html', 'practice.html', 'review.html', 'settings.html', 'app.html']
+const sharedScripts = [
+  'ui/dom.js', 'ui/rpc.js', 'ui/chat.js', 'ui/app.js',
+  'ui/views/home.js', 'ui/views/learn.js', 'ui/views/exam.js',
+  'flow-client.js', 'md.js', 'research-progress.js', 'settings.js',
+]
 
 function read(file: string): string {
   return fs.readFileSync(path.join(root, 'static', file), 'utf8')
@@ -36,11 +40,33 @@ describe('静态页面与共享 UI 组件', () => {
       assert.match(html, /<link rel="stylesheet" href="\/ui\/chat\.css">/, `${file} 应引用共享样式`)
       assert.match(html, /<script src="\/ui\/dom\.js"><\/script>/, `${file} 应引用共享 DOM 工具`)
       assert.match(html, /<script src="\/ui\/chat\.js"><\/script>/, `${file} 应引用共享聊天组件`)
-      // 这些实现已经移入 ui/chat.js，页面里不应再有副本。
+      // 这些实现已经移入 ui/chat.js 与 ui/views/*，页面里不应再有副本。
       for (const duplicated of ['function maybeChips', 'function handleLine', 'function submitChips', 'function colorizeCost', 'function setBusy']) {
         assert.equal(html.includes(duplicated), false, `${file} 不应再定义 ${duplicated}`)
       }
     }
+  })
+
+  it('课堂与大考页面只是共享视图的薄壳', () => {
+    assert.match(read('lesson.html'), /TutorViews\.learn\(/, 'lesson.html 应挂载共享课堂视图')
+    assert.match(read('exam.html'), /TutorViews\.exam\(/, 'exam.html 应挂载共享大考视图')
+    assert.match(read('index.html'), /TutorViews\.home\(/, 'index.html 应挂载共享看板视图')
+    for (const file of ['lesson.html', 'exam.html', 'index.html']) {
+      const html = read(file)
+      assert.equal(/function renderList|function renderStatus|function maybeChips|function handleLine/.test(html), false, `${file} 不应再内联视图实现`)
+    }
+  })
+
+  it('单壳工作区按哈希路由挂载视图，旧流程回落到独立页面', () => {
+    const shell = read('app.html')
+    assert.match(shell, /<script src="\/ui\/app\.js"><\/script>/, '单壳应加载路由脚本')
+    assert.match(shell, /id="app-rail"|class="app-rail"/, '单壳应有左栏')
+    assert.match(shell, /id="app-canvas"/, '单壳应有画布')
+    const app = read('ui/app.js')
+    for (const view of ['TutorViews.home', 'TutorViews.learn', 'TutorViews.exam']) {
+      assert.ok(app.includes(view), `单壳应挂载 ${view}`)
+    }
+    assert.match(app, /LEGACY/, '未迁入单壳的流程应回落到旧页面而不是死胡同')
   })
 
   it('其余页面复用共享 DOM/RPC 工具', () => {

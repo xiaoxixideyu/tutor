@@ -5,55 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tutor 导师 · 进度看板</title>
 <link rel="stylesheet" href="/research-progress.css">
-<style>
-  :root {
-    --fg: #1a1d21; --muted: #6b7280; --bg: #f6f7f9; --card: #fff; --border: #e4e7ec;
-    --accent: #2563eb; --mastered: #16a34a; --learning: #0891b2; --weak: #d97706; --unknown: #9ca3af; --due: #d97706;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
-  header { padding: 20px 24px 12px; }
-  header h1 { margin: 0 0 4px; font-size: 20px; }
-  header p { margin: 0; color: var(--muted); font-size: 13px; }
-  main { max-width: 860px; margin: 0 auto; padding: 0 16px 48px; }
-  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-top: 16px; }
-  h2 { font-size: 15px; margin: 0 0 12px; }
-  .course { padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
-  .course:last-child { border-bottom: none; }
-  .course:hover { background: #fafbfc; margin: 0 -8px; padding: 12px 8px; border-radius: 6px; }
-  .course .row1 { display: flex; align-items: baseline; gap: 10px; }
-  .enter { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
-  .enter:hover { opacity: .9; }
-  .review-btn { background: var(--due); }
-  .course .id { font-weight: 600; color: var(--accent); }
-  .course .goal { color: var(--fg); font-size: 14px; flex: 1; }
-  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #fef3c7; color: #92400e; }
-  .badge.run { background: #dbeafe; color: #1e40af; }
-  .bar { height: 6px; border-radius: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
-  .bar span { display: block; height: 100%; background: var(--mastered); border-radius: 3px; }
-  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  tr:last-child td { border-bottom: none; }
-  .sym { font-weight: 700; }
-  .s-mastered { color: var(--mastered); } .s-learning { color: var(--learning); } .s-weak { color: var(--weak); } .s-unknown { color: var(--unknown); }
-  .review-line { color: var(--due); }
-  .back { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 13px; color: var(--fg); }
-  .back:hover { background: var(--bg); }
-  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
-  .err { color: #b91c1c; font-size: 13px; }
-  .counts { display: flex; gap: 14px; font-size: 13px; margin: 10px 0 2px; color: var(--muted); }
-  .bars { display: flex; align-items: flex-end; gap: 2px; height: 42px; margin: 8px 0 6px; }
-  .bars span { flex: 0 0 8px; min-height: 2px; background: var(--accent); opacity: .8; border-radius: 2px 2px 0 0; }
-  .bars span.zero { background: var(--border); opacity: 1; }
-  .trail .sym { margin-right: 2px; }
-</style>
+<link rel="stylesheet" href="/ui/home.css">
 </head>
 <body>
 <header>
   <h1>tutor 导师</h1>
-  <p>查看学习进度，继续课程与到期复习。　<a href="/wizard.html" style="color:var(--accent)">＋ 开设新课程</a>　<a href="/settings.html" style="color:var(--accent)">模型设置</a></p>
+  <p>查看学习进度，继续课程与到期复习。　<a href="/app.html" style="color:var(--accent)">工作区</a>　<a href="/wizard.html" style="color:var(--accent)">＋ 开设新课程</a>　<a href="/settings.html" style="color:var(--accent)">模型设置</a></p>
 </header>
 <main>
   <section id="researchLive" hidden></section>
@@ -62,190 +19,17 @@
 <script src="/research-progress.js"></script>
 <script src="/ui/dom.js"></script>
 <script src="/ui/rpc.js"></script>
+<script src="/ui/views/home.js"></script>
 <script>
-const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
-const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
-const $panel = document.getElementById('panel')
-const researchLive = new TutorResearchProgress(document.getElementById('researchLive'), id => {
-  renderStatus(id).catch(() => {})
+// 独立看板页与单壳共用同一个看板视图控制器（static/ui/views/home.js）。
+let dashboard = null
+const researchLive = new TutorResearchProgress(document.getElementById('researchLive'), (id) => {
+  dashboard?.showCourse(id).catch(() => {})
 })
-
-// 进行中的流程按课程归属跳回各自页面；每门课同时最多一个流程，不同课程可并行。
-function flowHref(flow) {
-  const course = encodeURIComponent(flow.courseId)
-  if (flow.kind === 'learn') return `/lesson.html?course=${course}`
-  if (flow.kind === 'exam') return `/exam.html?course=${course}&milestone=${encodeURIComponent(flow.milestoneId || '')}`
-  if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `/practice.html?course=${course}`
-  return `/wizard.html?course=${course}&resume=${encodeURIComponent(flow.kind)}${flow.nodeId ? `&node=${encodeURIComponent(flow.nodeId)}` : ''}`
-}
-
-async function renderList() {
-  researchLive.connect(null)
-  const courses = await TutorRpc('listCourses')
-  const due = await TutorRpc('dueReviews')
-  const state = await fetch('/flow/state').then((response) => response.json()).catch(() => ({ flows: [] }))
-  const flowByCourse = new Map((state.flows ?? []).map((flow) => [flow.courseId, flow]))
-  const dueById = new Map((due ?? []).map((c) => [c.id, c]))
-  const rows = courses.length === 0
-    ? '<div class="empty">暂无课程。先在“模型设置”中配置渠道，再点击“开设新课程”。</div>'
-    : courses.map((c) => {
-        const pct = c.total > 0 ? Math.round((c.mastered / c.total) * 100) : 0
-        const dueBadge = c.dueCount ? `<span class="badge">到期 ${c.dueCount}</span>` : ''
-        const running = flowByCourse.get(c.id)
-        const runningBadge = running ? `<span class="badge run">▶ ${FLOW_LABEL[running.kind] ?? running.kind}进行中</span>` : ''
-        const reviewLine = dueById.has(c.id)
-          ? `<div class="meta review-line">待复习：${TutorDom.esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
-          : ''
-        // 内容主闸（地图）未过审：摸底/计划/上课/复习都会 gate.require 地图，任一点进去都会 dead-end；看板先提示而非假装可用。
-        const warnLine = !c.error && c.contentReady === false
-          ? '<div class="meta" style="color:#b45309">⚠ 课程内容未通过当前审查，摸底/上课/复习等环节可能无法进入——需重新审查后再用</div>'
-          : ''
-        const errorLine = c.error
-          ? `<div class="meta" style="color:#b91c1c">⚠ 课程数据无法读取：${TutorDom.esc(c.error)}</div>`
-          : ''
-        // CTA 按阶段分流：有计划才进课堂；半成品课导去向导补齐（摸底/计划），不再把用户丢进「缺计划」死路。
-        // 全部已掌握且无待学指针：上课只会得到「无课可上」，如实显示完成态并给复习/重测出口。
-        const allMastered = !c.error && c.stage === 'ready' && c.total > 0 && c.mastered === c.total && !c.current
-        const cta = c.error
-          ? null
-          : running
-          ? { label: `继续${FLOW_LABEL[running.kind] ?? '流程'} →`, href: flowHref(running) }
-          : c.stage === 'ready'
-          ? allMastered
-            ? { label: '✓ 已全部掌握', href: `/?course=${encodeURIComponent(c.id)}` }
-            : { label: '上课 →', href: `/lesson.html?course=${encodeURIComponent(c.id)}` }
-          : c.stage === 'need-plan'
-            ? { label: '生成计划 →', href: `/wizard.html?course=${encodeURIComponent(c.id)}&resume=plan` }
-            : { label: '去摸底 →', href: `/wizard.html?course=${encodeURIComponent(c.id)}&resume=assess` }
-        const reviewBtn = c.dueCount
-          ? `<button class="enter review-btn" data-href="/review.html?course=${encodeURIComponent(c.id)}">复习 ${c.dueCount} →</button>`
-          : ''
-        return `<div class="course" data-id="${TutorDom.esc(c.id)}" data-error="${c.error ? '1' : ''}">
-          <div class="row1"><span class="id">${TutorDom.esc(c.id)}</span><span class="goal">${TutorDom.esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${TutorDom.esc(cta.href)}">${TutorDom.esc(cta.label)}</button>` : ''}</div>
-          <div class="bar"><span style="width:${pct}%"></span></div>
-          <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${TutorDom.esc(c.current)}` : ''}</div>
-          ${reviewLine}
-          ${warnLine}
-          ${errorLine}
-        </div>`
-      }).join('')
-  $panel.innerHTML = `<h2>课程列表</h2>${rows}`
-  for (const el of $panel.querySelectorAll('.course')) {
-    el.addEventListener('click', () => { if (!el.dataset.error) renderStatus(el.dataset.id) })
-  }
-  for (const btn of $panel.querySelectorAll('.enter')) {
-    btn.addEventListener('click', (event) => {
-      event.stopPropagation()
-      location.href = btn.dataset.href
-    })
-  }
-}
-
-async function renderStatus(id) {
-  const p = await TutorRpc('courseStatus', { id })
-  researchLive.connect(id)
-  // 展开课程详情时拉取"当前内容里哪条没过审"（地图/计划/各节点题库），省得用户去翻 JSON 证据文件。
-  const issues = await TutorRpc('contentIssues', { id }).catch(() => [])
-  // 学习曲线数据来自事件流（mastery-events.jsonl）；旧课程没有事件流时优雅降级。
-  const history = await TutorRpc('masteryHistory', { id, days: 30 }).catch(() => null)
-  const maxCount = history ? Math.max(1, ...history.activity.map((d) => d.count)) : 1
-  const curveSection = !history || !history.activity.some((d) => d.count > 0)
-    ? `<h2 style="margin-top:16px">学习曲线</h2><div class="empty">事件流从本次更新后开始积累：上完一节课、做一次复习或大考后，这里会出现逐日活动与成绩轨迹。</div>`
-    : `<h2 style="margin-top:16px">学习曲线（近 ${history.days} 天）</h2>
-       <div class="bars">${history.activity.map((d) => `<span class="${d.count === 0 ? 'zero' : ''}" style="height:${d.count === 0 ? 2 : Math.max(4, Math.round((d.count / maxCount) * 42))}px" title="${TutorDom.esc(d.date)} · ${d.count} 次活动${d.count > 0 ? `（${Object.entries(d.kinds).map(([k, v]) => `${k}×${v}`).join('、')}）` : ''}"></span>`).join('')}</div>
-       <div class="meta">近 14 天学习 ${history.pace.sessions} 天${history.pace.averageGapDays !== undefined ? `，平均间隔 ${history.pace.averageGapDays} 天` : ''}　（柱=当天活动次数：小测/回访/复习/实践/大考）</div>
-       ${history.nodes.length ? `<div class="trail" style="margin-top:8px">${history.nodes.map((n) => `<div class="meta">${TutorDom.esc(n.node)}：${n.points.map((pt) => `<span class="sym ${pt.passed === false ? 's-weak' : 's-mastered'}" title="${TutorDom.esc(pt.at)} · ${TutorDom.esc(pt.kind)} · ${pt.score}">${pt.passed === false ? '✗' : '✓'}</span>`).join('')}</div>`).join('')}</div>` : ''}`
-  const KIND_LABEL = { map: '知识地图', bank: '摸底题库', lesson: '教案', plan: '教学计划', teaching: '课堂讲授', exam: '大考', practice: '实践任务' }
-  const issuesSection = issues.length
-    ? `<div style="margin-top:12px;padding:10px 12px;border:1px solid #f1c084;background:#fffbeb;border-radius:8px">
-        <div style="color:#b45309;font-weight:600;margin-bottom:6px">⚠ 以下内容未通过审查，修复后需重新审查</div>
-        ${issues.map((it) => `<div class="meta" style="margin:4px 0">· <strong>${TutorDom.esc(KIND_LABEL[it.kind] ?? it.kind)}${it.node ? '（' + TutorDom.esc(it.node) + '）' : ''}</strong>：${(it.issues || []).map(TutorDom.esc).join('；')}</div>`).join('')}
-        <div class="meta" style="margin-top:6px">修复对应 YAML 后运行 <code>npm run agent -- audit-content ${TutorDom.esc(p.id)}</code> 重新审查。</div>
-      </div>`
-    : ''
-  const nodeRows = p.nodes.map((n) => {
-    const [sym, cls] = SYM[n.status] ?? SYM.unknown
-    // 记忆保留率估计（有实测锚点时才有）：低于 70% 标橙，提示可能已生锈。
-    const retention = n.retention !== undefined
-      ? ` <span${n.retention < 0.7 ? ' style="color:#b45309"' : ' class="meta"'}>保留≈${Math.round(n.retention * 100)}%</span>`
-      : ''
-    // 教研状态：已保存但一条来源都没有的节点如实标"无来源"，避免被读成"教研已完成"。
-    const researchLabel = n.researchStatus
-      ? n.researchStatus === 'saved' && (n.researchResources ?? 0) === 0
-        ? '已保存（无来源）'
-        : { pending: '待教研', saved: '已保存 · 待交叉验证', verified: '来源已验证' }[n.researchStatus]
-      : ''
-    return `<tr>
-      <td><span class="sym ${cls}">${sym}</span></td>
-      <td>${TutorDom.esc(n.status)}</td><td>${TutorDom.esc(n.id)}</td><td>${TutorDom.esc(n.title ?? '')}</td>
-      <td>${n.score !== undefined ? TutorDom.esc(n.score) : ''}</td>
-      <td>${n.review_due !== undefined ? `复习→${TutorDom.esc(n.review_due)}${retention}` : ''}</td>
-      <td>${n.researchStatus ? `${researchLabel} <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research&node=${encodeURIComponent(n.id)}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
-      <td>${p.hasPlan ? `<button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}&node=${encodeURIComponent(n.id)}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
-    </tr>`
-  }).join('')
-  // 里程碑：已通过大考→标「✓ 大考通过」；全部节点已掌握且未通过→给「参加大考」入口；否则显示掌握进度。
-  const milestoneRows = p.milestones.map((m) => {
-    const frac = `[${m.masteredCount}/${m.nodes.length}]`
-    let tail = ''
-    if (m.examPassed) {
-      const pctText = m.examScore !== undefined ? `（${Math.round(m.examScore * 100)} 分）` : ''
-      tail = `<span style="color:var(--mastered)">✓ 大考通过${pctText}</span>`
-    } else if (m.examable) {
-      tail = `<button class="enter ms-exam" data-href="/exam.html?course=${encodeURIComponent(p.id)}&milestone=${encodeURIComponent(m.id)}">参加大考 →</button>`
-    }
-    return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
-  }).join('')
-  const c = p.counts
-  // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（practice.html 内部再兜底判定）。
-  const practiceRow = p.hasPlan
-    ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="/practice.html?course=${encodeURIComponent(p.id)}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
-    : ''
-  // 未过审时给「重新审查」入口（wizard 以 audit-content 流程运行 `npm run agent -- audit-content <id>`）。
-  const auditBtn = p.contentReady === false
-    ? `<button class="enter go-audit" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=audit-content">重新审查 →</button>`
-    : ''
-  const resetBtn = `<button class="enter" id="reset-breaks" style="margin-left:8px">清理中断的摸底/考试断点</button>`
-  $panel.innerHTML = `
-    <button class="back" id="back">← 返回课程列表</button>
-    <h2 style="margin-top:12px">${TutorDom.esc(p.id)}${p.goal ? ` · ${TutorDom.esc(p.goal)}` : ''}</h2>
-    <div class="meta">指针：${p.current ? TutorDom.esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
-    <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
-    ${auditBtn}
-    ${resetBtn}
-    ${issuesSection}
-    ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="/wizard.html?course=${encodeURIComponent(p.id)}&resume=research">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
-    ${practiceRow}
-    ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
-    <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
-    <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>教研资料</th><th>实践</th></tr></thead>
-    <tbody>${nodeRows}</tbody></table>
-    ${curveSection}`
-  document.getElementById('back').addEventListener('click', renderList)
-  for (const btn of $panel.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit')) {
-    btn.addEventListener('click', () => { location.href = btn.dataset.href })
-  }
-  document.getElementById('reset-breaks').addEventListener('click', async () => {
-    if (!confirm('将归档并清理未完成的摸底/考试断点；掌握度、计划和已通过成绩不受影响。继续？')) return
-    try {
-      const [assessment, exam] = await Promise.all([
-        TutorRpc('resetAssessment', { id: p.id }), TutorRpc('discardAttempt', { id: p.id }),
-      ])
-      const lines = [
-        assessment.reset ? '已清理未完成的摸底进度。' : assessment.message,
-        exam.discarded ? '已放弃未完成的考试断点。' : exam.message,
-      ]
-      alert(lines.filter(Boolean).join('\n'))
-      renderStatus(p.id)
-    } catch (error) {
-      alert(`清理失败：${error.message}`)
-    }
-  })
-}
-
-const requestedCourse = new URLSearchParams(location.search).get('course')
-;(requestedCourse ? renderStatus(requestedCourse) : renderList()).catch((error) => {
-  $panel.innerHTML = `<div class="err">加载失败：${TutorDom.esc(error.message)}</div>`
+dashboard = TutorViews.home({
+  root: document.getElementById('panel'),
+  researchLive,
+  courseId: new URLSearchParams(location.search).get('course') ?? undefined,
 })
 </script>
 </body>

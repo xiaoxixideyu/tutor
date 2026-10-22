@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tutor 导师 · 工作区</title>
+<link rel="stylesheet" href="/ui/chat.css">
+<link rel="stylesheet" href="/ui/home.css">
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body class="app-body">
+<aside class="app-rail">
+  <div class="rail-head">
+    <div class="rail-title">tutor 导师</div>
+    <a href="/wizard.html" class="rail-action">＋ 开设新课程</a>
+    <a href="/index.html" class="rail-action">旧版看板</a>
+  </div>
+  <div class="rail-section">
+    <div class="rail-label">课程</div>
+    <div id="rail-courses" class="rail-list"></div>
+  </div>
+  <div class="rail-section">
+    <div class="rail-label">进行中</div>
+    <div id="rail-flows" class="rail-list"></div>
+  </div>
+  <div class="rail-foot">
+    <a href="/settings.html" class="rail-action">模型设置</a>
+  </div>
+</aside>
+<main class="app-main">
+  <header class="app-topbar">
+    <div class="topbar-title" id="app-title">工作区</div>
+    <div class="topbar-status" id="app-status"></div>
+    <a href="/settings.html" class="topbar-link">模型设置</a>
+  </header>
+  <div class="app-canvas" id="app-canvas"></div>
+</main>
+<script src="/md.js"></script>
+<script src="/flow-client.js"></script>
+<script src="/ui/dom.js"></script>
+<script src="/ui/rpc.js"></script>
+<script src="/ui/chat.js"></script>
+<script src="/ui/views/home.js"></script>
+<script src="/ui/views/learn.js"></script>
+<script src="/ui/views/exam.js"></script>
+<script src="/ui/app.js"></script>
+</body>
+</html>
