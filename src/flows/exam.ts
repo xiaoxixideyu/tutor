@@ -104,7 +104,7 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   }
   io.out(`里程碑大考：${milestone.id}「${milestone.title}」\n覆盖 ${milestone.nodes.length} 个知识点。\n`)
 
-  const chat = await deps.createChat()
+  const chat = await deps.createChat({ retryOnLength: false })
   if (attempt) {
     if (attempt.paper.milestone !== milestone.id) throw new Error(`已有未完成的 ${attempt.paper.milestone} 考试，请先继续该考试`)
     const invalid = paperValid(attempt.paper, milestone.nodes)

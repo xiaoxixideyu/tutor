@@ -57,7 +57,8 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
   }
 
   const practiceFile = store.read(courseId, 'practice') as PracticeTaskFile
-  const validPractice = validatePracticeTasks(practiceFile)
+  // 加载的是既有任务：允许旧任务里的 bash 专有写法（执行器优先用 bash，仍能跑），新生成的才强制 POSIX 写法。
+  const validPractice = validatePracticeTasks(practiceFile, undefined, { legacy: true })
   if (!validPractice.ok) throw new Error(validPractice.error)
   const tasks = practiceFile.tasks.filter((t) => t.node === node)
   if (tasks.length === 0) {

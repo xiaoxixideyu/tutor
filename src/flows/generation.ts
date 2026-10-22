@@ -19,11 +19,14 @@ export function trySchema(schema: (data: unknown) => unknown, data: unknown): Pa
 
 export async function generateTurn(chat: Pick<AgentChat, 'ask'>, prompt: string, parse: (text: string) => ParseResult | Promise<ParseResult>): Promise<unknown> {
   let request = prompt
+  let lastError = ''
   for (let attempt = 0; attempt < 4; attempt++) {
     const reply = await chat.ask(request)
     const parsed = await parse(reply)
     if (parsed.ok) return parsed.value
+    lastError = parsed.error
     request = `你输出的 JSON 校验失败：${parsed.error}。请修正后重新输出完整 JSON 代码块，不要输出其他内容。`
   }
-  throw new Error('多次生成仍未通过校验，中止')
+  // 收尾信息要带上最后一次的真实原因：只说"校验失败"无法定位是结构问题还是内容被拦截。
+  throw new Error(`多次生成仍未通过校验（最后一次：${lastError.slice(0, 400)}）`)
 }

@@ -90,7 +90,7 @@ async function startFreshLesson(
   const { store, io } = deps
   let draft = savedDraft
   if (!draft) {
-    const prepChat = await deps.createChat()
+    const prepChat = await deps.createChat({ retryOnLength: false })
     io.out(`正在备课：${node}…\n`)
     const cap = lessonStructureCap(profile.daily_minutes)
     draft = await withChatUsage(deps.costs, prepChat, 'prep', () => generateApproved<LessonDraft>(prepChat, buildPrepPrompt({ courseId: config.courseId, node, map, plan, profile, mastery, today: deps.today(), ...prepNotes }), (text) => {
@@ -109,7 +109,7 @@ async function startFreshLesson(
   // 新开课先做前置回忆热身（续讲/恢复不重复做），结果与记忆状态一起注入导师首消息。
   const warmup = previousTurn ? [] : await runWarmup(deps, config.courseId, node, map, mastery)
   const memory = memoryNotes(map, mastery, node, deps.today())
-  const teachChat = await deps.createChat()
+  const teachChat = await deps.createChat({ retryOnLength: false })
   const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources,
     ...(memory.length > 0 ? { memory } : {}), ...(warmup.length > 0 ? { warmup } : {}) })
   const turn = await withChatUsage(deps.costs, teachChat, 'teach', () => generateApprovedTeaching(teachChat, previousTurn

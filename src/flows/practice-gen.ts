@@ -52,42 +52,51 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
   io.out(`待生成实践任务的知识点 ${queue.length} 个（${queue.join('、')}）。\n`)
 
   const titles = new Map(map.nodes.map((n) => [n.id, n]))
+  const failed: { node: string; reason: string }[] = []
   for (let i = 0; i < queue.length; i += batchSize) {
     const batch = queue.slice(i, i + batchSize)
     for (const node of batch) {
       const issues = repairs.get(node)
       io.out(`\n正在${issues ? '修复旧任务' : '出题'}：${node}（${titles.get(node)?.title ?? node}）…\n`)
       let result: PracticeTaskFile
-      if (issues) {
-        const oldTasks = file.tasks.filter(task => task.node === node)
-        const repairChat = await deps.createChat({ isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 8192, retryOnLength: false })
-        result = await generateApproved<PracticeTaskFile>(repairChat, practiceRepairPrompt(oldTasks, profile, issues), text => {
-          const data = parseJsonBlock(text)
-          return data.ok ? applyPracticeEdits(oldTasks, data.value, node, deps.today()) : data
-        }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
-        await repairChat.flush()
-        recordChatTotal(deps.costs, repairChat, 'practice-repair')
-        printSessionTotal(repairChat, deps)
-      } else {
-        // 每个知识点独立会话：避免上一个知识点的任务 JSON、测试命令和提示词污染下一个。
-        const chat = await deps.createChat()
-        result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
-          courseId: config.courseId,
-          node,
-          title: titles.get(node)?.title,
-          summary: titles.get(node)?.summary,
-          goal: profileScope(profile),
-          background: profile.background,
-          style: profile.style,
-        }), (text) => {
-          const data = parseJsonBlock(text)
-          if (!data.ok) return data
-          // 校验单节点任务（node 不匹配、任务数超限等由 validatePracticeTasks 拦）
-          return validatePracticeTasks({ generated_at: deps.today(), tasks: (data.value as { tasks?: unknown[] }).tasks ?? data.value }, node)
-        }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
-        await chat.flush()
-        recordChatTotal(deps.costs, chat, 'practice-gen')
-        printSessionTotal(chat, deps)
+      try {
+        if (issues) {
+          const oldTasks = file.tasks.filter(task => task.node === node)
+          const repairChat = await deps.createChat({ isolatedSystemPrompt: PRACTICE_REPAIR_PERSONA, maxTokens: 8192, retryOnLength: false })
+          result = await generateApproved<PracticeTaskFile>(repairChat, practiceRepairPrompt(oldTasks, profile, issues), text => {
+            const data = parseJsonBlock(text)
+            return data.ok ? applyPracticeEdits(oldTasks, data.value, node, deps.today()) : data
+          }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+          await repairChat.flush()
+          recordChatTotal(deps.costs, repairChat, 'practice-repair')
+          printSessionTotal(repairChat, deps)
+        } else {
+          // 每个知识点独立会话：避免上一个知识点的任务 JSON、测试命令和提示词污染下一个。
+          const chat = await deps.createChat({ retryOnLength: false })
+          result = await generateApproved<PracticeTaskFile>(chat, buildPracticeGenPrompt({
+            courseId: config.courseId,
+            node,
+            title: titles.get(node)?.title,
+            summary: titles.get(node)?.summary,
+            goal: profileScope(profile),
+            background: profile.background,
+            style: profile.style,
+          }), (text) => {
+            const data = parseJsonBlock(text)
+            if (!data.ok) return data
+            // 校验单节点任务（node 不匹配、任务数超限等由 validatePracticeTasks 拦）
+            return validatePracticeTasks({ generated_at: deps.today(), tasks: (data.value as { tasks?: unknown[] }).tasks ?? data.value }, node)
+          }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
+          await chat.flush()
+          recordChatTotal(deps.costs, chat, 'practice-gen')
+          printSessionTotal(chat, deps)
+        }
+      } catch (error) {
+        // 单个知识点失败不该拖垮整批：其余知识点继续出题，失败节点记录下来重跑即可补齐。
+        const reason = error instanceof Error ? error.message : String(error)
+        failed.push({ node, reason })
+        io.err(`tutor: 知识点 "${node}" 的实践任务生成失败，已跳过（${reason.split('\n')[0]}）\n`)
+        continue
       }
       file.tasks = file.tasks.filter(task => task.node !== node)
       file.tasks.push(...result.tasks)
@@ -97,6 +106,13 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
     }
   }
 
-  io.out(`\n实践任务生成完成：覆盖 ${new Set(file.tasks.map((t) => t.node)).size} 个知识点。\n`)
+  const covered = new Set(file.tasks.map(t => t.node))
+  io.out(`\n实践任务生成完成：覆盖 ${covered.size} 个知识点。\n`)
+  if (failed.length > 0) {
+    io.out(`${failed.length} 个知识点未完成：${failed.map(item => item.node).join('、')}。\n`)
+    for (const item of failed) io.out(`- ${item.node}：${item.reason.split('\n')[0]}\n`)
+    io.out('重新运行 practice-gen 会只补齐未完成的知识点。\n')
+    throw new FlowExit(1)
+  }
   throw new FlowExit(0)
 }

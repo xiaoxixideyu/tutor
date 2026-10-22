@@ -229,7 +229,10 @@ function covered(value: unknown, ids: string[]): Record<string, unknown>[] {
   return items
 }
 function arithmetic(value: unknown): ArithmeticCheck[] {
-  if (!Array.isArray(value) || value.length > 100) throw new Error('arithmetic 必须是有界数组（无运算时为 []）')
+  // 形状不合规（缺失或不是数组）按"没有额外算式核查"处理：核查器把字段写错，不该让整份审查报废
+  // （实测模型偶发返回 arithmetic: {}，此前会直接判"审查未完成"并拦下本来合格的内容）。
+  if (!Array.isArray(value)) return []
+  if (value.length > 100) throw new Error('arithmetic 必须是有界数组（无运算时为 []）')
   return value.map(entry => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('arithmetic 每项必须是含 expression 和 result 的对象，不能只给算式字符串')
     const item = object(entry)

@@ -128,6 +128,22 @@ interface StreamChunk {
   error?: { message?: string; code?: string | number; type?: string }
 }
 
+// 推理控制按模型族生效：不同厂商用不同参数名表达"推理强度"。
+// - minimax-*：reasoning_effort（minimal < low < medium）。实测该渠道在"服务默认"下会把整份输出预算
+//   烧在推理上、正文为空（8192 输出里 8192 是 reasoning），长结构化任务必然失败；因此 default 映射到 low，
+//   保证默认设置就能拿到正文。
+// - deepseek-*：thinking:{type}（显式开关）。
+// - 其他模型：不加参数，跟随服务默认。
+export function thinkingRequestParams(model: string, thinking: 'default' | 'on' | 'off'): Record<string, unknown> {
+  if (/^minimax/i.test(model)) {
+    const effort = thinking === 'off' ? 'minimal' : thinking === 'on' ? 'medium' : 'low'
+    return { reasoning_effort: effort }
+  }
+  if (thinking === 'on') return { thinking: { type: 'enabled' } }
+  if (thinking === 'off') return { thinking: { type: 'disabled' } }
+  return {}
+}
+
 function buildRequestBody(options: LlmTransportOptions, request: LlmRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: options.model,
@@ -137,8 +153,7 @@ function buildRequestBody(options: LlmTransportOptions, request: LlmRequest): Re
   }
   if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens
   if (request.tools && request.tools.length > 0) body.tools = request.tools.map(tool => ({ type: 'function', function: tool }))
-  if (options.thinking === 'on') body.thinking = { type: 'enabled' }
-  else if (options.thinking === 'off') body.thinking = { type: 'disabled' }
+  Object.assign(body, thinkingRequestParams(options.model, options.thinking))
   return body
 }
 

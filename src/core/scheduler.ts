@@ -78,13 +78,18 @@ function clampStability(value: number): number {
 }
 
 // 逾期后成功回忆是更强的编码信号：超出 stability 的逾期越久奖励越大（封顶）。
+// 间隔扩张必须来自时间流逝：当天重复答对（考试未过 → 重学重测）不能按"已巩固"把间隔放大，
+// 否则连考几次满分就能把稳定性顶到上限、把复习推到一年之后（实测同日 6 次满分即 stability 365）。
 export function nextStability(previous: number | undefined, grade: ReviewGrade, elapsedDays?: number): number {
   if (grade === 'again') return clampStability((previous ?? INITIAL_STABILITY) * FAIL_DECAY)
   const base = (previous ?? INITIAL_STABILITY) * REVIEW_GRADE_MULTIPLIERS[grade]
   if (previous === undefined || previous <= 0 || elapsedDays === undefined) return clampStability(base)
+  // 已流逝的时间占上一轮间隔的比例：提前或当天复习只按这个比例给扩张，逾期不再另算（下面单独加成）。
+  const spacing = Math.min(1, Math.max(0, elapsedDays) / Math.max(1, previous))
+  const growth = 1 + (REVIEW_GRADE_MULTIPLIERS[grade] - 1) * spacing
   const overdue = elapsedDays / previous
   const bonus = 1 + Math.min(OVERDUE_BONUS_MAX, Math.max(0, overdue - 1) * OVERDUE_BONUS_PER_UNIT)
-  return clampStability(base * bonus)
+  return clampStability(previous * growth * bonus)
 }
 
 // 记忆状态卡：仅在存有实测锚点（last_touched_at）与稳定性时可得；旧数据返回 undefined，不猜。

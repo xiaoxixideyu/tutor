@@ -44,6 +44,57 @@ function setup(t: TestContext, reviewer: (content: ContentInput) => unknown = re
   return { root, gate, store, requests, records }
 }
 
+it('生成时输出为空或撞上限，按紧凑模式重生成一次并通过', async t => {
+  const { gate } = setup(t)
+  // 推理型模型可能把单次输出预算烧在推理里：正文为空或直接撞上限，两种都要能自愈。
+  for (const failure of [() => { throw new Error('模型回合结束但没有返回正文') }, () => { throw new OutputLimitError() }]) {
+    const requests: string[] = []
+    let calls = 0
+    const result = await generateApproved<QuestionBank>({ ask: async prompt => {
+      requests.push(prompt)
+      if (calls++ === 0) failure()
+      return json(bank)
+    } }, '生成该节点题库', parseJsonBlock, gate, value => bankContent(value, 'die', profile, map))
+    assert.equal(result.die.length, 1)
+    assert.equal(calls, 2)
+    assert.match(requests[1], /紧凑模式/)
+    assert.match(requests[1], /只给最终结果/)
+  }
+})
+
+it('紧凑重试仍失败时原样抛出错误，不把失败伪装成通过', async t => {
+  const { gate } = setup(t)
+  let calls = 0
+  await assert.rejects(generateApproved<QuestionBank>({ ask: async () => { calls++; throw new OutputLimitError() } },
+    '生成该节点题库', parseJsonBlock, gate, value => bankContent(value, 'die', profile, map)), /输出达到 token 上限/)
+  assert.equal(calls, 2)
+})
+
+it('Chat 层包装过的上限错误同样触发紧凑重试', async t => {
+  const { gate } = setup(t)
+  const requests: string[] = []
+  let calls = 0
+  // Chat 内部重试耗尽后抛的是包装错误（消息里保留原始原因），必须与直接抛出的上限错误同等对待。
+  await generateApproved<QuestionBank>({ ask: async prompt => {
+    requests.push(prompt)
+    if (calls++ === 0) throw new Error('模型回合失败——模型输出达到 token 上限，请缩小本次任务后重试')
+    return json(bank)
+  } }, '生成该节点题库', parseJsonBlock, gate, value => bankContent(value, 'die', profile, map))
+  assert.equal(calls, 2)
+  assert.match(requests[1], /紧凑模式/)
+})
+
+it('讲授回复为空时压缩后重讲一次；仍为空才中止', async t => {
+  const { gate } = setup(t)
+  const requests: string[] = []
+  let calls = 0
+  const chat = mockChat(prompt => { requests.push(prompt); return calls++ === 0 ? '' : '一次掷一枚骰子' }, 'teacher')
+  const turn = await generateApprovedTeaching(chat, '开始讲课', gate, { node: 'die', map, profile, learnerMessage: '开始', previousReply: '' })
+  assert.equal(turn.reply, '一次掷一枚骰子')
+  assert.equal(calls, 2)
+  assert.match(requests[1], /控制在 800 字以内/)
+})
+
 it('39 节地图逐点补充资料时只检查变化单元，完整批准仍依赖原始证据', async t => {
   const { gate, store, requests, records } = setup(t)
   const large: KnowledgeMap = { verified: false, nodes: Array.from({ length: 39 }, (_, i) => ({ id: 'n' + i, title: '知识点' + i, summary: '原始摘要' })), edges: [] }
@@ -410,6 +461,18 @@ it('反例检查显式要求算式和结果，裸算式与回显输入仍不能�
   const claim = request.claims[0]
   assert.throws(() => parseFactChecks({ claims: [{ id: claim.id, verdict: 'pass', explanation: '3-1=2', arithmetic: ['3-1'] }] }, [claim.id]), /expression 和 result/)
   assert.throws(() => parseFactChecks({ claims: request.claims }, [claim.id]), /结论非法/)
+})
+
+it('核查器把 arithmetic 写错形状时不报废整份审查，数组内的坏项仍然拒绝', async t => {
+  const { gate } = setup(t)
+  const claimId = 'a0'
+  // 形状不合规（不是数组）按"没有额外算式核查"处理：与 reviewer 路径的省略容错一致
+  const parsed = parseFactChecks({ claims: [{ id: claimId, verdict: 'pass', explanation: '核查说明', arithmetic: {} }] }, [claimId])
+  assert.equal(parsed[0].arithmetic.length, 0)
+  assert.equal(parsed[0].verdict, 'pass')
+  // 数组里给了就仍要逐项校验，不能借此绕过复算
+  assert.throws(() => parseFactChecks({ claims: [{ id: claimId, verdict: 'pass', explanation: '核查说明', arithmetic: ['3-1'] }] }, [claimId]), /expression 和 result/)
+  assert.throws(() => parseFactChecks({ claims: [{ id: claimId, verdict: 'pass', explanation: '核查说明', arithmetic: [{ expression: '3-1' }] }] }, [claimId]), /result/)
 })
 
 it('核查回显输入而不给结论时重问一次，不让整份审查报废', async t => {

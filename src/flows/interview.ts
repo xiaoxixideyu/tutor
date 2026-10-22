@@ -11,7 +11,7 @@ export const MAX_PROFILE_REPAIRS = 3
 export async function runInterview(deps: FlowDeps, config: { courseId: string; maxTurns?: number }): Promise<void> {
   const maxTurns = config.maxTurns ?? 24
   const { store, io } = deps
-  const chat = await deps.createChat()
+  const chat = await deps.createChat({ retryOnLength: false })
 
   let reply = await chat.ask(START_MESSAGE)
   let turns = 0

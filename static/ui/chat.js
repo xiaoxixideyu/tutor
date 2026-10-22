@@ -4,7 +4,8 @@
   const COST_RE = /^(本回合|会话累计)/
   // 引擎内部运行提示（限流等待、内容审查、备课、成本等）——学员视图不显示为教学气泡，只在一条安静的状态条里显示当前进度。
   const OP_OUT_RE = /^(正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|审查开销[ 　]|复用同一内容的|正在核对|[^\n]{0,12}核查中[：:]|资料审查达到|正在汇总本知识点|正在核对本知识点)/
-  const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度)/
+  // 运行时排队/限速提示也是内部提示：进状态条，不进聊天记录。
+  const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度|按共享队列每分钟)/
 
   function cleanOp(text) {
     return String(text ?? '').replace(/^tutor:\s*/, '').replace(/\s*；已保存的教研进度保留。?\s*$/, '').trim()
@@ -234,7 +235,10 @@
       }
       if (OP_OUT_RE.test(trimmed)) { this.noteOp(trimmed); return }
       if (COST_RE.test(line)) {
-        this.closeBubble()
+        // 本轮以成本行收尾时，讲解气泡在这里闭合：其中的选项仍要转成可点按钮，
+        // 否则"当前这道题"只剩纯文本，学员没有可点的入口。
+        const closed = this.closeBubble()
+        if (closed) this.maybeChips(closed)
         this.log.appendChild(this.colorizeCost(line))
         return
       }

@@ -77,7 +77,7 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   })
   io.out(`教学路径：${path.length} 个知识点待学。正在设计里程碑…\n`)
 
-  const chat = await deps.createChat()
+  const chat = await deps.createChat({ retryOnLength: false })
   const prompt = [
     '任务：为下列教学路径设计里程碑。',
     `学员原始档案（目标、范围和排除项优先）：${JSON.stringify(profile)}`,

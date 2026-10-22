@@ -11,6 +11,7 @@ import { recordChatTotal } from './cost-ledger.ts'
 import { mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
+import { capKnowledgeMap, mapNodeBudget, type MapBudget } from './map-budget.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 
@@ -19,7 +20,7 @@ interface BatchResult {
   resources?: { node: string; title: string; url?: string; note?: string; material?: string }[]
 }
 
-function skeletonPrompt(profile: Profile): string {
+function skeletonPrompt(profile: Profile, budget: MapBudget): string {
   const minutes = profile.daily_minutes ?? 30
   return [
     '任务：为课程构思知识地图骨架（暂不联网）。',
@@ -34,9 +35,9 @@ function skeletonPrompt(profile: Profile): string {
     '在目标范围内，覆盖面宽的主题再拆成多个有依赖关系的细知识点；每节课内紧密相关的讲解要点保留在同一节点。',
     '反例：用一个"基础"节点囊括 环境/语法/控制流/函数/模块——应拆成各自独立、各一节课的知识点。',
     '',
-    '节点数量由学习目标与课时决定，没有最低数量：明确两节微课就输出两个节点，不把一节课的各个讲解要点拆成多节课。输出 JSON（```json 代码块）：',
-    '{"nodes": [{"id": "英文slug", "title": "中文标题", "summary": "一句话（按你自身知识，之后会联网验证）", "verified": false}], "edges": [["知识点", "前置知识点"]]}',
-    '除该 JSON 外不要输出其他内容。',
+    `节点数量由学习目标与课时决定，并控制在 ${budget.min}–${budget.max} 个之间（单次输出的体量上限，超出会被截断）：明确两节微课就输出两个节点，不把一节课的各个讲解要点拆成多节课。输出 JSON（\`\`\`json 代码块）：`,
+    '{"nodes": [{"id": "英文slug", "title": "中文标题", "summary": "一句话（不超过 40 字，按你自身知识，之后会联网验证）", "verified": false}], "edges": [["知识点", "前置知识点"]]}',
+    '除该 JSON 外不要输出其他内容：不要写解释、前言、推理过程或总结。',
   ].join('\n')
 }
 
@@ -167,26 +168,29 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
   const gate = createContentGate(deps, config.courseId)
   const progress = new ResearchProgressStore(store.root, config.courseId)
   // 骨架无须联网；每个知识点另建会话，避免累积整门课的抓取正文。
-  const chat = await deps.createChat({ tools: 'none' })
+  const chat = await deps.createChat({ tools: 'none', retryOnLength: false })
 
   let map: KnowledgeMap
+  const budget = mapNodeBudget(profile)
   if (store.has(config.courseId, 'knowledge-map')) {
     map = enforceSourceVerification(store.read(config.courseId, 'knowledge-map') as KnowledgeMap)
     io.out(`已有知识地图（${map.nodes.length} 个知识点），继续教研。\n`)
   } else {
     io.out('正在构思知识地图骨架…\n')
-    map = await generateApproved<KnowledgeMap>(chat, skeletonPrompt(profile), (text) => {
+    map = await generateApproved<KnowledgeMap>(chat, skeletonPrompt(profile, budget), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       const schemaResult = trySchema(KnowledgeMapSchema, data.value)
       if (!schemaResult.ok) return schemaResult
       // 骨架必须自洽：依赖与资料指向存在的知识点、依赖不成环。
+      const capped = capKnowledgeMap(schemaResult.value as KnowledgeMap, budget)
+      if (capped.truncated > 0) io.out(`知识地图超出体量上限（${budget.max} 个知识点），已保留前 ${budget.max} 个。\n`)
       try {
-        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+        assertKnowledgeMap(capped.map)
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
       }
-      return schemaResult
+      return { ok: true as const, value: capped.map }
     }, gate, value => mapContent(value, profile), { out: io.out })
     map.researched_at = deps.today()
     store.write(config.courseId, 'knowledge-map', map)
@@ -199,19 +203,20 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
     if (config.nodeId || map.nodes.some(node => progress.status(map, profile, node.id) !== 'pending')) {
       throw new Error(`已有课程地图未通过审查；单点恢复或已有教研进度时不自动重写整张地图，原有节点与资料已保留。请先核查并修复具体问题。记录：${previousReview.evidenceFile}`)
     }
-    map = await generateApproved<KnowledgeMap>(chat, [skeletonPrompt(profile),
+    map = await generateApproved<KnowledgeMap>(chat, [skeletonPrompt(profile, budget),
       '修复已有地图，保留仍在课程范围内的节点 id；返回完整地图并修正摘要与资料。',
       JSON.stringify(map), `独立审查发现：${previousReview.issues.join('\n')}`].join('\n'), text => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       const schemaResult = trySchema(KnowledgeMapSchema, data.value)
       if (!schemaResult.ok) return schemaResult
+      const capped = capKnowledgeMap(schemaResult.value as KnowledgeMap, budget)
       try {
-        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+        assertKnowledgeMap(capped.map)
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
       }
-      return schemaResult
+      return { ok: true as const, value: capped.map }
     }, gate, value => mapContent(value, profile), { out: io.out })
     store.write(config.courseId, 'knowledge-map', map)
   }

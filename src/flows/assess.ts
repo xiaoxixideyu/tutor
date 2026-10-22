@@ -7,10 +7,11 @@ import { recordChatTotal } from './cost-ledger.ts'
 import { bankContent, mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
+import { capKnowledgeMap, mapNodeBudget, type MapBudget } from './map-budget.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
 
-function mapPrompt(profile: Profile): string {
+export function mapPrompt(profile: Profile, budget: MapBudget): string {
   return [
     '任务 1/2：生成知识地图。',
     '',
@@ -22,9 +23,10 @@ function mapPrompt(profile: Profile): string {
     '',
     '请输出知识地图 JSON（```json 代码块）：',
     '- verified: false（未联网验证）',
-    '- nodes: 知识点对象 {id, title, summary}，id 用小写英文连字符（如 goroutines、channels），按学习进阶排列；每节点为一节课，数量遵守学员目标范围与明确课时，没有最低数量，不加入已排除或已会的内容',
+    `- nodes: 知识点对象 {id, title, summary}，id 用小写英文连字符（如 goroutines、channels），按学习进阶排列；每节点为一节课；节点总数控制在 ${budget.min}–${budget.max} 个之间，覆盖目标范围即可，不要为凑数拆分；每个 summary 不超过 40 字`,
     '- edges: 依赖对数组，格式 [知识点, 前置知识点]',
     '- resources: 空数组',
+    '- 除该 JSON 外不要输出任何内容：不要写解释、前言、推理过程或总结',
   ].join('\n')
 }
 
@@ -131,20 +133,23 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
   const profile = store.read(config.courseId, 'profile') as Profile
   const gate = createContentGate(deps, config.courseId)
   if (!store.has(config.courseId, 'knowledge-map')) {
-    const chat = await deps.createChat()
+    const chat = await deps.createChat({ retryOnLength: false })
+    const budget = mapNodeBudget(profile)
     io.out('正在生成知识地图（可稍后用 research 联网升级为带来源版本）…\n')
-    const mapValue = await generateApproved<KnowledgeMap>(chat, mapPrompt(profile), (text) => {
+    const mapValue = await generateApproved<KnowledgeMap>(chat, mapPrompt(profile, budget), (text) => {
       const data = parseJsonBlock(text)
       if (!data.ok) return data
       const schemaResult = trySchema(KnowledgeMapSchema, data.value)
       if (!schemaResult.ok) return schemaResult
-      // 地图必须自洽（依赖与资料指向存在的知识点、依赖不成环），否则在生成环节就回炉。
+      // 超体量的地图先按学习进阶截断，再做自洽校验：审查与落盘看到的是同一份最终地图。
+      const capped = capKnowledgeMap(schemaResult.value as KnowledgeMap, budget)
+      if (capped.truncated > 0) io.out(`知识地图超出体量上限（${budget.max} 个知识点），已保留前 ${budget.max} 个。\n`)
       try {
-        assertKnowledgeMap(schemaResult.value as KnowledgeMap)
+        assertKnowledgeMap(capped.map)
       } catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
       }
-      return schemaResult
+      return { ok: true as const, value: capped.map }
     }, gate, value => mapContent(value, profile))
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
@@ -164,7 +169,7 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
     if (!node) throw new Error(`摸底进度中的知识点 "${nodeId}" 不在当前课程地图中，原作答已保留`)
     if (!validateBank(bank, [node.id]) && (await gate.review(bankContent(bank, node.id, profile, map))).approved) return
     io.out(`正在生成摸底题库：${node.id}（每点 3 题，完成即保存）…\n`)
-    const bankChat = await deps.createChat()
+    const bankChat = await deps.createChat({ retryOnLength: false })
     const nodeMap = { ...map, nodes: [node], edges: [] }
     const bankValue = await generateApproved<QuestionBank>(bankChat, bankPrompt(nodeMap, profile), (text) => {
       const data = parseJsonBlock(text)

@@ -252,6 +252,22 @@ export function createContentGate(deps: FlowDeps, courseId: string): ContentGate
   })
 }
 
+// 推理型模型在长结构化任务上可能把单次输出预算烧在推理里、正文为空（reasoning 与正文共用同一个上限）。
+// 这类失败不是内容问题，靠"重试一次"救不回来，必须显式要求压缩输出：只给最终结果、不写过程、字段与条目精简。
+const COMPACT_RETRY_HINT = [
+  '【紧凑模式】上一次输出为空或超出单次输出上限，请压缩后重新输出：',
+  '- 只给最终结果，不要任何解释、前言、推理过程、复盘或总结；',
+  '- 字段值精简到能表达意思的最小长度；条目总数取最少必要数量；',
+  '- 严格沿用上一次要求的 JSON 结构与字段名。',
+].join('\n')
+
+function isCompactableFailure(error: unknown): boolean {
+  if (error instanceof OutputLimitError) return true
+  if (!(error instanceof Error)) return false
+  // Chat 层把多次重试后的最后一次错误包装成普通 Error（消息里保留原始原因），两种都要认。
+  return error.message.includes('没有返回正文') || error.message.includes('达到 token 上限')
+}
+
 export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial<Pick<AgentChat, 'flush'>>, prompt: string, parse: (text: string) => ParseResult | Promise<ParseResult>,
   gate: ContentGate, content: (value: T) => ContentInput, options: { reviewLimitRepair?: string; out?: (text: string) => void } = {}): Promise<T> {
   const rejected = new Map<string, ContentVerdict>()
@@ -268,36 +284,51 @@ export async function generateApproved<T>(chat: Pick<AgentChat, 'ask'> & Partial
     }
     return chat.ask(request)
   } }
+  const parseAndGate = async (text: string): Promise<ParseResult> => {
+    const result = await parse(text)
+    if (!result.ok) return result
+    const input = content(result.value as T)
+    const key = contentKey(input)
+    if (reviewLimits.has(key)) return { ok: false, error: reviewLimits.get(key)! }
+    gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'pending' })
+    let verdict: ContentVerdict
+    try { verdict = rejected.get(key) ?? await gate.review(input) }
+    catch (error) {
+      // 仅教研可缩短资料重新生成，不能把审查失败改成通过；服务/认证错误仍立即传播。
+      if (!options.reviewLimitRepair || input.kind !== 'map' || !(error instanceof ContentReviewError)
+        || !(error.cause instanceof OutputLimitError || error.cause instanceof TurnTimeoutError)) throw error
+      const issue = `${options.reviewLimitRepair}\n${error.message}`
+      reviewLimits.set(key, issue)
+      gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'review-limit', issues: [issue] })
+      options.out?.('资料审查达到时限或输出上限，正在精简本知识点资料后重新核查…\n')
+      return { ok: false, error: issue }
+    }
+    if (!verdict.approved) {
+      rejected.set(key, verdict)
+      gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'rejected', issues: verdict.issues })
+    }
+    return verdict.approved ? result : { ok: false, error: `内容准入审查失败，请修复以下问题，仍须遵守原始任务与 JSON 结构：\n${verdict.issues.join('\n')}\n修复要求：逐条对应上面的问题改写；被判定为不成立或无法核实的说法，直接删除或换成有把握的表述，不要换个说法重复同一断言；涉及数值、算式或代码输出的，必须按题目重新算一遍再写，不能沿用原值或只改措辞；不要为了保留内容而重新组织原句。` }
+  }
   try {
-    const value = await generateTurn(generation, prompt, async text => {
-      const result = await parse(text)
-      if (!result.ok) return result
-      const input = content(result.value as T)
-      const key = contentKey(input)
-      if (reviewLimits.has(key)) return { ok: false, error: reviewLimits.get(key)! }
-      gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'pending' })
-      let verdict: ContentVerdict
-      try { verdict = rejected.get(key) ?? await gate.review(input) }
-      catch (error) {
-        // 仅教研可缩短资料重新生成，不能把审查失败改成通过；服务/认证错误仍立即传播。
-        if (!options.reviewLimitRepair || input.kind !== 'map' || !(error instanceof ContentReviewError)
-          || !(error.cause instanceof OutputLimitError || error.cause instanceof TurnTimeoutError)) throw error
-        const issue = `${options.reviewLimitRepair}\n${error.message}`
-        reviewLimits.set(key, issue)
-        gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'review-limit', issues: [issue] })
-        options.out?.('资料审查达到时限或输出上限，正在精简本知识点资料后重新核查…\n')
-        return { ok: false, error: issue }
-      }
-      if (!verdict.approved) {
-        rejected.set(key, verdict)
-        gate.store.saveCandidate(prompt, { reply: text, inputKey: key, status: 'rejected', issues: verdict.issues })
-      }
-      return verdict.approved ? result : { ok: false, error: `内容准入审查失败，请修复以下问题，仍须遵守原始任务与 JSON 结构：\n${verdict.issues.join('\n')}` }
-    }) as T
+    let value: T
+    try {
+      value = await generateTurn(generation, prompt, parseAndGate) as T
+    } catch (error) {
+      // 输出为空或撞上限：换紧凑提示重生成一次（内容问题仍按原逻辑处理）。
+      if (!isCompactableFailure(error)) throw error
+      options.out?.('模型输出为空或超出单次上限，正在按紧凑模式重新生成…\n')
+      replayCandidate = false
+      seedRepair = false
+      value = await generateTurn({ ask: (request: string) => chat.ask(`${request}\n${COMPACT_RETRY_HINT}`) },
+        prompt, parseAndGate) as T
+    }
     gate.store.clearCandidate(prompt)
     return value
   } finally { await chat.flush?.() }
 }
+
+// 讲授正文是纯文本（不是 JSON），紧凑提示只压长度、不改结构。
+const COMPACT_TEACHING_HINT = '请直接对学员开讲，控制在 800 字以内：只保留讲解要点与必要的例子，不要写开场铺垫、复盘、总结清单或任何推理过程。'
 
 export async function generateApprovedTeaching(chat: AgentChat, prompt: string, gate: ContentGate,
   scope: { node: string; profile: Profile; map: KnowledgeMap; learnerMessage: string; previousReply: string }): Promise<ApprovedTeachingTurn> {
@@ -305,8 +336,18 @@ export async function generateApprovedTeaching(chat: AgentChat, prompt: string, 
   const seen = new Set<string>()
   for (let attempt = 0; attempt < 3; attempt++) {
     let reply: string
-    try { reply = await chat.ask(request) } finally { await chat.flush() }
-    if (!reply.trim() || seen.has(reply)) throw new Error('讲授回复为空或未按审查意见修复，未展示内容')
+    try {
+      reply = await chat.ask(request)
+    } catch (error) {
+      // 推理型模型可能把输出预算烧在推理里、正文为空或超上限：压缩后重试一次。
+      if (attempt === 0 && isCompactableFailure(error)) { request = `${prompt}\n${COMPACT_TEACHING_HINT}`; continue }
+      throw error
+    } finally { await chat.flush() }
+    if (!reply.trim()) {
+      if (attempt === 0) { request = `${prompt}\n${COMPACT_TEACHING_HINT}`; continue }
+      throw new Error('讲授回复为空或未按审查意见修复，未展示内容')
+    }
+    if (seen.has(reply)) throw new Error('讲授回复为空或未按审查意见修复，未展示内容')
     seen.add(reply)
     const turn = { reply, learnerMessage: scope.learnerMessage, previousReply: scope.previousReply }
     const verdict = await gate.review(teachingContent(turn, scope.node, scope.profile, scope.map))

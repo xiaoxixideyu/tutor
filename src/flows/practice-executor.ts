@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import type { PracticeTask } from '../core/schema.ts'
@@ -58,10 +59,25 @@ function environmentFor(workdir: string): NodeJS.ProcessEnv {
   }
 }
 
+// 测试命令用 bash 执行（有 bash 时）而不是 /bin/sh：macOS 的 /bin/sh 是 bash 的 POSIX 模式，
+// 不支持进程替换 <(...) 等写法，模型写出的命令会直接语法错误、学员永远看不到通过的测试。
+// 没有 bash 的环境退回 /bin/sh（此时靠"POSIX 兼容写法"的要求兜底）。
+let shell: string | undefined
+function testShell(): string {
+  if (shell) return shell
+  for (const candidate of ['/bin/bash', '/usr/bin/bash', '/bin/sh']) {
+    try {
+      if (existsSync(candidate)) { shell = candidate; return shell }
+    } catch { /* 继续找下一个 */ }
+  }
+  shell = '/bin/sh'
+  return shell
+}
+
 function runOne(command: string, workdir: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
   if (signal?.aborted) return Promise.resolve({ exitCode: -1, output: '（已中止）', timedOut: false })
   return new Promise((resolve) => {
-    const child = spawn('/bin/sh', ['-c', command], { cwd: workdir, env: environmentFor(workdir), detached: true })
+    const child = spawn(testShell(), ['-c', command], { cwd: workdir, env: environmentFor(workdir), detached: true })
     activeChildren.add(child)
     let output = ''
     let truncated = false

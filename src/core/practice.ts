@@ -47,8 +47,32 @@ export interface PracticeGenInput {
   style?: string
 }
 
-export function validatePracticeTasks(file: unknown, expectedNode?: string): { ok: true; value: PracticeTaskFile } | { ok: false; error: string } {
-  let value: PracticeTaskFile
+// bash 专有语法检测：测试命令可能在没有 bash 的环境用 sh 执行，这些写法会直接语法错误，
+// 学员看到的只是"测试失败"，看不出是命令本身写错了。
+const BASH_ONLY: { pattern: RegExp; label: string }[] = [
+  { pattern: /<\(/, label: '进程替换 <(...)' },
+  { pattern: /\[\[/, label: '双中括号 [[ ]]' },
+  { pattern: /\bmapfile\b|\breadarray\b/, label: 'mapfile/readarray' },
+  { pattern: /\blocal\s+-a\b/, label: '数组声明 local -a' },
+  { pattern: /\$\{[^}]*,,/, label: '大小写展开 ${var,,}' },
+  { pattern: /\bfunction\s+\w+\s*\(\)/, label: 'function 关键字写法' },
+]
+
+export function bashOnlySyntax(command: string): string | undefined {
+  for (const item of BASH_ONLY) if (item.pattern.test(command)) return item.label
+  return undefined
+}
+
+// 命令把被测程序的输出喂给"不打印"的消费者（diff/cmp/grep -q…）时，标准输出里就没有程序输出，
+// expect_output_contains 永远无法满足——学员无论怎么改代码都过不了。生成期就要拦住。
+const HIDES_PROGRAM_OUTPUT = /\|\s*(diff|cmp|wc|md5|sum|shasum|jq\s+-e|grep\s+-q|grep\s+-c)\b/
+export function outputContractUnsatisfiable(command: string, needles: string[] | undefined): boolean {
+  if (!needles?.length) return false
+  if (/\btee\b/.test(command)) return false
+  return HIDES_PROGRAM_OUTPUT.test(command)
+}
+
+export function validatePracticeTasks(file: unknown, expectedNode?: string, options: { legacy?: boolean } = {}): { ok: true; value: PracticeTaskFile } | { ok: false; error: string } {  let value: PracticeTaskFile
   try {
     value = PracticeTaskFileSchema(file) as PracticeTaskFile
   } catch (error) {
@@ -74,6 +98,12 @@ export function validatePracticeTasks(file: unknown, expectedNode?: string): { o
     for (const test of task.tests) {
       if (test.name.trim() === '') return { ok: false, error: `任务 "${task.id}" 存在空测试名` }
       if (test.command.trim() === '') return { ok: false, error: `任务 "${task.id}" 存在空测试命令` }
+      const shellIssue = bashOnlySyntax(test.command)
+      // 旧任务（生成于该规则之前）不因此失效：执行器现在优先用 bash，这类命令仍能跑。
+      if (shellIssue && !options.legacy) return { ok: false, error: `任务 "${task.id}" 的测试命令 "${test.name}" 用了 ${shellIssue}：测试命令必须用 POSIX sh 兼容写法，否则在只有 sh 的环境会直接语法错误` }
+      if (!options.legacy && outputContractUnsatisfiable(test.command, test.expect_output_contains)) {
+        return { ok: false, error: `任务 "${task.id}" 的测试命令 "${test.name}" 把程序输出管道给了不打印的命令，却又要求输出包含 ${(test.expect_output_contains ?? []).join('、')}：学员无论怎么改代码都过不了。命令必须把被测程序的输出打印到标准输出（如 go run . | tee out.txt 后再单独比较），或去掉 expect_output_contains` }
+      }
       if ((test.expect_output_contains ?? []).some(needle => typeof needle !== 'string' || needle.trim() === '')) {
         return { ok: false, error: `任务 "${task.id}" 的 expect_output_contains 不能包含空字符串` }
       }
@@ -96,6 +126,16 @@ export function judgeTest(result: TestResult, test: PracticeTest): boolean {
   return needles.every((needle) => result.output.includes(needle))
 }
 
+// 命令本身跑通了（退出码符合预期），但输出里没有约定的片段：断言已通过，缺的是"输出契约"，
+// 属于任务定义问题（命令把输出管道进了 diff 之类），不能算学员写错。
+export function testOutputContractBroken(result: TestResult, test: PracticeTest): boolean {
+  if (result.timedOut) return false
+  if (result.exitCode !== (test.expect_exit ?? 0)) return false
+  const needles = test.expect_output_contains ?? []
+  if (!needles.length) return false
+  return needles.some(needle => !result.output.includes(needle))
+}
+
 export interface PracticeJudgeItem {
   name: string
   passed: boolean
@@ -113,9 +153,11 @@ export function judgePracticeTask(
     const parts: string[] = [`exit=${result.exitCode}`]
     if (result.timedOut) parts.push('超时')
     if (!passed && test.expect_exit !== undefined && result.exitCode !== test.expect_exit) parts.push(`期望 exit=${test.expect_exit}`)
-    if (!passed && (test.expect_output_contains ?? []).some((needle) => !result.output.includes(needle))) {
+    if (!passed && (test.expect_output_contains ?? []).some((needle => !result.output.includes(needle)))) {
       const missing = (test.expect_output_contains ?? []).filter((needle) => !result.output.includes(needle))
       parts.push(`输出缺少：${missing.join('、')}`)
+      // 命令已按预期退出却没有输出约定片段：断言其实通过了，这是任务定义问题，要说清楚。
+      if (testOutputContractBroken(result, test)) parts.push('（命令已通过，是任务定义的输出校验与命令不匹配）')
     }
     return { name: test.name, passed, detail: parts.join('，') }
   })
@@ -160,6 +202,7 @@ export function buildPracticeGenPrompt(input: PracticeGenInput): string {
     '- 内容紧凑：任务说明不超过 400 汉字，提示每条不超过 80 汉字；README 只保留必要操作，不重复整份题干；本次只出 1 个任务',
     '- starter_files 提供必要初始文件（如 README 说明）；不要提供答案文件',
     '- tests 为规则自动执行的 shell 命令（在工作目录逐条执行）：1-3 条，命令必须确定性、无网络依赖、无交互（不等待 stdin）；首条验证文件/模块存在，末条验证行为正确',
+    '- 测试命令用 POSIX sh 兼容写法：不要用进程替换 <(...)、[[ ]]、数组、mapfile/readarray、local -a 等 bash 专有语法（有些环境没有 bash，退回 sh 时会直接语法错误）；需要比较完整输出时请把期望值写进文件再用 diff -u，或用 printf 管道加 grep -qxF',
     '- expect_output_contains 只选稳定子串（如程序打印的固定文案），不要依赖编译器本地化提示或时间戳',
     '- 完整答案和数值必须在命令内完整比较：使用整行匹配（如 grep -qxF）、严格解析或数值比较；不能让错误分母、额外数字或集合多项只因包含正确答案的子串而通过。expect_output_contains 只用于检查成功标记，不单独证明完整数值正确；命令须保留被测程序失败的退出状态',
     '- 除 go 标准库外不引入第三方依赖（测试在 GOPROXY=off 下运行）',

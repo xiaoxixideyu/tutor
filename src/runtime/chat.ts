@@ -29,6 +29,8 @@ export interface CreateChatOptions {
   deadlineMs?: number
   maxWaitMs?: number
   maxTokens?: number
+  // 撞上输出上限后是否用同一提示重试：默认否（同样的提示会同样被截断，只是白烧一份预算）；
+  // 流程层的"紧凑重试"会换提示重来，比原样重试更有效。
   retryOnLength?: boolean
   onProgress?: (message: string) => void
 }

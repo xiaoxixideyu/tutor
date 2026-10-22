@@ -11,6 +11,8 @@ import {
   judgePracticeTask,
   judgeTest,
   validatePracticeTasks,
+  bashOnlySyntax,
+  outputContractUnsatisfiable,
 } from '../src/core/practice.ts'
 import type { PracticeTask } from '../src/core/schema.ts'
 
@@ -198,4 +200,43 @@ describe('store round-trip', () => {
     // 但 PracticeTaskFileSchema 会拒绝缺 generated_at 的数据
     assert.throws(() => store.write('demo', 'practice', { tasks: validFile.tasks }), /校验失败/)
   })
+})
+
+it('实践测试命令里的 bash 专有语法在出题阶段就被拦下', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-practice-shell-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const task = (command: string) => ({
+    generated_at: '2026-10-22',
+    tasks: [{ id: 'n-1', node: 'n', title: '任务', prompt: '做题', starter_files: [],
+      tests: [{ name: '检查输出', command, expect_exit: 0, expect_output_contains: [] }], hints: [] }],
+  })
+  // 进程替换在只有 sh 的环境会直接语法错误，学员只会看到"测试失败"
+  const blocked = validatePracticeTasks(task("diff -u - <(printf 'a\\n')"), 'n')
+  assert.equal(blocked.ok, false)
+  assert.match(blocked.ok ? '' : blocked.error, /POSIX sh/)
+  assert.equal(validatePracticeTasks(task("grep -qxF 'a' out.txt"), 'n').ok, true)
+  // bash 专有语法检测本身
+  assert.equal(bashOnlySyntax("diff -u - <(printf 'a\\n')"), '进程替换 <(...)')
+  assert.equal(bashOnlySyntax("if [[ -f x ]]; then echo 1; fi"), '双中括号 [[ ]]')
+  assert.equal(bashOnlySyntax("grep -qxF 'a' out.txt"), undefined)
+})
+
+it('输出片段要求与"把输出喂给不打印命令"的测试命令互相矛盾时，出题阶段就拦下', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-practice-output-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const task = (command: string, needles: string[]) => ({
+    generated_at: '2026-10-22',
+    tasks: [{ id: 'n-1', node: 'n', title: '任务', prompt: '做题', starter_files: [],
+      tests: [{ name: '核对输出', command, expect_exit: 0, expect_output_contains: needles }], hints: [] }],
+  })
+  // 输出被 diff 吃掉，标准输出里永远没有"任务完成"：学员改代码也过不了
+  const blocked = validatePracticeTasks(task("actual=$(go run .)\nprintf '%s\\n' \"$actual\" | diff -u out.txt expected.txt", ['任务完成']), 'n')
+  assert.equal(blocked.ok, false)
+  assert.match(blocked.ok ? '' : blocked.error, /无论怎么改代码都过不了|输出包含/)
+  // 用 tee 把输出打出来就没问题
+  assert.equal(validatePracticeTasks(task("go run . | tee out.txt", ['任务完成']), 'n').ok, true)
+  // 不声明输出片段时不受影响
+  assert.equal(validatePracticeTasks(task("go run . | diff -u out.txt expected.txt", []), 'n').ok, true)
+  // 新任务里出现进程替换仍要拒绝（POSIX 兼容要求）
+  assert.equal(validatePracticeTasks(task("go run . | diff -u - <(printf 'x\\n')", []), 'n').ok, false)
 })

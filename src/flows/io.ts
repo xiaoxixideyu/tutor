@@ -25,15 +25,27 @@ export interface LineQueue {
   push(line: string): void
   close(): void
   readonly closed: boolean
+  readonly overflowed: boolean
 }
+
+// 排队的待读行数上限：没有上限时，失控的输入源（`yes`、超大粘贴、异常客户端）会把队列撑到
+// 触发 RangeError 的进程级崩溃。超出上限就停止接收输入（按 EOF 处理，流程据此保存进度后退出）。
+export const MAX_QUEUED_LINES = 1000
 
 // 行输入队列：把回推的整行排队；close 让所有等待者以 null 结束（对应 stdin EOF / 流程停止）。
 export function createLineQueue(): LineQueue {
   const queue: string[] = []
   const waiters: ((line: string | null) => void)[] = []
   let closed = false
+  let overflowed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    for (const waiter of waiters.splice(0)) waiter(null)
+  }
   return {
     get closed() { return closed },
+    get overflowed() { return overflowed },
     read(): Promise<string | null> {
       if (queue.length > 0) return Promise.resolve(queue.shift()!)
       if (closed) return Promise.resolve(null)
@@ -42,14 +54,11 @@ export function createLineQueue(): LineQueue {
     push(line: string): void {
       if (closed) return
       const waiter = waiters.shift()
-      if (waiter) waiter(line)
-      else queue.push(line)
+      if (waiter) { waiter(line); return }
+      if (queue.length >= MAX_QUEUED_LINES) { overflowed = true; close(); return }
+      queue.push(line)
     },
-    close(): void {
-      if (closed) return
-      closed = true
-      for (const waiter of waiters.splice(0)) waiter(null)
-    },
+    close,
   }
 }
 
@@ -87,7 +96,12 @@ export function createCliIO(options: { tty?: boolean; signal?: AbortSignal } = {
     err: text => { process.stderr.write(text) },
     async readLine(): Promise<string | null> {
       ensureReader()
-      return queue.read()
+      const line = await queue.read()
+      // 输入量超上限时按 EOF 处理，但必须说清楚原因：否则用户只看到"未收到作答"。
+      if (line === null && queue.overflowed) {
+        process.stderr.write(`输入行数超过上限（${MAX_QUEUED_LINES} 行），已停止读取输入；进度已保存，可重新运行继续。\n`)
+      }
+      return line
     },
     closeInput(): void {
       stopSignal()

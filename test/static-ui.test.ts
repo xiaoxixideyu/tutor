@@ -37,6 +37,15 @@ describe('静态页面与共享 UI 组件', () => {
     }
   })
 
+
+  it('内部运行提示不进聊天记录；本轮以成本行收尾时选项仍转成可点按钮', () => {
+    const chat = read('ui/chat.js')
+    // 排队/限速提示属于内部提示：应被识别为 op 状态，而不是聊天气泡
+    assert.match(chat, /OP_ERR_RE = .*按共享队列每分钟/, '排队提示应被识别为内部提示')
+    // 成本行闭合气泡时要把选项转成 chips，否则当前题只剩纯文本
+    assert.match(chat, /COST_RE\.test\(line\)[\s\S]{0,200}maybeChips\(closed\)/, '成本行收尾时也要生成选项按钮')
+  })
+
   it('旧版单页已下线，只保留单壳', () => {
     for (const legacy of ['index.html', 'lesson.html', 'exam.html', 'practice.html', 'review.html', 'wizard.html', 'settings.html', 'settings.js']) {
       assert.equal(fs.existsSync(path.join(staticDir, legacy)), false, `${legacy} 应已删除`)

@@ -65,6 +65,20 @@ describe('scheduler：评分与稳定性演进', () => {
     assert.equal(nextStability(300, 'easy', 300), 365)
   })
 
+  it('当天或提前重复答对不放大间隔：扩张只能来自时间流逝', () => {
+    // 同日重考（考试未过后重学重测）不该按"已巩固"放大间隔，否则几次满分就把复习推到一年后
+    assert.equal(nextStability(12.1, 'easy', 0), 12.1)
+    assert.equal(nextStability(12.1, 'good', 0), 12.1)
+    // 提前复习（只过了原间隔的一小部分）只按比例给扩张
+    const partial = nextStability(10, 'good', 3)
+    assert.ok(partial > 10 && partial < nextStability(10, 'good', 10), `部分间隔应小于准时扩张：${partial}`)
+    assert.equal(partial, 12.4)
+    // 连考多次满分也不会顶到上限
+    let stability = 12.1
+    for (let index = 0; index < 8; index++) stability = nextStability(stability, 'easy', 0)
+    assert.equal(stability, 12.1)
+  })
+
   it('目标保留率反推间隔：0.9 时间隔即 stability，目标放宽则间隔更长', () => {
     assert.equal(intervalDays(10), 10)
     assert.equal(intervalDays(10, 0.8), 21)
