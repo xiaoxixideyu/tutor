@@ -23,7 +23,7 @@
           <div class="chat-quick"><button class="chat-stop" hidden>暂停大考</button></div>
           <div class="chat-opstatus"></div>
           <div class="chat-inputrow">
-            <input placeholder="输入你的答案…（Enter 发送）" autocomplete="off">
+            <textarea rows="1" placeholder="输入你的答案…（Enter 发送）" autocomplete="off"></textarea>
             <button>发送</button>
           </div>
         </div>
@@ -130,18 +130,15 @@
       history.replaceState(null, '', url)
     }
 
-    function send() {
-      if (chat.busy || chat.flowFinished) return
+    // 多行输入：Enter 发送，Shift+Enter 换行（一条输入仍是一条消息）。
+    chat.bindComposer(() => $input.value.trim())
+
+    $stop?.addEventListener('click', () => { api('/flow/stop') })
+    $send.addEventListener('click', () => {
       const line = $input.value.trim()
       if (!line) return
       $input.value = ''
       chat.sendLine(line)
-    }
-
-    $stop?.addEventListener('click', () => { api('/flow/stop') })
-    $send.addEventListener('click', send)
-    $input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.isComposing) send()
     })
 
     // 起一场大考：milestone 可空——为空时 exam-runner 自选下一个可考里程碑。

@@ -268,7 +268,10 @@ export function createTutorServer(options: TutorServerOptions) {
         if (!flow || flow.code !== undefined) { json(res, 409, { ok: false, error: '流程已结束或已切换，请刷新页面后继续' }); return }
         if (url.pathname === '/flow/input') {
           if (flow.status !== 'running' || flow.queue.closed) { json(res, 409, { ok: false, error: '流程正在结束' }); return }
-          if (typeof input.line !== 'string' || /[\r\n]/.test(input.line)) { json(res, 400, { ok: false, error: '每次只能提交一行输入' }); return }
+          // 一条输入 = 一次读取。可以含换行（网页的多行输入框按一条消息送达），但长度有上限。
+          if (typeof input.line !== 'string' || input.line.length > 20_000) {
+            json(res, 400, { ok: false, error: '输入无效或过长（上限 20000 字符）' }); return
+          }
           flow.queue.push(input.line)
         } else if (flow.status !== 'stopping') {
           flow.status = 'stopping'

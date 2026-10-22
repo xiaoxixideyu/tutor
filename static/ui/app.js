@@ -24,6 +24,7 @@
     const hash = location.hash.replace(/^#\/?/, '')
     const parts = hash.split('/').filter(Boolean).map((part) => decodeURIComponent(part))
     if (parts.length === 0) return { view: 'home' }
+    if (parts[0] === 'settings') return { view: 'settings' }
     if (parts[0] === 'course' && parts[1]) {
       return { view: parts[2] ?? 'detail', courseId: parts[1], milestone: parts[3], node: parts[4] }
     }
@@ -50,6 +51,11 @@
   }
 
   function mount(route) {
+    // 设置是抽屉而不是画布视图：#/settings 直接展开抽屉，画布保持原样。
+    if (route.view === 'settings') {
+      setDrawer(true)
+      return
+    }
     destroyCurrent()
     canvas.innerHTML = ''
     setStatus('', false)
@@ -170,6 +176,8 @@
     navigate('#/')
   }
 
+  let railCourseList = []
+
   async function refreshRail() {
     try {
       const [courses, state] = await Promise.all([
@@ -177,6 +185,7 @@
         fetch('/flow/state').then((response) => response.json()).catch(() => ({ flows: [] })),
       ])
       const flows = state.flows ?? []
+      railCourseList = courses
       const flowByCourse = new Map(flows.map((flow) => [flow.courseId, flow]))
       railCourses.innerHTML = courses.length === 0
         ? '<div class="rail-empty">还没有课程</div>'
@@ -205,6 +214,48 @@
   window.addEventListener('hashchange', () => { mount(parseRoute()) })
   refreshRail()
   railTimer = setInterval(refreshRail, 5000)
-  mount(parseRoute())
   window.addEventListener('beforeunload', () => { if (railTimer) clearInterval(railTimer) })
+
+  // 设置抽屉：与独立设置页共用 static/ui/settings.js 的表单逻辑。
+  const drawer = document.getElementById('settingsDrawer')
+  const backdrop = document.getElementById('drawerBackdrop')
+  let settings = null
+  function setDrawer(open) {
+    drawer.classList.toggle('open', open)
+    backdrop.classList.toggle('open', open)
+    drawer.setAttribute('aria-hidden', open ? 'false' : 'true')
+    if (open && !settings) {
+      settings = window.TutorSettings.mount(document.getElementById('settingsBody'), {
+        onSaved: () => refreshRail(),
+      })
+    }
+  }
+  document.getElementById('openSettings').addEventListener('click', () => setDrawer(true))
+  document.getElementById('openSettingsRail').addEventListener('click', () => setDrawer(true))
+  document.getElementById('closeSettings').addEventListener('click', () => setDrawer(false))
+  backdrop.addEventListener('click', () => setDrawer(false))
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && drawer.classList.contains('open')) setDrawer(false)
+  })
+
+  // 命令面板：跳转课程/视图与常用动作。
+  const palette = window.TutorPalette.mount({
+    items: () => {
+      const items = [
+        { title: '课程列表', hint: '工作区首页', run: () => navigate('#/') },
+        { title: '模型设置', hint: '渠道与教研搜索', run: () => setDrawer(true) },
+        { title: '开设新课程', hint: '需求访谈', run: () => { location.href = '/wizard.html' } },
+      ]
+      for (const course of railCourseList) {
+        const id = course.id
+        items.push({ title: `课程 ${id}`, hint: course.goal || '课程详情', run: () => navigate(`#/course/${encodeURIComponent(id)}`) })
+        items.push({ title: `课程 ${id} · 上课`, hint: '课堂', run: () => navigate(`#/course/${encodeURIComponent(id)}/learn`) })
+        items.push({ title: `课程 ${id} · 复习`, hint: '到期知识点', run: () => navigate(`#/course/${encodeURIComponent(id)}/review`) })
+      }
+      return items
+    },
+  })
+
+  // 抽屉与命令面板就绪后再挂载首个视图。
+  mount(parseRoute())
 })()

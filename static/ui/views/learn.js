@@ -29,7 +29,7 @@
           </div>
           <div class="chat-opstatus"></div>
           <div class="chat-inputrow">
-            <input placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
+            <textarea rows="1" placeholder="输入你的回答…（Enter 发送）" autocomplete="off"></textarea>
             <button>发送</button>
           </div>
         </div>
@@ -148,19 +148,15 @@
       return { flow: null, busy: busy ?? null }
     }
 
-    function send() {
-      if (chat.busy || chat.flowFinished) return
+    // 多行输入：Enter 发送，Shift+Enter 换行（一条输入仍是一条消息）。
+    chat.bindComposer(() => $input.value.trim())
+
+    $stop?.addEventListener('click', () => { api('/flow/stop') })
+    $send.addEventListener('click', () => {
       const line = $input.value.trim()
       if (!line) return
       $input.value = ''
       chat.sendLine(line)
-    }
-
-    $stop?.addEventListener('click', () => { api('/flow/stop') })
-    $send.addEventListener('click', send)
-    $input.addEventListener('keydown', (event) => {
-      // isComposing 守卫：中文输入法回车选字时不误发半成品
-      if (event.key === 'Enter' && !event.isComposing) send()
     })
     for (const button of root.querySelectorAll('.chat-quick button')) {
       button.addEventListener('click', () => {

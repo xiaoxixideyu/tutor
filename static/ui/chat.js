@@ -32,6 +32,7 @@
       this.busy = false
       this.busyTimer = null
       this.busySeconds = 0
+      this.growComposer = null
       this.setBusy(false)
     }
 
@@ -134,6 +135,27 @@
       this.setBusy(true)
       this.onSend(line)
       return true
+    }
+
+    // 多行输入：Enter 发送，Shift+Enter 换行；输入框随内容自动增高。
+    bindComposer(getLine) {
+      if (!this.input) return
+      const input = this.input
+      const grow = () => {
+        input.style.height = 'auto'
+        input.style.height = `${Math.min(input.scrollHeight, 200)}px`
+      }
+      input.addEventListener('input', grow)
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+        event.preventDefault()
+        const line = getLine()
+        if (!line) return
+        input.value = ''
+        grow()
+        this.sendLine(line)
+      })
+      this.growComposer = grow
     }
 
     optionLinesOf(text) {

@@ -11,7 +11,8 @@ const sharedScripts = [
   'ui/dom.js', 'ui/rpc.js', 'ui/chat.js', 'ui/app.js',
   'ui/views/home.js', 'ui/views/learn.js', 'ui/views/exam.js',
   'ui/views/practice.js', 'ui/views/review.js', 'ui/views/wizard.js',
-  'flow-client.js', 'md.js', 'research-progress.js', 'settings.js',
+  'ui/settings.js', 'ui/palette.js',
+  'flow-client.js', 'md.js', 'research-progress.js',
 ]
 
 function read(file: string): string {
@@ -71,6 +72,18 @@ describe('静态页面与共享 UI 组件', () => {
       assert.ok(app.includes(view), `单壳应挂载 ${view}`)
     }
     assert.match(app, /LEGACY/, '未迁入单壳的流程应回落到旧页面而不是死胡同')
+  })
+
+  it('设置页与单壳抽屉共用同一份设置表单逻辑', () => {
+    assert.match(read('settings.html'), /TutorSettings\.mount\(/, '设置页应挂载共享设置表单')
+    assert.match(read('ui/app.js'), /TutorSettings\.mount\(/, '单壳抽屉应挂载共享设置表单')
+    assert.equal(read('settings.html').includes('function updateKeyHint'), false, '设置页不应再内联表单逻辑')
+  })
+
+  it('命令面板与多行输入组件已就位', () => {
+    assert.match(read('ui/palette.js'), /metaKey \|\| event\.ctrlKey/, '命令面板应支持 ⌘K / Ctrl+K')
+    assert.match(read('ui/chat.js'), /bindComposer/, '聊天组件应支持多行输入绑定')
+    assert.match(read('ui/chat.js'), /event\.shiftKey/, 'Enter 发送、Shift+Enter 换行')
   })
 
   it('其余页面复用共享 DOM/RPC 工具', () => {

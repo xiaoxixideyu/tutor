@@ -56,6 +56,27 @@ function startServer(): Promise<{ port: number; close: () => Promise<void> }> {
     }
     if (url.pathname === '/flow/input') { send({ ok: true }); return }
     if (url.pathname.startsWith('/flow/')) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return }
+    if (url.pathname === '/palette-test.html') {
+      // 真实 palette 模块的行为验证页：打开面板、输入过滤、回车执行。
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(`<!doctype html><html><body><div id="result"></div>
+        <script src="/ui/dom.js"></script><script src="/ui/palette.js"></script>
+        <script>
+          window.__ran = []
+          const palette = window.TutorPalette.mount({ items: () => [
+            { title: '课程列表', hint: '工作区首页', run: () => window.__ran.push('list') },
+            { title: '课程 golang', hint: '课程详情', run: () => window.__ran.push('golang') },
+          ] })
+          palette.open()
+          const input = document.querySelector('.palette-input')
+          input.value = 'golang'
+          input.dispatchEvent(new Event('input'))
+          const titles = [...document.querySelectorAll('.palette-item-title')].map((n) => n.textContent).join(',')
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+          document.getElementById('result').textContent = titles + ' | ran=' + window.__ran.join(',')
+        </script></body></html>`)
+      return
+    }
     const file = path.join(root, 'static', url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, ''))
     if (!file.startsWith(path.join(root, 'static')) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404); res.end('404'); return
@@ -114,4 +135,58 @@ it('单壳工作区：左栏课程、路由与看板视图都能渲染（浏览�
   const wizard = await render('#/course/demo/plan')
   assert.match(wizard, /wizard-steps/, '向导视图应挂载分步条')
   assert.match(wizard, /wizard-setup|wizard-log/, '向导视图应有主体区域')
+})
+
+it('单壳：设置抽屉、命令面板与多行输入都在（浏览器冒烟）', { skip: hasChrome ? false : '本机没有 Chrome，跳过浏览器冒烟' }, async (t) => {
+  const { port, close } = await startServer()
+  t.after(close)
+  const profile = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'tutor-shell-'))
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }))
+  const dom = await new Promise<string>((resolve, reject) => {
+    const child = spawn(chrome, [
+      '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${profile}`,
+      '--virtual-time-budget=4000', '--timeout=8000', '--dump-dom', `http://127.0.0.1:${port}/app.html`,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    child.stderr.on('data', () => {})
+    child.on('error', reject)
+    child.on('close', () => resolve(out))
+  })
+  assert.match(dom, /id="settingsDrawer"/, '应有设置抽屉容器')
+  assert.match(dom, /palette-overlay/, '应有命令面板')
+  assert.match(dom, /id="openSettings"/, '顶栏应有设置入口')
+
+  const learn = await new Promise<string>((resolve, reject) => {
+    const child = spawn(chrome, [
+      '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${profile}`,
+      '--virtual-time-budget=4000', '--timeout=8000', '--dump-dom', `http://127.0.0.1:${port}/app.html#/course/demo/learn`,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    child.stderr.on('data', () => {})
+    child.on('error', reject)
+    child.on('close', () => resolve(out))
+  })
+  assert.match(learn, /<textarea/, '课堂输入应是可换行的多行输入框')
+})
+
+it('命令面板：能按关键字过滤并执行命令（浏览器冒烟）', { skip: hasChrome ? false : '本机没有 Chrome，跳过浏览器冒烟' }, async (t) => {
+  const { port, close } = await startServer()
+  t.after(close)
+  const profile = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'tutor-shell-'))
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }))
+  const dom = await new Promise<string>((resolve, reject) => {
+    const child = spawn(chrome, [
+      '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${profile}`,
+      '--virtual-time-budget=4000', '--timeout=8000', '--dump-dom', `http://127.0.0.1:${port}/palette-test.html`,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    child.stderr.on('data', () => {})
+    child.on('error', reject)
+    child.on('close', () => resolve(out))
+  })
+  assert.match(dom, /课程 golang/, '过滤后应只剩匹配项')
+  assert.match(dom, /ran=golang/, '回车应执行选中的命令')
 })

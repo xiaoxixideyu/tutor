@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/ui/practice.css">
 <link rel="stylesheet" href="/ui/review.css">
 <link rel="stylesheet" href="/ui/app.css">
+<link rel="stylesheet" href="/ui/settings.css">
 </head>
 <body class="app-body">
 <aside class="app-rail">
@@ -27,17 +28,26 @@
     <div id="rail-flows" class="rail-list"></div>
   </div>
   <div class="rail-foot">
-    <a href="/settings.html" class="rail-action">模型设置</a>
+    <button class="rail-action rail-button" id="openSettingsRail" type="button">模型设置</button>
+    <span class="rail-hint">⌘K 命令面板</span>
   </div>
 </aside>
 <main class="app-main">
   <header class="app-topbar">
     <div class="topbar-title" id="app-title">工作区</div>
     <div class="topbar-status" id="app-status"></div>
-    <a href="/settings.html" class="topbar-link">模型设置</a>
+    <button class="topbar-link" id="openSettings" type="button">模型设置</button>
   </header>
   <div class="app-canvas" id="app-canvas"></div>
 </main>
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+<aside class="drawer" id="settingsDrawer" aria-label="模型设置" aria-hidden="true">
+  <div class="drawer-head">
+    <h2>模型设置</h2>
+    <button class="drawer-close" id="closeSettings" type="button">关闭</button>
+  </div>
+  <div class="drawer-body" id="settingsBody"></div>
+</aside>
 <script src="/md.js"></script>
 <script src="/flow-client.js"></script>
 <script src="/ui/dom.js"></script>
@@ -49,6 +59,8 @@
 <script src="/ui/views/practice.js"></script>
 <script src="/ui/views/review.js"></script>
 <script src="/ui/views/wizard.js"></script>
+<script src="/ui/settings.js"></script>
+<script src="/ui/palette.js"></script>
 <script src="/ui/app.js"></script>
 </body>
 </html>

@@ -222,7 +222,8 @@ it('流程 ID 隔离输入、停止与回放；停止后最终输出仍可重连
   await old.wait((e) => e.text?.includes('启动'))
   assert.equal((await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body.flowId, first.flowId)
   assert.equal((await post('/flow/input', { line: 'missing id' })).status, 409)
-  assert.equal((await post('/flow/input', { flowId: first.flowId, line: 'A\nB' })).status, 400)
+  // 多行输入按"一条消息"送达（网页的多行输入框）。
+  assert.equal((await post('/flow/input', { flowId: first.flowId, line: 'A\nB' })).status, 200)
   assert.equal((await post('/flow/input', { flowId: first.flowId, line: '中文回答' })).status, 200)
   await old.wait((e) => e.text?.includes('收到：中文回答'))
   await post('/flow/stop', { flowId: first.flowId })
@@ -354,6 +355,17 @@ it('搜索服务可在网页配置并掩码：保存后不回显 Token，换址�
     searchMcpUrl: 'https://other.invalid/mcp', searchToken: '' })
   assert.equal(refused.status, 400)
   assert.match(refused.body.error, /Token/)
+})
+
+it('流程输入允许一条多行消息，但拒绝超长输入', async (t) => {
+  const { base, post } = await fixture(t)
+  const flow = (await post('/flow/start', { kind: 'learn', courseId: 'alpha' })).body
+  // 多行输入按"一条消息"送达：流程读到的仍是同一个字符串。
+  const accepted = await post('/flow/input', { flowId: flow.flowId, line: '第一行\n第二行' })
+  assert.equal(accepted.status, 200)
+  const echoed = await post('/flow/input', { flowId: flow.flowId, line: 'x'.repeat(20_001) })
+  assert.equal(echoed.status, 400)
+  assert.match(echoed.body.error, /过长/)
 })
 
 it('RPC 与流程端点拒绝跨站请求，并强制 JSON Content-Type', async (t) => {

@@ -53,3 +53,21 @@ body.app-body { display: flex; flex-direction: row; height: 100vh; overflow: hid
 .app-canvas > .review-panel { height: 100%; min-height: 0; }
 .app-canvas > .review-panel { overflow-y: auto; padding: 16px; }
 .app-canvas .review-panel .card { max-width: 720px; margin: 0 auto 12px; }
+
+/* 命令面板（⌘K / Ctrl+K） */
+.palette-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .22); display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 50; }
+.palette-overlay.open { display: flex; }
+.palette { width: min(620px, 92vw); background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.palette-input { width: 100%; border: 0; border-bottom: 1px solid var(--border); padding: 14px 16px; font-size: 15px; font-family: inherit; background: transparent; color: var(--fg); }
+.palette-input:focus { outline: none; }
+.palette-list { max-height: 46vh; overflow-y: auto; padding: 6px; }
+.palette-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 7px; padding: 9px 10px; cursor: pointer; font: inherit; color: var(--fg); }
+.palette-item:hover, .palette-item.active { background: var(--bg); }
+.palette-item-title { font-size: 14px; }
+.palette-item-hint { font-size: 12px; color: var(--muted); }
+.palette-empty { padding: 14px; font-size: 13px; color: var(--muted); }
+
+/* 左栏底部：设置入口与快捷键提示 */
+.rail-button { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.rail-button:hover { text-decoration: underline; }
+.rail-hint { display: block; font-size: 11px; color: var(--muted); margin-top: 6px; }

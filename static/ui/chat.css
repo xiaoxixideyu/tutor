@@ -58,5 +58,7 @@ footer { border-top: 1px solid var(--border); background: var(--card); padding: 
 .chat-quick .chat-stop { background: #fff; border-color: #fecaca; color: var(--red); }
 .chat-opstatus { display: none; max-width: 860px; margin: 0 auto 6px; width: 100%; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 .chat-inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
-.chat-inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; background: var(--card); }
+.chat-inputrow input,
+.chat-inputrow textarea { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; background: var(--card); }
+.chat-inputrow textarea { resize: none; line-height: 1.5; max-height: 200px; overflow-y: auto; }
 .chat-inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
