@@ -380,6 +380,15 @@
         setFlowActive(false)
         setBusy(false)
         $footer.style.display = 'none'
+        if (kind === 'new') {
+          $log.hidden = true
+          $setup.style.display = ''
+          $steps.style.display = 'none'
+          $err.textContent = result.error || '访谈启动失败'
+          onTitle('新课程向导')
+          onStatus({ text: '', busy: false })
+          return
+        }
         if (TutorDom.isContentGateError(result.error)) $log.appendChild(TutorDom.gateNotice({ courseId: courseName, navigate }))
         else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(result.error || '流程启动失败')}</div>`))
       }
@@ -531,6 +540,13 @@
     }
 
     $send.addEventListener('click', send)
+    $courseInput.addEventListener('input', () => { $err.textContent = '' })
+    $courseInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault()
+        $startBtn.click()
+      }
+    })
     $stop.addEventListener('click', async () => {
       if ($stop.disabled) return
       $stop.disabled = true
@@ -554,8 +570,15 @@
         $err.textContent = '课程标识需为小写英文/数字/连字符'
         return
       }
-      const state = await flowClient.state()
+      const [state, courses] = await Promise.all([
+        flowClient.state(),
+        TutorRpc('listCourses').catch(() => []),
+      ])
       if (!state) return
+      if (courses.some((course) => course.id === id)) {
+        $err.textContent = `课程「${id}」已存在，请换一个标识。`
+        return
+      }
       const sameCourse = (state.flows ?? []).find((flow) => flow.courseId === id)
       if (sameCourse) {
         $err.textContent = `课程「${id}」已有进行中的流程（${TutorDom.flowLabel(sameCourse.kind)}）`

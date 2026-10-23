@@ -107,7 +107,11 @@
       const p = await TutorRpc('courseStatus', { id })
       if (researchLive) researchLive.connect(id)
       // 展开课程详情时拉取"当前内容里哪条没过审"（地图/计划/各节点题库），省得用户去翻 JSON 证据文件。
-      const issues = await TutorRpc('contentIssues', { id }).catch(() => [])
+      const [issues, flowState] = await Promise.all([
+        TutorRpc('contentIssues', { id }).catch(() => []),
+        fetch('/flow/state').then((response) => response.json()).catch(() => ({ flows: [] })),
+      ])
+      const running = (flowState.flows ?? []).find((flow) => flow.courseId === id)
       // 学习曲线数据来自事件流（mastery-events.jsonl）；旧课程没有事件流时优雅降级。
       const history = await TutorRpc('masteryHistory', { id, days: 30 }).catch(() => null)
       const maxCount = history ? Math.max(1, ...history.activity.map((d) => d.count)) : 1
@@ -127,13 +131,13 @@
             <div class="notice-title">⚠ 教学内容未通过准入审查</div>
             <div class="notice-body">摸底、上课、大考与生成实践已暂停；复习不受影响。内容未修改时重审会复用上次结论，仍需先修复对应内容。</div>
             ${issueList}
-            <div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>
+            ${running ? '<div class="meta">当前流程结束后才能重新审查。</div>' : `<div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>`}
           </div>`
         : issues.length
           ? `<div class="notice warn-notice">
               <div class="notice-title">⚠ 以下内容未通过审查，修复后需重新审查</div>
               ${issueList}
-              <div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>
+              ${running ? '<div class="meta">当前流程结束后才能重新审查。</div>' : `<div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>`}
             </div>`
           : ''
       const nodeRows = p.nodes.map((n) => {
@@ -153,8 +157,8 @@
           <td>${TutorDom.esc(n.status)}</td><td>${TutorDom.esc(n.id)}</td><td>${TutorDom.esc(n.title ?? '')}</td>
           <td>${n.score !== undefined ? TutorDom.esc(n.score) : ''}</td>
           <td>${n.review_due !== undefined ? `复习→${TutorDom.esc(n.review_due)}${retention}` : ''}</td>
-          <td>${n.researchStatus ? `${researchLabel} <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id, n.id))}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
-          <td>${p.hasPlan && (n.practiceCount || !blocked) ? `<button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id, n.id))}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
+          <td>${n.researchStatus && !running ? `${researchLabel} <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id, n.id))}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : researchLabel}</td>
+          <td>${p.hasPlan && !running && (n.practiceCount || !blocked) ? `<button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id, n.id))}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
         </tr>`
       }).join('')
       // 里程碑：已通过大考→标「✓ 大考通过」；全部节点已掌握且未通过→给「参加大考」入口；否则显示掌握进度。
@@ -167,28 +171,38 @@
         } else if (m.examable) {
           tail = blocked
             ? '<span class="meta">内容审查通过后可考</span>'
-            : `<button class="enter ms-exam" data-href="${TutorDom.esc(examHref(p.id, m.id))}">参加大考 →</button>`
+            : running
+              ? '<span class="meta">先结束当前流程后可考</span>'
+              : `<button class="enter ms-exam" data-href="${TutorDom.esc(examHref(p.id, m.id))}">参加大考 →</button>`
         }
         return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
       }).join('')
       const c = p.counts
-      // 详情页也要能直接继续下一课：从看板点进课程后不应只剩复习/实践入口。
-      const lessonBtn = p.hasPlan && !blocked && p.current
+      const runningSection = running
+        ? `<div class="notice flow-notice">
+            <div class="notice-title">▶ 正在进行${TutorDom.flowLabel(running.kind)}</div>
+            <div class="notice-body">同一门课程同时只能运行一个流程；先继续或结束它，再开始新的教学步骤。</div>
+            <div class="notice-actions"><button class="enter go-continue" data-href="${TutorDom.esc(flowHref(running))}">继续${TutorDom.flowLabel(running.kind)} →</button></div>
+          </div>`
+        : ''
+      // 详情页也要能直接继续下一课：从看板点进课程后不应只剩复习/实践入口；已有流程在跑时先继续它。
+      const lessonBtn = p.hasPlan && !blocked && p.current && !running
         ? `<button class="enter go-lesson" data-href="${TutorDom.esc(lessonHref(p.id))}">上课 →</button>`
         : ''
       // 实践入口（course 级）：已生成任务→「去实践」；未生成且内容未过审时不给会失败的死路。
-      const practiceRow = p.hasPlan && (p.hasPractice || !blocked)
+      const practiceRow = p.hasPlan && !running && (p.hasPractice || !blocked)
         ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id))}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
         : ''
-      const resetBtn = '<button class="back" id="reset-breaks" type="button">清理中断的摸底/考试断点</button>'
+      const resetBtn = running ? '' : '<button class="back" id="reset-breaks" type="button">清理中断的摸底/考试断点</button>'
       root.innerHTML = `
         <button class="back" id="back">← 返回课程列表</button>
         <h2 style="margin-top:12px">${TutorDom.esc(p.id)}${p.goal ? ` · ${TutorDom.esc(p.goal)}` : ''}</h2>
         <div class="meta">指针：${p.current ? TutorDom.esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
         <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
+        ${runningSection}
         ${warnSection}
         <div class="detail-actions">${lessonBtn}${resetBtn}</div>
-        ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id))}">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
+        ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending && !running ? ` <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id))}">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
         ${practiceRow}
         ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
         <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
@@ -196,10 +210,10 @@
         <tbody>${nodeRows}</tbody></table></div>
         ${curveSection}`
       root.querySelector('#back').addEventListener('click', () => renderList())
-      for (const btn of root.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit, .go-lesson')) {
+      for (const btn of root.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit, .go-lesson, .go-continue')) {
         btn.addEventListener('click', () => go(btn.dataset.href))
       }
-      root.querySelector('#reset-breaks').addEventListener('click', async () => {
+      root.querySelector('#reset-breaks')?.addEventListener('click', async () => {
         if (!confirm('将归档并清理未完成的摸底/考试断点；掌握度、计划和已通过成绩不受影响。继续？')) return
         try {
           const [assessment, exam] = await Promise.all([

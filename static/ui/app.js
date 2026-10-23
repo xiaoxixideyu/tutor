@@ -268,6 +268,7 @@
         onSaved: () => refreshRail(),
       })
     }
+    if (!open && parseRoute().view === 'settings') navigate('#/')
   }
   document.getElementById('openSettings').addEventListener('click', () => setDrawer(true))
   document.getElementById('openSettingsRail').addEventListener('click', () => setDrawer(true))

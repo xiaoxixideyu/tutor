@@ -49,6 +49,8 @@ tr:last-child td { border-bottom: none; }
 .trail .sym { margin-right: 2px; }
 .notice { margin: 12px 0; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
 .notice.warn-notice { border-color: #f1c084; background: #fffbeb; }
+.notice.flow-notice { border-color: #bfdbfe; background: #eff6ff; }
+.notice.flow-notice .notice-title { color: var(--accent); }
 .notice-title { color: #b45309; font-weight: 600; margin-bottom: 6px; }
 .notice-body { color: var(--muted); font-size: 13px; line-height: 1.6; }
 .notice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

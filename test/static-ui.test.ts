@@ -178,4 +178,14 @@ describe('静态页面与共享 UI 组件', () => {
       assert.match(read(file), /TutorDom\.flowFailure/, `${file} 生成失败应使用折叠诊断卡片`)
     }
   })
+
+  it('已有课程不能再开一次访谈；详情页有流程在跑时只提供继续入口', () => {
+    const wizard = read('ui/views/wizard.js')
+    assert.match(wizard, /courses\.some\(\(course\) => course\.id === id\)/, '开课前应阻止重复课程标识')
+    assert.match(wizard, /\$courseInput\.addEventListener\('keydown'/, '课程标识输入框应支持回车开课')
+    const home = read('ui/views/home.js')
+    assert.match(home, /const runningSection = running/, '详情页应提示正在进行的流程')
+    assert.match(home, /p\.hasPlan && !running/, '有流程在跑时不应再给实践入口')
+    assert.match(home, /const resetBtn = running \? ''/, '有流程在跑时不应显示断点清理')
+  })
 })
