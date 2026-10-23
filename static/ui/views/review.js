@@ -19,8 +19,8 @@
     function showResultCard(message) {
       const card = TutorDom.el('<div class="card"><div class="empty"></div><div class="chips"></div></div>')
       card.querySelector('.empty').textContent = message
-      const back = TutorDom.el('<button class="next">← 课程列表</button>')
-      back.addEventListener('click', () => navigate('/'))
+      const back = TutorDom.el('<button class="next">← 课程详情</button>')
+      back.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseId)}`))
       card.querySelector('.chips').appendChild(back)
       $main.appendChild(card)
     }
@@ -45,7 +45,7 @@
           const wrap = TutorDom.el('<div class="choices"></div>')
           question.choices.forEach((choiceText, choiceIndex) => {
             const letter = LETTERS[choiceIndex]
-            const btn = TutorDom.el(`<button class="choice" aria-pressed="false">${TutorMd.inlineText(choiceText)}</button>`)
+            const btn = TutorDom.el(`<button class="choice" aria-pressed="false"><span class="choice-letter">${letter}.</span> ${TutorMd.inlineText(choiceText)}</button>`)
             btn.addEventListener('click', () => {
               if (btn.classList.contains('disabled')) return
               answers[index] = letter
@@ -85,7 +85,10 @@
         }
         formerr.hidden = true
         submit.disabled = true
-        for (const choice of card.querySelectorAll('.choice')) choice.classList.add('disabled')
+        for (const choice of card.querySelectorAll('.choice')) {
+          choice.classList.add('disabled')
+          choice.disabled = true
+        }
         for (const input of card.querySelectorAll('input')) input.disabled = true
         try {
           const out = await TutorRpc('submitReview', { id: courseId, node: item.node, attemptId: item.attemptId, answers })
@@ -144,8 +147,8 @@
         done.addEventListener('click', () => navigate('/'))
         row.appendChild(done)
       }
-      const back = TutorDom.el('<button class="next secondary">← 课程列表</button>')
-      back.addEventListener('click', () => navigate('/'))
+      const back = TutorDom.el('<button class="next secondary">← 课程详情</button>')
+      back.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseId)}`))
       row.appendChild(back)
       result.appendChild(row)
       card.appendChild(result)
@@ -170,6 +173,7 @@
         const skipped = all.filter((item) => item.questions.length === 0)
         if (skipped.length) onStatus({ text: `${skipped.length} 个到期知识点缺少题库，暂未纳入本轮`, busy: false })
         if (items.length === 0) {
+          onStatus({ text: skipped.length ? '到期知识点缺少题库，暂无法复习' : '没有到期的复习', busy: false })
           showResultCard(skipped.length ? '到期知识点缺少题库，暂无法复习。' : '🎉 没有到期的复习。')
           return
         }

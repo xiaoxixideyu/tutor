@@ -367,6 +367,7 @@
       currentNodeId = kind === 'research' ? nodeId : ''
       gateBlocked = false
       skipJson = false
+      if (kind !== 'research') researchLive.connect(null)
       if (courseName && kind !== 'new') onTitle(`${courseName} · ${STEP_TITLES[kind] ?? '向导'}`)
       markStep(kind, 'active')
       onStatusText = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
@@ -391,7 +392,10 @@
         }
         if (TutorDom.isContentGateError(result.error)) $log.appendChild(TutorDom.gateNotice({ courseId: courseName, navigate }))
         else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(result.error || '流程启动失败')}</div>`))
+        return
       }
+      if (kind === 'research') researchLive.connect(courseName)
+      else researchLive.connect(null)
     }
 
     async function api(path, body) {
@@ -500,7 +504,7 @@
           } else {
             $log.appendChild(TutorDom.el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? '流程'}${msg.code === 0 ? '已结束' : '已暂停'} ——</div>`))
             if (msg.code !== 0) {
-              onStatus({ text: `${STEP_TITLES[msg.kind] ?? '流程'}未完成`, busy: false })
+              onStatus({ text: `${STEP_TITLES[msg.kind] ?? '流程'}已暂停`, busy: false })
               if (gateBlocked) {
                 const row = TutorDom.el('<div class="chips"></div>')
                 const detail = TutorDom.el('<button class="chip">返回课程详情处理内容问题 →</button>')

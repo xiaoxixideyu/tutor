@@ -126,6 +126,7 @@ class TutorResearchProgress {
     const seconds = event?.retryAt ? Math.max(0, Math.ceil((event.retryAt - Date.now()) / 1000)) : 0
     p.time.textContent = active && event?.retryAt ? `${event.retry ? `第 ${event.retry}/${event.maxRetries} 次恢复 · ` : ''}${seconds ? `约 ${seconds} 秒后尝试继续` : '正在检查是否可以发送下一次请求'}；等待期间完成数不会增加。`
       : event ? `最近状态更新：${new Date(event.at).toLocaleTimeString()}` : ''
-    p.link.href = `/app.html#/course/${encodeURIComponent(this.course)}/research`
+    p.link.textContent = '查看课程详情 →'
+    p.link.href = `/app.html#/course/${encodeURIComponent(this.course)}`
   }
 }

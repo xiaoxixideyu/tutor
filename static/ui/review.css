@@ -36,7 +36,10 @@
   .choice { border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; text-align: left; font-family: inherit; }
   .choice:hover { background: #eef2ff; }
   .choice.selected { background: var(--accent); color: #fff; }
+  .choice-letter { font-weight: 700; margin-right: 4px; }
+  .choice.selected .choice-letter { color: #fff; }
   .choice.disabled { cursor: default; opacity: .7; }
+  .choice.selected:disabled, .choice.selected.disabled { opacity: 1; cursor: default; }
   .short input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: 14px; font-family: inherit; }
   .submit { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; margin-top: 8px; }
   .submit:disabled { opacity: .5; cursor: default; }

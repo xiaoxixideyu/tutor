@@ -38,6 +38,8 @@ it('进度只采用已保存课程计数，分片日志可显示等待但不能�
   assert.match(parts.message.textContent, /等待后自动继续/)
   assert.ok(Object.values(parts).every(part => !part.textContent.includes('私有推理')))
   assert.ok(!requests.some(url => url === '/flow/start' || url === '/flow/input'))
+  assert.match(parts.link.textContent, /课程详情/)
+  assert.equal(parts.link.href, '/app.html#/course/agent5')
 })
 
 it('不会订阅其他课程的流程，连接中断和结束时清楚显示真实状态', async () => {

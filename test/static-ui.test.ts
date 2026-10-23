@@ -188,4 +188,19 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(home, /p\.hasPlan && !running/, '有流程在跑时不应再给实践入口')
     assert.match(home, /const resetBtn = running \? ''/, '有流程在跑时不应显示断点清理')
   })
+
+  it('复习选项带字母、提交后禁用，结果页不再出现两个重复的返回列表按钮', () => {
+    const review = read('ui/views/review.js')
+    assert.match(review, /choice-letter/, '复习选项应显示 A/B/C 字母')
+    assert.match(review, /choice\.disabled = true/, '提交后选项应真正禁用')
+    assert.match(review, /← 课程详情/, '复习结果应能返回课程详情')
+    assert.match(review, /没有到期的复习/, '无到期复习时应更新顶栏状态')
+    assert.match(read('ui/views/practice.js'), /TutorDom\.flowFailure/, '实践生成失败应使用折叠诊断卡片')
+  })
+
+  it('教研进度面板在单壳有样式，从详情启动教研时也会连接', () => {
+    assert.match(read('app.html'), /research-progress\.css/, '单壳应加载教研进度样式')
+    assert.match(read('ui/views/wizard.js'), /kind === 'research'\) researchLive\.connect/, '从详情启动教研时应连接进度面板')
+    assert.match(read('research-progress.js'), /查看课程详情/, '进度面板链接应指向课程详情而不是同一页')
+  })
 })

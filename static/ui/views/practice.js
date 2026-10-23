@@ -201,7 +201,7 @@
           return
         }
         onStatus({ text: '生成失败', busy: false })
-        appendLine(`—— 生成实践任务失败（code ${code}）——`, 'no')
+        appendLine('—— 生成实践任务失败 ——', 'no')
         if (!gateBlocked) renderRetry()
         return
       }
@@ -230,6 +230,11 @@
             canSend = false
             setRunning(false)
             $log.appendChild(TutorDom.gateNotice({ courseId, navigate, raw: msg.text }))
+          } else if (/多次生成仍未通过校验|内容准入审查失败/.test(msg.text)) {
+            canSend = false
+            setRunning(false)
+            $log.appendChild(TutorDom.flowFailure({ detail: msg.text }))
+            TutorDom.scrollToEnd($log)
           } else {
             appendLine(String(msg.text).replace(/\n$/, ''), 'no')
           }
