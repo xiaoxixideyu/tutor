@@ -211,7 +211,6 @@ export function createTutorServer(options: TutorServerOptions) {
       readLine: () => queue.read(),
       closeInput: () => queue.close(),
       signal: controller.signal,
-      tty: false,
     }
     // 保留最近 8 个流程的内存回放；只淘汰已结束的流程，不能动在跑的（并行课程时可能同时多个）。
     while (flows.size > 8) {

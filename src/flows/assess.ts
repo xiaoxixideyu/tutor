@@ -2,7 +2,6 @@ import { AssessmentEngine, formatChoice } from '../core/assessment.ts'
 import { assertKnowledgeMap, topoOrder, validateBank } from '../core/knowledge.ts'
 import { KnowledgeMapSchema, QuestionBankSchema, type AssessmentState, type KnowledgeMap, type Profile, type Question, type QuestionBank } from '../core/schema.ts'
 import { parseJsonBlock, trySchema } from './generation.ts'
-import { printSessionTotal } from './cost-line.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import { bankContent, mapContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
@@ -154,8 +153,6 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
     store.write(config.courseId, 'knowledge-map', mapValue)
     await chat.flush()
     recordChatTotal(deps.costs, chat, 'map')
-    io.out('知识地图生成开销：')
-    printSessionTotal(chat, deps)
   }
   const map = store.read(config.courseId, 'knowledge-map') as KnowledgeMap
   await gate.require(mapContent(map, profile))
@@ -184,8 +181,6 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
     store.write(config.courseId, 'question-bank', bank)
     await bankChat.flush()
     recordChatTotal(deps.costs, bankChat, 'bank')
-    io.out('该知识点出题开销：')
-    printSessionTotal(bankChat, deps)
   }
 
   const resumed = store.has(config.courseId, 'assessment')

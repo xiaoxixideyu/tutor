@@ -87,7 +87,6 @@ it('模型连续输出无效档案时有上限，不会无限重试', async (t) 
     readLine: async () => { throw new Error('无效档案重试期间不应读取学员输入') },
     closeInput: () => {},
     signal: new AbortController().signal,
-    tty: false,
   }
   const deps = {
     store, io, status: () => {}, env: {}, workspace: root, today: () => '2026-10-20',

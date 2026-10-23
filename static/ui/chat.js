@@ -1,9 +1,11 @@
-// 共享课堂/考试聊天壳：气泡、选项 chips、忙态、成本行、运行状态条与输入区。
+// 共享课堂/考试聊天壳：气泡、选项 chips、忙态、运行状态条与输入区。
 // 页面只负责流程生命周期（start/stop/SSE/exit），渲染与交互集中在这里，避免多页各写一套。
 (function () {
-  const COST_RE = /^(本回合|会话累计)/
-  // 引擎内部运行提示（限流等待、内容审查、备课、成本等）——学员视图不显示为教学气泡，只在一条安静的状态条里显示当前进度。
-  const OP_OUT_RE = /^(正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|审查开销[ 　]|复用同一内容的|正在核对|[^\n]{0,12}核查中[：:]|资料审查达到|正在汇总本知识点|正在核对本知识点)/
+  // 旧会话回放可能仍带成本行：静默丢弃，不向学员展示任何开销。
+  const LEGACY_COST_RE = /^(本回合|会话累计|审查开销|备课开销|知识地图生成开销|该知识点出题开销|本次流程总成本|复用同一内容的.*费用)/
+  const TURN_COST_RE = /^(本回合|会话累计)/
+  // 引擎内部运行提示（限流等待、内容审查、备课等）——学员视图不显示为教学气泡，只在一条安静的状态条里显示当前进度。
+  const OP_OUT_RE = /^(正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|复用同一内容的|正在核对|[^\n]{0,12}核查中[：:]|资料审查达到|正在汇总本知识点|正在核对本知识点)/
   // 运行时排队/限速提示也是内部提示：进状态条，不进聊天记录。
   const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度|按共享队列每分钟)/
 
@@ -96,19 +98,6 @@
 
     isOpError(text) {
       return OP_ERR_RE.test(text)
-    }
-
-    colorizeCost(text) {
-      const div = document.createElement('div')
-      div.className = 'cost'
-      let html = window.TutorDom.esc(text)
-      html = html.replace(/¥([0-9.]+)/g, (m, n) => {
-        const value = Number(n)
-        const cls = value >= 0.2 ? 'r-r' : value >= 0.05 ? 'r-y' : 'g-g'
-        return `<span class="${cls}">¥${n}</span>`
-      })
-      div.innerHTML = html
-      return div
     }
 
     renderBubble() {
@@ -233,15 +222,16 @@
         this.setBusy(false)
         return
       }
-      if (OP_OUT_RE.test(trimmed)) { this.noteOp(trimmed); return }
-      if (COST_RE.test(line)) {
-        // 本轮以成本行收尾时，讲解气泡在这里闭合：其中的选项仍要转成可点按钮，
+      if (LEGACY_COST_RE.test(trimmed)) {
+        // 旧会话以回合成本行收尾时，讲解气泡在这里闭合：其中的选项仍要转成可点按钮，
         // 否则"当前这道题"只剩纯文本，学员没有可点的入口。
-        const closed = this.closeBubble()
-        if (closed) this.maybeChips(closed)
-        this.log.appendChild(this.colorizeCost(line))
+        if (TURN_COST_RE.test(trimmed)) {
+          const closed = this.closeBubble()
+          if (closed) this.maybeChips(closed)
+        }
         return
       }
+      if (OP_OUT_RE.test(trimmed)) { this.noteOp(trimmed); return }
       if (trimmed === '') return
       if (!this.bubble) {
         this.clearOp()

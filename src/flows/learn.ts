@@ -7,9 +7,7 @@ import { appendMasteryEvent } from '../core/events.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile, QuestionBank } from '../core/schema.ts'
 import type { AgentChat } from '../runtime/chat.ts'
 import { parseJsonBlock } from './generation.ts'
-import { loadCostConfigFromRepo, printSessionTotal } from './cost-line.ts'
 import { withChatUsage } from './cost-ledger.ts'
-import { formatTurnCost } from '../core/cost.ts'
 import { lessonContent, mapContent, planContent, replayApprovedReply, teachingContent, type ApprovedTeachingTurn } from '../core/content-quality.ts'
 import { createContentGate, generateApproved, generateApprovedTeaching, type ContentGate } from './content-gate.ts'
 import type { FlowDeps } from './deps.ts'
@@ -98,8 +96,6 @@ async function startFreshLesson(
       if (!data.ok) return data
       return validateLessonDraft(data.value, node, cap)
     }, gate, value => lessonContent(value, profile, map)))
-    io.out('备课开销：')
-    printSessionTotal(prepChat, deps)
     // 没有可恢复的已批准讲授时，先保存新教案；被拒旧教案不能阻止落盘。
     // 可用的已批准课堂断点仍由后续新讲授替换，不能在尝试恢复时提前覆盖。
     if (!previousTurn) store.write(config.courseId, 'lesson', { node, started_at: deps.today(), draft })
@@ -245,12 +241,9 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
   if (!approvedTurn) throw new Error('tutor: 缺少已通过审查的讲授断点')
   const approvedTurns: ApprovedTeachingTurn[] = [approvedTurn]
 
-  const costConfig = loadCostConfigFromRepo(deps.workspace)
-  const colorEnabled = io.tty
   const disconnectInput = () => { io.closeInput() }
   const pause = async () => {
     await chat.flush()
-    printSessionTotal(chat, deps)
     io.out('\n本课暂停（进度已保存）。重新运行 learn 将从断点继续。\n')
     disconnectInput()
     throw new FlowExit(0)
@@ -354,7 +347,6 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
       if (interleaveNote) io.out(interleaveNote)
       io.out(pointer ? `计划指针：${node} → ${pointer}\n` : '计划内知识点均已掌握，课程完成。\n')
       await chat.flush()
-      printSessionTotal(chat, deps)
       disconnectInput()
       throw new FlowExit(0)
     }
@@ -368,6 +360,5 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
     store.write(config.courseId, 'lesson', { session_id: chat.sessionId, node, started_at: deps.today(), draft, approved_turn: approvedTurn })
     approvedTurns.push(approvedTurn)
     await publishTeaching(deps, gate, chat, approvedTurn, node, profile, map, `\n${approvedTurn.reply}`)
-    io.out(`\n${formatTurnCost(chat.lastTurnUsage(), chat.model, costConfig, colorEnabled)}`)
   }
 }

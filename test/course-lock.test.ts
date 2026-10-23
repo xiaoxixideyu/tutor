@@ -62,7 +62,6 @@ it('流程启动会持锁并在退出后释放', async (t) => {
     readLine: async () => null,
     closeInput: () => {},
     signal: new AbortController().signal,
-    tty: false,
   }
   const entry = acquireCourseLock(root, 'alpha')
   const busy = await runFlowInProcess({ kind: 'practice', courseId: 'alpha' }, io, {

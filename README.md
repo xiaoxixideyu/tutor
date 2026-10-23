@@ -89,7 +89,7 @@ npm run agent -- "..."          # 一次性 agent 任务
 - 网页入口：`/` 或 `/app.html`（同一个单壳工作区；`#/settings` 打开设置抽屉，⌘K 命令面板，`#/course/<id>/learn|exam|practice|review|plan` 等路由）
 - 网页模型设置：[使用说明](docs/model-settings.md)；保存在本机 `data/model-config.json`，后续网页和 CLI 模型流程共用；服务仅本机访问，端口可设 `TUTOR_SERVER_PORT`
 - 人格提示词：`config/persona/*.md`（各流程系统提示词，直接读取）
-- 成本估算单价：`config/cost.yaml`（按网关实际计费修改；讲授中每回合绿/黄/红显示，退出时显示会话累计）
+- 成本估算单价：`config/cost.yaml`（按网关实际计费修改；仅用于内部估算与评测，不向学员展示单回合或累计开销）
 - 联网教研（二期，可选）：搜索服务可填在网页"模型设置 → 教研搜索"（MCP over HTTP，如 Tavily Hikari 的 `https://<host>/mcp`，保存后下一回合生效），也可继续用 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（网页保存的值优先）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
 - 会话日志：`data/sessions/<工作目录编码>/session-<uuid>/`（多帧 zstd JSONL `session.v3.jsonl.zstd` + `messages.jsonl`，勿手改；可用 `TUTOR_SESSIONS_ROOT` 更换根目录）。工作目录编码带工作区摘要，旧编码目录的历史会话仍可续讲
 - 实践执行：目前在本机子进程运行，提供超时、输出限制、任务目录内的 HOME/TMP/缓存和停止时进程组回收；课程/审查/笔记文件权限收紧为仅当前用户可读写，但仍没有操作系统级文件与网络隔离

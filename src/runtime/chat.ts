@@ -215,7 +215,7 @@ class Chat implements AgentChat {
     }
   }
 
-  // 当前模型名（成本显示与事件记录用）：跟随热更新。
+  // 当前模型名（事件记录与内部成本台账用）：跟随热更新。
   get model(): string {
     return this.runtime.modelNow().model
   }

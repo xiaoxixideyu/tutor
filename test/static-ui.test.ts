@@ -38,12 +38,14 @@ describe('静态页面与共享 UI 组件', () => {
   })
 
 
-  it('内部运行提示不进聊天记录；本轮以成本行收尾时选项仍转成可点按钮', () => {
+  it('内部运行提示不进聊天记录；旧成本行静默丢弃', () => {
     const chat = read('ui/chat.js')
     // 排队/限速提示属于内部提示：应被识别为 op 状态，而不是聊天气泡
     assert.match(chat, /OP_ERR_RE = .*按共享队列每分钟/, '排队提示应被识别为内部提示')
-    // 成本行闭合气泡时要把选项转成 chips，否则当前题只剩纯文本
-    assert.match(chat, /COST_RE\.test\(line\)[\s\S]{0,200}maybeChips\(closed\)/, '成本行收尾时也要生成选项按钮')
+    assert.match(chat, /LEGACY_COST_RE\.test\(trimmed\)/, '旧成本行应被静默过滤')
+    // 旧会话以成本行收尾时仍要闭合气泡并转成选项按钮
+    assert.match(chat, /TURN_COST_RE\.test\(trimmed\)[\s\S]{0,200}maybeChips\(closed\)/, '成本行收尾时也要生成选项按钮')
+    assert.doesNotMatch(chat, /colorizeCost|class="cost"/, '聊天壳不应再渲染成本行')
   })
 
   it('旧版单页已下线，只保留单壳', () => {
@@ -56,11 +58,11 @@ describe('静态页面与共享 UI 组件', () => {
 
   it('课堂与大考复用同一套聊天组件与样式，不再各自复制', () => {
     const chat = read('ui/chat.js')
-    for (const duplicated of ['function maybeChips', 'function handleLine', 'function submitChips', 'function colorizeCost', 'function setBusy']) {
+    for (const duplicated of ['function maybeChips', 'function handleLine', 'function submitChips', 'function setBusy']) {
       assert.equal(chat.includes(duplicated), false, `ui/chat.js 不应再定义 ${duplicated}`)
     }
     assert.match(chat, /class="chip"/, '共享组件应提供选项按钮')
-    assert.match(chat, /this\.log\.appendChild\(this\.colorizeCost\(line\)\)/, '共享组件应处理成本行')
+    assert.doesNotMatch(chat, /colorizeCost|class="cost"/, '共享组件不应展示成本')
   })
 
   it('视图控制器只实现一次流程逻辑', () => {
@@ -98,5 +100,13 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('ui/palette.js'), /metaKey \|\| event\.ctrlKey/, '命令面板应支持 ⌘K / Ctrl+K')
     assert.match(read('ui/chat.js'), /bindComposer/, '聊天组件应支持多行输入绑定')
     assert.match(read('ui/chat.js'), /event\.shiftKey/, 'Enter 发送、Shift+Enter 换行')
+  })
+
+  it('课堂与大考的输入选择器必须匹配多行输入框', () => {
+    for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
+      const source = read(file)
+      assert.match(source, /<textarea/, `${file} 应使用多行输入`)
+      assert.match(source, /querySelector\('\.chat-inputrow textarea'\)/, `${file} 的输入选择器应匹配 textarea`)
+    }
   })
 })

@@ -76,7 +76,6 @@ function buildFixture(t: { after: (fn: () => void) => void }, options: { twoNode
     readLine: async () => lines.shift() ?? null,
     closeInput: () => {},
     signal: new AbortController().signal,
-    tty: false,
   }
   let chatCount = 0
   const createChat = (async (chatOptions?: CreateChatOptions) => {

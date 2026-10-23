@@ -30,7 +30,7 @@
       </div>`
 
     const $log = root.querySelector('.chat-log')
-    const $input = root.querySelector('.chat-inputrow input')
+    const $input = root.querySelector('.chat-inputrow textarea')
     const $send = root.querySelector('.chat-inputrow button')
     const $banner = root.querySelector('.chat-banner')
     const $stop = root.querySelector('.chat-stop')

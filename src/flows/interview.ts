@@ -1,5 +1,4 @@
 import { extractProfileJson, parseProfile, preserveLearnerRequests, profileValidationError } from '../core/interview.ts'
-import { printSessionTotal } from './cost-line.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import type { FlowDeps } from './deps.ts'
 import { FlowExit } from './io.ts'
@@ -26,7 +25,6 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
       io.out(`\n课程 "${config.courseId}" 已创建，档案位于 ${store.root}/${config.courseId}/profile.yaml\n`)
       await chat.flush()
       recordChatTotal(deps.costs, chat, 'interview')
-      printSessionTotal(chat, deps)
       io.closeInput()
       throw new FlowExit(0)
     }
@@ -37,7 +35,6 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
         io.err(`tutor: 模型连续 ${MAX_PROFILE_REPAIRS + 1} 次输出无效档案，已中止；最后错误：${profileValidationError(reply) ?? '未知'}\n`)
         await chat.flush()
         recordChatTotal(deps.costs, chat, 'interview')
-        printSessionTotal(chat, deps)
         io.closeInput()
         throw new FlowExit(1)
       }

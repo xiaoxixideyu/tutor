@@ -8,8 +8,6 @@ const config: CostConfig = {
   currency: '¥',
   defaultRates: { input: 2, output: 8 },
   modelRates: { premium: { input: 10, output: 20 } },
-  warn: 0.05,
-  alarm: 0.2,
 }
 
 function fakeChat(model: string, usage: UsageSample): AgentChat {

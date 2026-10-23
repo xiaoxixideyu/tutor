@@ -2,7 +2,6 @@ import { EXAM_PASS_SCORE, ExamPaperSchema, examAdmission, gradeObjective, nextMi
 import { applyExamAttempt, ExamAttemptStore, newExamAttempt } from '../core/exam-attempt.ts'
 import type { KnowledgeMap, Mastery, Plan, Profile } from '../core/schema.ts'
 import { formatChoice } from '../core/assessment.ts'
-import { printSessionTotal } from './cost-line.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import { generateTurn, parseJsonBlock, trySchema } from './generation.ts'
 import { contentKey, examContent, mapContent, planContent } from '../core/content-quality.ts'
@@ -260,7 +259,6 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
   io.out(`里程碑 ${milestone.id}：${passed ? '通过，已记录' : '未通过，指针回退到薄弱节点（补救课）'}\n`)
   io.out(after.plan.current ? `计划指针：${after.plan.current}\n` : '课程完成。\n')
   recordChatTotal(deps.costs, chat, 'exam')
-  printSessionTotal(chat, deps)
   io.closeInput()
   throw new FlowExit(passed ? 0 : 1)
 }

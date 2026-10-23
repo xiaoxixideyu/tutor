@@ -4,8 +4,9 @@
   const V = (window.TutorViews = window.TutorViews || {})
   const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂', 'audit-content': '内容审查' }
   const WIZARD_KINDS = ['new', 'assess', 'plan', 'research', 'audit-content']
-  const COST_RE = /^(本回合|会话累计|审查开销)/
-  // 只有真正需要用户处理的才算"错误"；限流等待、内部核查、成本等一律进安静状态条，避免刷屏。
+  // 旧会话回放可能仍带成本行：静默丢弃，不向学员展示任何开销。
+  const LEGACY_COST_RE = /^(本回合|会话累计|审查开销|备课开销|知识地图生成开销|该知识点出题开销|本次流程总成本|复用同一内容的.*费用)/
+  // 只有真正需要用户处理的才算"错误"；限流等待、内部核查等一律进安静状态条，避免刷屏。
   const FAILURE_RE = /(不存在|未完成|失败|无法|不支持|非法|中断|预算|未通过|拦截|缺少|请先)/
   // 引擎内部运行提示（限流等待、生成与审查进度等）——不进对话流，只在状态条/进度面板里显示。
   const OP_OUT_RE = /^(?:tutor:\s*)?(等待渠道额度|渠道暂时|渠道临时错误后的重试等待|重新检查共享额度|按共享队列.*排队|约 \d+ 秒后|正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|复用同一内容的|正在核对.*范围与正确性|[^\n]{0,12}核查中[：:]|资料审查达到|正在构思知识地图骨架|正在生成知识地图|知识地图就绪|正在生成摸底题库[：:]|正在设计|正在生成试卷|正在生成并核对|正在汇总本知识点|正在核对本知识点|检索资料（|读取来源正文（|第 \d+\/\d+ 个知识点教研中)/
@@ -29,7 +30,7 @@
           <span class="step" data-step="plan">教学计划</span> →
           <span class="step" data-step="learn">上课</span>
           <button class="goto" data-role="goto" style="display:none">进入课堂 →</button>
-          <button class="goto" data-role="research" style="display:none">先联网教研（约 ¥1，官方来源）</button>
+          <button class="goto" data-role="research" style="display:none">先联网教研（官方来源）</button>
         </div>
         <section class="wizard-research" hidden></section>
         <div class="wizard-log"></div>
@@ -78,9 +79,6 @@
     let bubble = null
     let bubbleText = ''
     let source = null
-    let flowCost = 0
-    let flowCostCalls = 0
-    let flowSessionTotal = null
 
     function scrollToEnd() { TutorDom.scrollToEnd($log) }
 
@@ -104,17 +102,6 @@
     }
     let onStatusText = ''
 
-    // 成本只进顶部累计徽章；不再逐条刷进对话流。
-    function noteCostLine(line) {
-      const amounts = [...String(line).matchAll(/¥\s*([0-9]+(?:\.[0-9]+)?)/g)].map((match) => Number(match[1]))
-      if (/会话累计/.test(line)) { if (amounts.length > 0) flowSessionTotal = Math.max(flowSessionTotal ?? 0, amounts[0]) }
-      else for (const amount of amounts) { flowCost += amount; if (amount > 0) flowCostCalls += 1 }
-      const total = Math.max(flowCost, flowSessionTotal ?? 0)
-      onStatus({ text: total > 0 ? `已用 ≈ ¥${total.toFixed(2)}${flowCostCalls > 0 ? ` · 审查 ${flowCostCalls} 项` : ''}` : (onStatusText ?? ''), busy })
-    }
-
-    function resetCost() { flowCost = 0; flowCostCalls = 0; flowSessionTotal = null }
-
     function noteOp(text) {
       const value = cleanOp(text)
       if (!value) return
@@ -127,11 +114,11 @@
       $opStatus.style.display = 'none'
     }
 
-    // 引擎文本分流：返回 true 表示已归入状态条/里程碑/成本徽章，不再进对话流。
+    // 引擎文本分流：返回 true 表示已归入状态条/里程碑或已静默丢弃，不再进对话流。
     function routeEngineLine(text) {
       const trimmed = String(text ?? '').trim()
       if (trimmed.startsWith('@@tutor-progress ')) return true
-      if (COST_RE.test(trimmed)) { noteCostLine(trimmed); return true }
+      if (LEGACY_COST_RE.test(trimmed)) return true
       if (/^内容审查[^：]*：/.test(trimmed)) {
         if (/拦截|未完成/.test(trimmed)) {
           closeBubble()
@@ -256,7 +243,7 @@
     // 教研决策：把「先联网教研」和「跳过」并排放进对话流。
     function researchDecision(skipKind, skipLabel) {
       const row = TutorDom.el('<div class="chips"></div>')
-      const go = TutorDom.el('<button class="chip">先联网教研（约 ¥1，官方来源）</button>')
+      const go = TutorDom.el('<button class="chip">先联网教研（官方来源）</button>')
       const skip = TutorDom.el(`<button class="chip">${TutorDom.esc(skipLabel)}</button>`)
       const done = (next) => { row.remove(); $researchBtn.style.display = 'none'; startFlow(next) }
       go.addEventListener('click', () => done('research'))
@@ -315,7 +302,6 @@
     }
 
     function rememberFlow(flow) {
-      resetCost()
       currentNodeId = flow.nodeId || ''
       const url = new URL(location.href)
       url.searchParams.set('course', flow.courseId)

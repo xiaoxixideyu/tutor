@@ -77,7 +77,6 @@ it('learn 集成：软门越权 → 热身 → 小测校准 → 旧知识回访�
     readLine: async () => lines.shift() ?? null,
     closeInput: () => {},
     signal: new AbortController().signal,
-    tty: false,
   }
   let chatCount = 0
   const createChat = (async (options?: CreateChatOptions) => {

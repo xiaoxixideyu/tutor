@@ -6,8 +6,6 @@ import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
 import { OutputLimitError, type AgentChat } from '../runtime/chat.ts'
 import { TurnTimeoutError } from '../runtime/timeouts.ts'
 import { generateTurn, parseJsonBlock, type ParseResult } from './generation.ts'
-import { formatTurnCost } from '../core/cost.ts'
-import { loadCostConfigFromRepo } from './cost-line.ts'
 import type { FlowDeps } from './deps.ts'
 
 export interface ContentVerdict { approved: boolean; issues: string[]; cached: boolean; evidenceFile?: string }
@@ -228,12 +226,10 @@ export function createContentGate(deps: FlowDeps, courseId: string): ContentGate
   }, record => {
     const out = deps.io.out
     out(`内容审查 ${record.input.kind}：${record.status === 'approved' ? '通过' : record.status === 'rejected' ? `拦截 ${record.issues?.length ?? 0} 处问题` : '未完成'}（记录已保存）。\n`)
-    const cost = loadCostConfigFromRepo(deps.workspace)
     const reused = record.calls.filter(call => call.reusedFrom).length
-    if (reused) out(`复用同一内容的 ${reused} 项已完成检查，原始证据与费用保留；本次不重复计费。\n`)
+    if (reused) out(`复用同一内容的 ${reused} 项已完成检查，原始证据保留。\n`)
     for (const call of record.calls) if (call.model && !call.reusedFrom) {
       deps.costs?.record(call.model, call.usage, `review:${call.role}`)
-      out(`审查开销 ${call.role}：${formatTurnCost(call.usage, call.model, cost, deps.io.tty)}\n`)
     }
   }, {
     onStart: record => {

@@ -17,7 +17,6 @@ export interface FlowIO {
   readLine(): Promise<string | null>
   closeInput(): void
   readonly signal: AbortSignal
-  readonly tty: boolean
 }
 
 export interface LineQueue {
@@ -62,7 +61,7 @@ export function createLineQueue(): LineQueue {
   }
 }
 
-export function createCliIO(options: { tty?: boolean; signal?: AbortSignal } = {}): FlowIO {
+export function createCliIO(options: { signal?: AbortSignal } = {}): FlowIO {
   const queue = createLineQueue()
   let rl: readline.Interface | undefined
   // 延迟到首次读取时再占用 stdin，避免无输入流程退出前被 readline 拖住。
@@ -109,6 +108,5 @@ export function createCliIO(options: { tty?: boolean; signal?: AbortSignal } = {
       try { process.stdin.destroy() } catch { /* 已关闭 */ }
     },
     signal: controller.signal,
-    tty: options.tty ?? process.stdout.isTTY === true,
   }
 }

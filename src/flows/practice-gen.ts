@@ -1,7 +1,6 @@
 import { buildPracticeGenPrompt, practiceGenerationNodes, validatePracticeTasks } from '../core/practice.ts'
 import type { KnowledgeMap, Plan, PracticeTaskFile, Profile } from '../core/schema.ts'
 import { parseJsonBlock } from './generation.ts'
-import { printSessionTotal } from './cost-line.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import { mapContent, planContent, practiceContent } from '../core/content-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
@@ -69,7 +68,6 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
           }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
           await repairChat.flush()
           recordChatTotal(deps.costs, repairChat, 'practice-repair')
-          printSessionTotal(repairChat, deps)
         } else {
           // 每个知识点独立会话：避免上一个知识点的任务 JSON、测试命令和提示词污染下一个。
           const chat = await deps.createChat({ retryOnLength: false })
@@ -89,7 +87,6 @@ export async function runPracticeGen(deps: FlowDeps, config: { courseId: string;
           }, gate, value => practiceContent(value.tasks, node, profile, map), { out: io.out })
           await chat.flush()
           recordChatTotal(deps.costs, chat, 'practice-gen')
-          printSessionTotal(chat, deps)
         }
       } catch (error) {
         // 单个知识点失败不该拖垮整批：其余知识点继续出题，失败节点记录下来重跑即可补齐。

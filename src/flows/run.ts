@@ -10,7 +10,6 @@ import { ChatRuntime, type AgentChat, type AttemptObservation, type CreateChatOp
 import type { SearchSettings } from '../runtime/tools.ts'
 import { createResearchStatus } from '../runtime/status.ts'
 import { CostLedger } from './cost-ledger.ts'
-import { printCostLedger } from './cost-line.ts'
 import { FlowExit, type FlowIO } from './io.ts'
 import type { FlowDeps, FlowInput } from './deps.ts'
 import { runInterview } from './interview.ts'
@@ -136,7 +135,6 @@ export async function runFlowInProcess(input: FlowInput, io: FlowIO, options: Ru
     return 1
   } finally {
     lock.release()
-    try { printCostLedger(deps) } catch { /* 成本展示失败不影响流程结果 */ }
   }
 }
 

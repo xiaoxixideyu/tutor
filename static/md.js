@@ -7,7 +7,7 @@
     return text
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\[资料[:：](\d+)\]/g, '<span style="color:var(--accent)">[资料:$1]</span>')
+      .replace(/\[资料[:：](\d+)\]/g, '<sup class="cite">[资料:$1]</sup>')
   }
   function inlineText(raw) { return inline(escHtml(raw)) }
   function toHtml(src) {

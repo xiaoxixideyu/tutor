@@ -1,7 +1,6 @@
 import { assemblePlan, buildPlanPath, masteredFromMastery, masteredFromProfile, validateMilestoneDraft } from '../core/plan.ts'
 import type { KnowledgeMap, LearnerProfile, Mastery, Plan, Profile } from '../core/schema.ts'
 import { parseJsonBlock } from './generation.ts'
-import { printSessionTotal } from './cost-line.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import { topoOrder } from '../core/knowledge.ts'
 import { mapContent, planContent } from '../core/content-quality.ts'
@@ -106,7 +105,6 @@ export async function runPlan(deps: FlowDeps, config: { courseId: string }): Pro
   io.out(`当前指针：${plan.current ?? '（无）'}\n`)
   await chat.flush()
   recordChatTotal(deps.costs, chat, 'plan')
-  printSessionTotal(chat, deps)
   io.closeInput()
   throw new FlowExit(0)
 }
