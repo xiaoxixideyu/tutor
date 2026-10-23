@@ -36,7 +36,7 @@
         item.overdue_days > 0 ? `逾期 ${item.overdue_days} 天` : '',
         item.retention !== undefined ? `预计保留 ≈${Math.round(item.retention * 100)}%` : '',
       ].filter(Boolean).join(' · ')
-      card.appendChild(TutorDom.el(`<div class="progress">第 ${cur + 1}/${items.length} 节 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
+      card.appendChild(TutorDom.el(`<div class="progress">第 ${cur + 1}/${items.length} 个知识点 · ${item.questions.length} 题${memory ? ` · ${memory}` : ''}</div>`))
       item.questions.forEach((question, index) => {
         const qDiv = TutorDom.el('<div class="q"></div>')
         // 题干可能是含代码块的 Markdown（题库原文），必须渲染而不是转义成纯文本。
@@ -45,45 +45,75 @@
           const wrap = TutorDom.el('<div class="choices"></div>')
           question.choices.forEach((choiceText, choiceIndex) => {
             const letter = LETTERS[choiceIndex]
-            const btn = TutorDom.el(`<button class="choice">${TutorMd.inlineText(choiceText)}</button>`)
+            const btn = TutorDom.el(`<button class="choice" aria-pressed="false">${TutorMd.inlineText(choiceText)}</button>`)
             btn.addEventListener('click', () => {
               if (btn.classList.contains('disabled')) return
               answers[index] = letter
-              for (const other of wrap.querySelectorAll('.choice')) other.classList.remove('selected')
+              for (const other of wrap.querySelectorAll('.choice')) {
+                other.classList.remove('selected')
+                other.setAttribute('aria-pressed', 'false')
+              }
               btn.classList.add('selected')
+              btn.setAttribute('aria-pressed', 'true')
+              qDiv.classList.remove('missing')
             })
             wrap.appendChild(btn)
           })
           qDiv.appendChild(wrap)
         } else {
           const box = TutorDom.el('<div class="short"><input placeholder="输入你的答案…"></div>')
-          box.querySelector('input').addEventListener('input', (event) => { answers[index] = event.target.value })
+          box.querySelector('input').addEventListener('input', (event) => {
+            answers[index] = event.target.value
+            if (event.target.value.trim()) qDiv.classList.remove('missing')
+          })
           qDiv.appendChild(box)
         }
         card.appendChild(qDiv)
       })
+      const formerr = TutorDom.el('<div class="formerr" hidden></div>')
+      card.appendChild(formerr)
       const submit = TutorDom.el('<button class="submit">提交本节</button>')
       submit.addEventListener('click', async () => {
-        if (answers.some((answer) => !answer.trim())) {
+        const missing = answers.map((answer, index) => answer.trim() ? -1 : index).filter((index) => index >= 0)
+        if (missing.length) {
+          for (const index of missing) card.querySelectorAll('.q')[index]?.classList.add('missing')
+          formerr.hidden = false
+          formerr.textContent = `还有 ${missing.length} 题未作答，已标出。`
+          card.querySelectorAll('.q')[missing[0]]?.scrollIntoView({ block: 'center', behavior: 'smooth' })
           onStatus({ text: '请完成全部题目后提交', busy: false })
           return
         }
+        formerr.hidden = true
         submit.disabled = true
         for (const choice of card.querySelectorAll('.choice')) choice.classList.add('disabled')
         for (const input of card.querySelectorAll('input')) input.disabled = true
         try {
           const out = await TutorRpc('submitReview', { id: courseId, node: item.node, attemptId: item.attemptId, answers })
+          submit.hidden = true
           showResult(card, item, out)
         } catch (error) {
+          if (TutorDom.isContentGateError(error.message)) {
+            submit.hidden = true
+            card.appendChild(TutorDom.gateNotice({ courseId, navigate, raw: error.message }))
+            onStatus({ text: '内容审查未通过', busy: false })
+            return
+          }
           submit.disabled = false
           for (const choice of card.querySelectorAll('.choice')) choice.classList.remove('disabled')
           for (const input of card.querySelectorAll('input')) input.disabled = false
-          card.appendChild(TutorDom.el(`<div class="err">提交失败：${TutorDom.esc(error.message)}</div>`))
+          formerr.hidden = false
+          formerr.textContent = `提交失败：${error.message}`
         }
       })
       card.appendChild(submit)
       $main.innerHTML = ''
       $main.appendChild(card)
+      scrollToTop()
+    }
+
+    function scrollToTop() {
+      $main.scrollTop = 0
+      window.scrollTo(0, 0)
     }
 
     function showResult(card, item, out) {
@@ -107,7 +137,7 @@
       const row = TutorDom.el('<div class="chips"></div>')
       if (cur < items.length - 1) {
         const next = TutorDom.el('<button class="next">下一节 →</button>')
-        next.addEventListener('click', () => { cur += 1; window.scrollTo(0, 0); renderNode() })
+        next.addEventListener('click', () => { cur += 1; renderNode() })
         row.appendChild(next)
       } else {
         const done = TutorDom.el('<button class="next">全部完成 → 课程列表</button>')

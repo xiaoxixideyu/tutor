@@ -2,15 +2,19 @@
 (function () {
   const V = (window.TutorViews = window.TutorViews || {})
   const SYM = { mastered: ['✓', 's-mastered'], learning: ['●', 's-learning'], weak: ['▲', 's-weak'], unknown: ['·', 's-unknown'] }
-  const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
 
   // 视图只存在于单壳里：默认链接就是 hash 路由（宿主可再覆盖）。
   function defaultFlowHref(flow) {
     const course = encodeURIComponent(flow.courseId)
+    const node = flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''
     if (flow.kind === 'learn') return `#/course/${course}/learn`
     if (flow.kind === 'exam') return `#/course/${course}/exam${flow.milestoneId ? `/${encodeURIComponent(flow.milestoneId)}` : ''}`
-    if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${course}/practice${flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''}`
-    return `#/course/${course}/${encodeURIComponent(flow.kind)}${flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''}`
+    if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${course}/practice${node}`
+    if (flow.kind === 'research') return `#/course/${course}/research${node}`
+    if (flow.kind === 'assess') return `#/course/${course}/assess`
+    if (flow.kind === 'plan') return `#/course/${course}/plan`
+    if (flow.kind === 'audit-content') return `#/course/${course}/audit-content`
+    return `#/course/${course}`
   }
 
   V.home = function (options) {
@@ -41,13 +45,14 @@
             const pct = c.total > 0 ? Math.round((c.mastered / c.total) * 100) : 0
             const dueBadge = c.dueCount ? `<span class="badge">到期 ${c.dueCount}</span>` : ''
             const running = flowByCourse.get(c.id)
-            const runningBadge = running ? `<span class="badge run">▶ ${FLOW_LABEL[running.kind] ?? running.kind}进行中</span>` : ''
+            const runningBadge = running ? `<span class="badge run">▶ ${TutorDom.flowLabel(running.kind)}进行中</span>` : ''
             const reviewLine = dueById.has(c.id)
               ? `<div class="meta review-line">待复习：${TutorDom.esc(dueById.get(c.id).due.map((d) => d.node).join('、'))}</div>`
               : ''
-            // 内容主闸（地图）未过审：摸底/计划/上课/复习都会 gate.require 地图，任一点进去都会 dead-end；看板先提示而非假装可用。
-            const warnLine = !c.error && c.contentReady === false
-              ? '<div class="meta" style="color:#b45309">⚠ 课程内容未通过当前审查，摸底/上课/复习等环节可能无法进入——需重新审查后再用</div>'
+            // 内容主闸（地图）未过审：摸底/计划/上课/大考/实践生成都会在门前退出，看板直接给重审入口而不是死路。
+            const blocked = !c.error && c.contentReady === false
+            const warnLine = blocked
+              ? '<div class="meta warn-line">⚠ 教学内容未通过准入审查：摸底、上课、大考与生成实践已暂停（复习不受影响）。</div>'
               : ''
             const errorLine = c.error
               ? `<div class="meta" style="color:#b91c1c">⚠ 课程数据无法读取：${TutorDom.esc(c.error)}</div>`
@@ -58,19 +63,26 @@
             const cta = c.error
               ? null
               : running
-                ? { label: `继续${FLOW_LABEL[running.kind] ?? '流程'} →`, href: flowHref(running) }
-                : c.stage === 'ready'
-                  ? allMastered
-                    ? { label: '✓ 已全部掌握', href: courseHref(c.id) }
-                    : { label: '上课 →', href: lessonHref(c.id) }
-                  : c.stage === 'need-plan'
-                    ? { label: '生成计划 →', href: planHref(c.id) }
-                    : { label: '去摸底 →', href: assessHref(c.id) }
+                ? { label: `继续${TutorDom.flowLabel(running.kind)} →`, href: flowHref(running) }
+                : allMastered
+                  ? { label: '✓ 已全部掌握', href: courseHref(c.id) }
+                  : blocked
+                    ? { label: '重新审查 →', href: auditHref(c.id), warn: true }
+                    : c.stage === 'ready'
+                      ? { label: '上课 →', href: lessonHref(c.id) }
+                      : c.stage === 'need-plan'
+                        ? { label: '生成计划 →', href: planHref(c.id) }
+                        : { label: '摸底/续测 →', href: assessHref(c.id) }
             const reviewBtn = c.dueCount
               ? `<button class="enter review-btn" data-href="${TutorDom.esc(reviewHref(c.id))}">复习 ${c.dueCount} →</button>`
               : ''
             return `<div class="course" data-id="${TutorDom.esc(c.id)}" data-error="${c.error ? '1' : ''}">
-              <div class="row1"><span class="id">${TutorDom.esc(c.id)}</span><span class="goal">${TutorDom.esc(c.goal)}</span>${runningBadge}${dueBadge}${reviewBtn}${cta ? `<button class="enter" data-href="${TutorDom.esc(cta.href)}">${TutorDom.esc(cta.label)}</button>` : ''}</div>
+              <div class="row1">
+                <span class="id">${TutorDom.esc(c.id)}</span>
+                ${runningBadge}${dueBadge}
+                <span class="actions">${reviewBtn}${cta ? `<button class="enter${cta.warn ? ' warn' : ''}" data-href="${TutorDom.esc(cta.href)}">${TutorDom.esc(cta.label)}</button>` : ''}</span>
+              </div>
+              <div class="goal">${TutorDom.esc(c.goal)}</div>
               <div class="bar"><span style="width:${pct}%"></span></div>
               <div class="meta">进度 ${c.mastered}/${c.total} 已掌握${c.current ? ` · 当前 ${TutorDom.esc(c.current)}` : ''}</div>
               ${reviewLine}
@@ -105,13 +117,24 @@
            <div class="meta">近 14 天学习 ${history.pace.sessions} 天${history.pace.averageGapDays !== undefined ? `，平均间隔 ${history.pace.averageGapDays} 天` : ''}　（柱=当天活动次数：小测/回访/复习/实践/大考）</div>
            ${history.nodes.length ? `<div class="trail" style="margin-top:8px">${history.nodes.map((n) => `<div class="meta">${TutorDom.esc(n.node)}：${n.points.map((pt) => `<span class="sym ${pt.passed === false ? 's-weak' : 's-mastered'}" title="${TutorDom.esc(pt.at)} · ${TutorDom.esc(pt.kind)} · ${pt.score}">${pt.passed === false ? '✗' : '✓'}</span>`).join('')}</div>`).join('')}</div>` : ''}`
       const KIND_LABEL = { map: '知识地图', bank: '摸底题库', lesson: '教案', plan: '教学计划', teaching: '课堂讲授', exam: '大考', practice: '实践任务' }
-      const issuesSection = issues.length
-        ? `<div style="margin-top:12px;padding:10px 12px;border:1px solid #f1c084;background:#fffbeb;border-radius:8px">
-            <div style="color:#b45309;font-weight:600;margin-bottom:6px">⚠ 以下内容未通过审查，修复后需重新审查</div>
-            ${issues.map((it) => `<div class="meta" style="margin:4px 0">· <strong>${TutorDom.esc(KIND_LABEL[it.kind] ?? it.kind)}${it.node ? '（' + TutorDom.esc(it.node) + '）' : ''}</strong>：${(it.issues || []).map(TutorDom.esc).join('；')}</div>`).join('')}
-            <div class="meta" style="margin-top:6px">修复对应 YAML 后运行 <code>npm run agent -- audit-content ${TutorDom.esc(p.id)}</code> 重新审查。</div>
+      const blocked = p.contentReady === false
+      const issueList = issues.length
+        ? issues.map((it) => `<div class="meta" style="margin:4px 0">· <strong>${TutorDom.esc(KIND_LABEL[it.kind] ?? it.kind)}${it.node ? '（' + TutorDom.esc(it.node) + '）' : ''}</strong>：${(it.issues || []).map(TutorDom.esc).join('；')}</div>`).join('')
+        : '<div class="meta">未找到当前内容对应的拒绝原因，可直接重新审查。</div>'
+      const warnSection = blocked
+        ? `<div class="notice warn-notice">
+            <div class="notice-title">⚠ 教学内容未通过准入审查</div>
+            <div class="notice-body">摸底、上课、大考与生成实践已暂停；复习不受影响。内容未修改时重审会复用上次结论，仍需先修复对应内容。</div>
+            ${issueList}
+            <div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>
           </div>`
-        : ''
+        : issues.length
+          ? `<div class="notice warn-notice">
+              <div class="notice-title">⚠ 以下内容未通过审查，修复后需重新审查</div>
+              ${issueList}
+              <div class="notice-actions"><button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button></div>
+            </div>`
+          : ''
       const nodeRows = p.nodes.map((n) => {
         const [sym, cls] = SYM[n.status] ?? SYM.unknown
         // 记忆保留率估计（有实测锚点时才有）：低于 70% 标橙，提示可能已生锈。
@@ -130,7 +153,7 @@
           <td>${n.score !== undefined ? TutorDom.esc(n.score) : ''}</td>
           <td>${n.review_due !== undefined ? `复习→${TutorDom.esc(n.review_due)}${retention}` : ''}</td>
           <td>${n.researchStatus ? `${researchLabel} <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id, n.id))}">${n.researchStatus === 'pending' ? '教研' : '补查'}</button>` : ''}</td>
-          <td>${p.hasPlan ? `<button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id, n.id))}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
+          <td>${p.hasPlan && (n.practiceCount || !blocked) ? `<button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id, n.id))}">${n.practiceCount ? '实践' : '生成实践'}</button>` : ''}</td>
         </tr>`
       }).join('')
       // 里程碑：已通过大考→标「✓ 大考通过」；全部节点已掌握且未通过→给「参加大考」入口；否则显示掌握进度。
@@ -141,34 +164,31 @@
           const pctText = m.examScore !== undefined ? `（${Math.round(m.examScore * 100)} 分）` : ''
           tail = `<span style="color:var(--mastered)">✓ 大考通过${pctText}</span>`
         } else if (m.examable) {
-          tail = `<button class="enter ms-exam" data-href="${TutorDom.esc(examHref(p.id, m.id))}">参加大考 →</button>`
+          tail = blocked
+            ? '<span class="meta">内容审查通过后可考</span>'
+            : `<button class="enter ms-exam" data-href="${TutorDom.esc(examHref(p.id, m.id))}">参加大考 →</button>`
         }
         return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
       }).join('')
       const c = p.counts
-      // 实践入口（course 级）：有计划才给；practice.yaml 已生成→「去实践」，否则→「生成实践任务」（实践视图内部再兜底判定）。
-      const practiceRow = p.hasPlan
+      // 实践入口（course 级）：已生成任务→「去实践」；未生成且内容未过审时不给会失败的死路。
+      const practiceRow = p.hasPlan && (p.hasPractice || !blocked)
         ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id))}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
         : ''
-      // 未过审时给「重新审查」入口（wizard 以 audit-content 流程运行 `npm run agent -- audit-content <id>`）。
-      const auditBtn = p.contentReady === false
-        ? `<button class="enter go-audit" data-href="${TutorDom.esc(auditHref(p.id))}">重新审查 →</button>`
-        : ''
-      const resetBtn = `<button class="enter" id="reset-breaks" style="margin-left:8px">清理中断的摸底/考试断点</button>`
+      const resetBtn = '<button class="back" id="reset-breaks" type="button">清理中断的摸底/考试断点</button>'
       root.innerHTML = `
         <button class="back" id="back">← 返回课程列表</button>
         <h2 style="margin-top:12px">${TutorDom.esc(p.id)}${p.goal ? ` · ${TutorDom.esc(p.goal)}` : ''}</h2>
         <div class="meta">指针：${p.current ? TutorDom.esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
         <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
-        ${auditBtn}
-        ${resetBtn}
-        ${issuesSection}
+        ${warnSection}
+        <div class="detail-actions">${resetBtn}</div>
         ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id))}">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
         ${practiceRow}
         ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
         <h2 style="margin-top:16px">知识点（${p.totalNodes}）</h2>
-        <table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>教研资料</th><th>实践</th></tr></thead>
-        <tbody>${nodeRows}</tbody></table>
+        <div class="table-scroll"><table><thead><tr><th></th><th>状态</th><th>id</th><th>标题</th><th>分数</th><th>复习</th><th>教研资料</th><th>实践</th></tr></thead>
+        <tbody>${nodeRows}</tbody></table></div>
         ${curveSection}`
       root.querySelector('#back').addEventListener('click', () => renderList())
       for (const btn of root.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit')) {

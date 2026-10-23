@@ -9,8 +9,8 @@
 .practice-actions { align-items: center; flex-wrap: wrap; }
 .practice-node { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .practice-select { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; background: var(--card); color: var(--fg); font-family: inherit; }
-.practice-run { background: var(--accent); color: #fff; border: none; }
-.practice-rerun { background: var(--bg); }
-.practice-quit { background: #fff; border-color: #fecaca; color: var(--red); }
 .practice-actions button { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 6px 16px; font-size: 13px; cursor: pointer; color: var(--fg); }
 .practice-actions button:disabled { opacity: .5; cursor: default; }
+.practice-actions .practice-run { background: var(--accent); border-color: var(--accent); color: #fff; }
+.practice-actions .practice-rerun { background: var(--bg); }
+.practice-actions .practice-quit { background: #fff; border-color: #fecaca; color: var(--red); }

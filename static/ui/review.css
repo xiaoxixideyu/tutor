@@ -15,6 +15,15 @@
   .nodehead { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
   .progress { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
   .q { margin: 14px 0; }
+  .q.missing { border-left: 3px solid var(--red); background: #fef2f2; margin-left: -10px; padding: 8px 10px; border-radius: 6px; }
+  .q.missing .idx { color: var(--red); }
+  .formerr { color: var(--red); font-size: 13px; margin-top: 8px; }
+  .gate-notice { border: 1px solid #fca5a5; background: #fef2f2; border-radius: 10px; padding: 12px 14px; margin-top: 14px; font-size: 13px; }
+  .gate-head { color: #991b1b; font-weight: 600; margin-bottom: 4px; }
+  .gate-body { color: #7f1d1d; line-height: 1.6; }
+  .gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .gate-actions .chip { background: #fff; }
+  .gate-actions .chip.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .q .qtext { font-size: 14px; line-height: 1.6; margin-bottom: 8px; display: flex; gap: 6px; }
   .q .qtext .idx { color: var(--accent); font-weight: 600; flex-shrink: 0; }
   .q .qtext .qbody { flex: 1; min-width: 0; }

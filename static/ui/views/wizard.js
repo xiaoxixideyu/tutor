@@ -3,6 +3,7 @@
 (function () {
   const V = (window.TutorViews = window.TutorViews || {})
   const STEP_TITLES = { new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂', 'audit-content': '内容审查' }
+  const AUDIT_KIND_LABEL = { map: '知识地图', plan: '教学计划', bank: '摸底题库', lesson: '教案', practice: '实践任务', teaching: '讲授' }
   const WIZARD_KINDS = ['new', 'assess', 'plan', 'research', 'audit-content']
   // 旧会话回放可能仍带成本行：静默丢弃，不向学员展示任何开销。
   const LEGACY_COST_RE = /^(本回合|会话累计|审查开销|备课开销|知识地图生成开销|该知识点出题开销|本次流程总成本|复用同一内容的.*费用)/
@@ -33,7 +34,7 @@
           <button class="goto" data-role="research" style="display:none">先联网教研（官方来源）</button>
         </div>
         <section class="wizard-research" hidden></section>
-        <div class="wizard-log"></div>
+        <div class="wizard-log" hidden></div>
         <div class="wizard-setup">
           <h2>开设新课程</h2>
           <p>导师会先做需求访谈（几个问题），随后引导摸底与计划，全部在这里完成。</p>
@@ -47,6 +48,7 @@
           <div class="wizard-inputrow">
             <input placeholder="输入你的回答…（Enter 发送）" autocomplete="off">
             <button>发送</button>
+            <button class="wizard-stop" type="button" hidden>停止</button>
           </div>
         </div>
       </div>`
@@ -54,6 +56,7 @@
     const $log = root.querySelector('.wizard-log')
     const $input = root.querySelector('.wizard-inputrow input')
     const $send = root.querySelector('.wizard-inputrow button')
+    const $stop = root.querySelector('.wizard-stop')
     const $setup = root.querySelector('.wizard-setup')
     const $footer = root.querySelector('.wizard-foot')
     const $steps = root.querySelector('.wizard-steps')
@@ -79,6 +82,7 @@
     let bubble = null
     let bubbleText = ''
     let source = null
+    let gateBlocked = false
 
     function scrollToEnd() { TutorDom.scrollToEnd($log) }
 
@@ -119,6 +123,24 @@
       const trimmed = String(text ?? '').trim()
       if (trimmed.startsWith('@@tutor-progress ')) return true
       if (LEGACY_COST_RE.test(trimmed)) return true
+      // 逐项重审的内部进度按“已完成记录/正在审查”归入状态条，不能堆进对话气泡。
+      if (/^审查已有内容[：:]/.test(trimmed)) {
+        noteOp(trimmed.replace(/^审查已有内容[：:]\s*/, '正在审查 ').replace(/…$/, '').replace(/^(map|plan|bank|lesson|practice|teaching)\b/, (kind) => AUDIT_KIND_LABEL[kind] ?? kind))
+        return true
+      }
+      if (/^当前内容已有有效审查记录。?$/.test(trimmed)) return true
+      if (/^未通过[：:]/.test(trimmed)) {
+        closeBubble()
+        $log.appendChild(TutorDom.el('<div class="milestone warn">⚠ 有内容未通过审查，可在课程详情查看具体问题</div>'))
+        scrollToEnd()
+        return true
+      }
+      if (/^内容审查完成[：:]/.test(trimmed)) {
+        closeBubble()
+        $log.appendChild(TutorDom.el(`<div class="milestone">${TutorDom.esc(cleanOp(trimmed))}</div>`))
+        scrollToEnd()
+        return true
+      }
       if (/^内容审查[^：]*：/.test(trimmed)) {
         if (/拦截|未完成/.test(trimmed)) {
           closeBubble()
@@ -264,8 +286,7 @@
       scrollToEnd()
     }
 
-    function markStep(kind, state) {
-      for (const step of $steps.querySelectorAll('.step')) {
+    function markStep(kind, state) {      for (const step of $steps.querySelectorAll('.step')) {
         if (step.dataset.step === kind) {
           step.classList.toggle('active', state === 'active')
           step.classList.toggle('done', state === 'done')
@@ -282,9 +303,17 @@
         : kind === 'audit-content' ? '正在重新审查课程内容' : '等待模型回复'
     }
 
+    function setFlowActive(active) {
+      if (!$stop) return
+      $stop.hidden = !active
+      $stop.disabled = false
+      $stop.textContent = '停止'
+    }
+
     function showConsole() {
       researchLive.connect(currentKind === 'research' ? courseName : null)
       $setup.style.display = 'none'
+      $log.hidden = false
       $steps.style.display = 'flex'
       $footer.style.display = 'block'
       onStatus({ text: `${STEP_TITLES[currentKind] ?? currentKind} · ${courseName}`, busy })
@@ -293,28 +322,27 @@
     async function startFlow(kind, nodeId = '') {
       currentKind = kind
       currentNodeId = kind === 'research' ? nodeId : ''
+      gateBlocked = false
       markStep(kind, 'active')
       onStatusText = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
       $footer.style.display = 'block'
       $setup.style.display = 'none'
+      $log.hidden = false
       setBusy(true, busyLabel(kind))
-      await api('/flow/start', { kind, courseId: courseName, ...(currentNodeId ? { nodeId: currentNodeId } : {}) })
-    }
-
-    function rememberFlow(flow) {
-      currentNodeId = flow.nodeId || ''
-      const url = new URL(location.href)
-      url.searchParams.set('course', flow.courseId)
-      url.searchParams.set('resume', flow.kind)
-      url.searchParams.set('flowId', flow.flowId)
-      if (currentNodeId) url.searchParams.set('node', currentNodeId)
-      else url.searchParams.delete('node')
-      history.replaceState(null, '', url)
+      setFlowActive(true)
+      const result = await api('/flow/start', { kind, courseId: courseName, ...(currentNodeId ? { nodeId: currentNodeId } : {}) })
+      if (result && result.ok === false) {
+        setFlowActive(false)
+        setBusy(false)
+        $footer.style.display = 'none'
+        if (TutorDom.isContentGateError(result.error)) $log.appendChild(TutorDom.gateNotice({ courseId: courseName, navigate }))
+        else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(result.error || '流程启动失败')}</div>`))
+      }
     }
 
     async function api(path, body) {
       const result = await flowClient.request(path, body)
-      if (path === '/flow/start' && result.ok) { rememberFlow(result); startSse() }
+      if (path === '/flow/start' && result.ok) startSse()
       return result
     }
 
@@ -331,6 +359,7 @@
         }
         if (msg.type === 'hello') {
           currentNodeId = msg.nodeId || ''
+          gateBlocked = false
           if (msg.kind && msg.kind !== currentKind) {
             currentKind = msg.kind
             courseName = msg.courseId
@@ -339,13 +368,20 @@
           return
         }
         if (msg.type === 'out') feed(msg.text)
-        else if (msg.type === 'err') { if (!routeEngineLine(msg.text)) $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`)) }
-        else if (msg.type === 'exit') {
+        else if (msg.type === 'err') {
+          if (TutorDom.isContentGateError(msg.text)) {
+            gateBlocked = true
+            closeBubble()
+            $log.appendChild(TutorDom.gateNotice({ courseId: courseName, navigate, raw: msg.text }))
+            scrollToEnd()
+          } else if (!routeEngineLine(msg.text)) $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`))
+        } else if (msg.type === 'exit') {
           feed('')
           renderBubble()
           closeBubble()
           setBusy(false)
           clearOp()
+          setFlowActive(false)
           $footer.style.display = 'none'
           if (msg.kind === 'new' && msg.code === 0) {
             markStep('new', 'done')
@@ -373,16 +409,35 @@
             if (ok) {
               markStep('new', 'done'); markStep('plan', 'done')
               $log.appendChild(TutorDom.el('<div class="sysline">内容已通过当前审查，可以开始上课。</div>'))
-              nextStepChip('learn', '去上课 →')
+              const row = TutorDom.el('<div class="chips"></div>')
+              const goLearn = TutorDom.el('<button class="chip">去上课 →</button>')
+              goLearn.addEventListener('click', () => navigate(options.lessonHref
+                ? options.lessonHref(courseName)
+                : `#/course/${encodeURIComponent(courseName)}/learn`))
+              row.appendChild(goLearn)
+              $log.appendChild(row)
             } else {
-              $log.appendChild(TutorDom.el(`<div class="sysline"><a href="/?course=${encodeURIComponent(courseName)}">查看未通过的具体问题</a></div>`))
-              nextStepChip('audit-content', '重新审查 →')
+              $log.appendChild(TutorDom.el('<div class="sysline">内容没有变化时重审会复用上次结论；请先在课程详情查看并修复未通过项。</div>'))
+              const row = TutorDom.el('<div class="chips"></div>')
+              const detail = TutorDom.el('<button class="chip">查看并处理未通过项 →</button>')
+              detail.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseName)}`))
+              row.appendChild(detail)
+              $log.appendChild(row)
             }
+            scrollToEnd()
           } else {
             $log.appendChild(TutorDom.el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
             if (msg.code !== 0) {
-              nextStepChip(msg.kind, currentNodeId ? '重试本知识点 →' : '从已保存进度重试 →', currentNodeId)
-              if (msg.kind === 'research' && currentNodeId) nextStepChip('research', '继续未完成的教研 →')
+              if (gateBlocked) {
+                const row = TutorDom.el('<div class="chips"></div>')
+                const detail = TutorDom.el('<button class="chip">返回课程详情处理内容问题 →</button>')
+                detail.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseName)}`))
+                row.appendChild(detail)
+                $log.appendChild(row)
+              } else {
+                nextStepChip(msg.kind, currentNodeId ? '重试本知识点 →' : '从已保存进度重试 →', currentNodeId)
+                if (msg.kind === 'research' && currentNodeId) nextStepChip('research', '继续未完成的教研 →')
+              }
             }
           }
           scrollToEnd()
@@ -412,6 +467,17 @@
     }
 
     $send.addEventListener('click', send)
+    $stop.addEventListener('click', async () => {
+      if ($stop.disabled) return
+      $stop.disabled = true
+      $stop.textContent = '正在停止…'
+      onStatus({ text: '正在停止当前流程…', busy: true })
+      const result = await api('/flow/stop')
+      if (!result || result.ok === false) {
+        setFlowActive(true)
+        onStatus({ text: result?.error || '停止失败，请重试', busy: false })
+      }
+    })
     $input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) send() })
     $gotoBtn.addEventListener('click', () => navigate(options.lessonHref
       ? options.lessonHref(courseName)
@@ -428,7 +494,7 @@
       if (!state) return
       const sameCourse = (state.flows ?? []).find((flow) => flow.courseId === id)
       if (sameCourse) {
-        $err.textContent = `课程「${id}」已有进行中的流程（${sameCourse.kind}）`
+        $err.textContent = `课程「${id}」已有进行中的流程（${TutorDom.flowLabel(sameCourse.kind)}）`
         return
       }
       courseName = id
@@ -438,7 +504,7 @@
     })
 
     // 从课程列表「生成计划 / 去摸底」跳进来时的续起：跳过 setup 面板，直接从该步起流程。
-    function resumeFrom(kind, course, nodeId) {
+    async function resumeFrom(kind, course, nodeId) {
       courseName = course
       $setup.style.display = 'none'
       $steps.style.display = 'flex'
@@ -449,33 +515,47 @@
         if (steps[i] === 'research') continue
         markStep(steps[i], 'done')
       }
+      if ((kind === 'assess' || kind === 'plan') && await TutorDom.contentBlocked(course)) {
+        markStep(kind, 'active')
+        $log.hidden = false
+        $footer.style.display = 'none'
+        onStatus({ text: `${STEP_TITLES[kind]} · ${course}`, busy: false })
+        $log.appendChild(TutorDom.gateNotice({ courseId: course, navigate }))
+        return
+      }
       startFlow(kind, nodeId)
     }
 
-    // 入口来自单壳的 hash 路由（{ course, resume, node, flowId }），不是查询串。
+    // 入口来自单壳的 hash 路由（{ course, resume, node }）；流程恢复以服务端当前状态为准。
     const entry = options.route ?? {}
     const entryCourse = entry.course ?? null
     const entryResume = entry.resume ?? null
     const entryNode = entry.resume === 'research' ? (entry.node ?? '') : ''
-    const entryFlowId = entry.flowId ?? null
-    const ready = flowClient.state(entryFlowId).then((state) => {
+    const ready = flowClient.state().then(async (state) => {
       if (!state) return
       const requestedCourse = entryCourse
-      const available = state.flow ?? (state.flows ?? []).find((flow) =>
+      const available = (state.flows ?? []).find((flow) =>
         WIZARD_KINDS.includes(flow.kind) && (!requestedCourse || flow.courseId === requestedCourse))
       if (available) {
-        if (!WIZARD_KINDS.includes(available.kind) || (requestedCourse && available.courseId !== requestedCourse)) {
-          $err.textContent = `当前流程属于 ${available.kind} ${available.courseId}，请先返回课程列表。`
-          return
-        }
+        if (requestedCourse && available.courseId !== requestedCourse) return
         if (!flowClient.attach(available)) return
-        rememberFlow(available)
         currentKind = available.kind
         courseName = available.courseId
         showConsole()
+        setFlowActive(true)
         markStep(currentKind, 'active')
         setBusy(available.status === 'running', busyLabel(currentKind))
         startSse()
+        return
+      }
+      const busySameCourse = requestedCourse
+        ? (state.flows ?? []).find((flow) => flow.courseId === requestedCourse)
+        : null
+      if (busySameCourse) {
+        courseName = requestedCourse
+        showConsole()
+        $footer.style.display = 'none'
+        $log.appendChild(TutorDom.el(`<div class="sysline">「${TutorDom.esc(courseName)}」正在进行${TutorDom.flowLabel(busySameCourse.kind)}——同一门课程同时只能跑一个流程。请先回到该流程结束或暂停它。</div>`))
         return
       }
       const course = entryCourse
@@ -486,19 +566,18 @@
         return
       }
       if (course && /^[a-z0-9][a-z0-9-]{0,63}$/.test(course) && WIZARD_KINDS.includes(resume)) {
-        if (entryFlowId) {
-          currentKind = resume; courseName = course; showConsole()
-          $footer.style.display = 'none'
-          $log.appendChild(TutorDom.el('<div class="sysline">流程回放已过期。可从课程已保存的进度继续。</div>'))
-          nextStepChip(resume, '从已保存进度继续 →', nodeId)
-        } else resumeFrom(resume, course, nodeId)
+        await resumeFrom(resume, course, nodeId)
       }
-      startSse()
     }).catch((error) => { $err.textContent = `加载失败：${error.message}` })
 
     return {
       ready,
-      destroy() { try { source?.close() } catch { /* 已关闭 */ } },
+      destroy() {
+        if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+        try { source?.close() } catch { /* 已关闭 */ }
+        researchLive.connect(null)
+        onStatus({ text: '', busy: false })
+      },
     }
   }
 })()

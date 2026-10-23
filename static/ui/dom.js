@@ -25,5 +25,42 @@
     if (element) element.textContent = text
   }
 
-  window.TutorDom = { el, esc, scrollToEnd, setText }
+  const FLOW_LABEL = {
+    new: '需求访谈', assess: '摸底测评', plan: '教学计划', research: '联网教研', learn: '课堂',
+    exam: '里程碑大考', 'practice-gen': '实践任务生成', practice: '实践', 'audit-content': '内容审查',
+  }
+  const FLOW_STATUS = { running: '进行中', stopping: '正在停止', completed: '已完成', failed: '失败' }
+  const flowLabel = (kind) => FLOW_LABEL[kind] ?? '教学流程'
+  const flowStatusLabel = (status) => FLOW_STATUS[status] ?? status ?? ''
+
+  // 服务器错误里的准入证据路径只用于排查；界面只呈现下一步动作。
+  function isContentGateError(text) {
+    return /(未通过审查|尚未通过审查|内容审查未完成|已有内容未通过审查)/.test(String(text ?? ''))
+  }
+
+  function gateNotice({ courseId, navigate = (href) => { location.hash = href }, raw = '' }) {
+    const card = el(`<div class="gate-notice">
+      <div class="gate-head">⚠ 内容审查未通过，流程已暂停</div>
+      <div class="gate-body">该课程当前教学内容未通过准入审查。先重新审查并处理未通过项，才能继续摸底、上课、大考或生成实践。</div>
+      <div class="gate-actions"></div>
+    </div>`)
+    const actions = card.querySelector('.gate-actions')
+    const audit = el('<button class="chip primary">重新审查 →</button>')
+    audit.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseId)}/audit-content`))
+    const detail = el('<button class="chip">查看已发现的问题</button>')
+    detail.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseId)}`))
+    actions.append(audit, detail)
+    if (raw) card.title = String(raw)
+    return card
+  }
+
+  // 进教学流程前先看课程准入，避免为了“自动开始”先触发一次昂贵的内容复审再失败。
+  async function contentBlocked(courseId) {
+    try {
+      const course = await TutorRpc('courseStatus', { id: courseId })
+      return course.contentReady === false
+    } catch { return false }
+  }
+
+  window.TutorDom = { el, esc, scrollToEnd, setText, flowLabel, flowStatusLabel, isContentGateError, gateNotice, contentBlocked }
 })()

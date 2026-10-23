@@ -93,6 +93,7 @@ describe('静态页面与共享 UI 组件', () => {
     }
     assert.match(app, /LEGACY/, '未迁入单壳的流程应回落到单壳路由而不是死胡同')
     assert.match(app, /view: 'new'/, '单壳应支持开设新课程的入口')
+    assert.match(app, /view === 'practice' \|\| view === 'research' \? tail\[0\]/, '实践/教研的节点参数在第三段，不能被当成大考里程碑')
   })
 
   it('模型设置与命令面板已就位', () => {
@@ -108,5 +109,38 @@ describe('静态页面与共享 UI 组件', () => {
       assert.match(source, /<textarea/, `${file} 应使用多行输入`)
       assert.match(source, /querySelector\('\.chat-inputrow textarea'\)/, `${file} 的输入选择器应匹配 textarea`)
     }
+  })
+
+  it('流程恢复不把 flowId 写进地址栏，避免之后进入向导时误认旧流程', () => {
+    for (const file of ['ui/views/wizard.js', 'ui/views/exam.js']) {
+      assert.doesNotMatch(read(file), /history\.replaceState/, `${file} 不应改写地址栏查询串`)
+    }
+    const app = read('ui/app.js')
+    assert.doesNotMatch(app, /get\('flowId'\)/, '路由不应从查询串读取 flowId')
+    assert.match(app, /location\.search\) history\.replaceState/, '单壳启动时应清理旧版残留查询串')
+  })
+
+  it('内容未过审时看板与详情只给重审入口，不提供会失败的课堂/实践入口', () => {
+    const home = read('ui/views/home.js')
+    assert.match(home, /blocked\s*\?\s*\{ label: '重新审查 →'/, '看板主入口应切换为重审')
+    assert.match(home, /const blocked = p\.contentReady === false/, '详情页应判定内容准入')
+    assert.match(home, /warnSection[\s\S]{0,600}重新审查/, '详情页应展示准入审查提示')
+    assert.match(home, /n\.practiceCount \|\| !blocked/, '未过审且未生成实践时不应给生成入口')
+    assert.match(read('ui/views/practice.js'), /renderGatePrompt/, '实践视图应识别内容闸门')
+    assert.match(read('ui/views/learn.js'), /gateNotice/, '课堂视图应识别内容闸门')
+    assert.match(read('ui/views/exam.js'), /gateNotice/, '大考视图应识别内容闸门')
+  })
+
+  it('复习提交前在题内标出漏答，而不是只在顶栏提示', () => {
+    const review = read('ui/views/review.js')
+    assert.match(review, /class="formerr"/, '应有题内错误提示')
+    assert.match(review, /classList\.add\('missing'\)/, '应标出未作答的题目')
+    assert.match(review, /scrollIntoView/, '应定位到第一道漏答题')
+  })
+
+  it('向导提供停止入口，长时间教研/审查可从当前页取消', () => {
+    const wizard = read('ui/views/wizard.js')
+    assert.match(wizard, /class="wizard-stop"/, '向导应有停止按钮')
+    assert.match(wizard, /api\('\/flow\/stop'\)/, '停止按钮应调用停止接口')
   })
 })

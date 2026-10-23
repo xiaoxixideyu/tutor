@@ -17,6 +17,8 @@
 .wizard-inputrow { display: flex; gap: 8px; max-width: 860px; margin: 0 auto; width: 100%; }
 .wizard-inputrow input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; }
 .wizard-inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+.wizard-inputrow .wizard-stop { background: #fff; border: 1px solid #fecaca; color: var(--red); padding: 10px 16px; }
+.wizard-inputrow .wizard-stop:disabled { opacity: .6; cursor: default; }
 .wizard .opstatus { display: none; max-width: 820px; margin: 8px auto 0; width: 100%; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 .wizard .milestone { color: var(--muted); font-size: 13px; padding: 2px 0; }
 .wizard .milestone.warn { color: #b45309; }

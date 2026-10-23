@@ -7,12 +7,14 @@
     const root = options.root
     const courseId = options.courseId ?? new URLSearchParams(location.search).get('course')
     const milestoneId = options.milestoneId ?? new URLSearchParams(location.search).get('milestone') ?? ''
+    const navigate = options.navigate ?? ((href) => { location.href = href })
     const flowClient = options.flowClient ?? new TutorFlowClient((message) => {
       chat.setBusy(false)
       root.querySelector('.chat-log').appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(message)}</div>`))
     })
     const onStatus = options.onStatus ?? (() => {})
     const setStopVisible = (visible) => { if ($stop) $stop.hidden = !visible }
+    let gateBlocked = false
 
     root.innerHTML = `
       <div class="chat-surface">
@@ -56,7 +58,7 @@
     // 暂停也会正常退出，必须根据实际成绩区分通过与尚未完成。
     function renderExamDone() {
       const row = TutorDom.el('<div class="chips"></div>')
-      if (examOutcome !== 'passed' && examOutcome !== 'failed') {
+      if (!gateBlocked && examOutcome !== 'passed' && examOutcome !== 'failed') {
         const resume = TutorDom.el('<button class="chip">继续考试</button>')
         resume.addEventListener('click', async () => {
           resume.disabled = true
@@ -81,6 +83,7 @@
           $log.innerHTML = ''
           chat.reset()
           examOutcome = null
+          gateBlocked = false
           chat.setFlowFinished(msg.status !== 'running' && msg.status !== 'stopping')
           chat.setBusy(msg.status === 'running', '正在恢复考试')
           onStatus({ text: msg.courseId ? `大考进行中：${msg.courseId}` : '空闲', busy: msg.status === 'running' })
@@ -89,7 +92,12 @@
         }
         if (msg.type === 'out') chat.feed(msg.text)
         else if (msg.type === 'err') {
-          if (chat.isOpError(msg.text)) chat.noteOp(msg.text)
+          if (TutorDom.isContentGateError(msg.text)) {
+            gateBlocked = true
+            chat.setFlowFinished(true)
+            chat.setBusy(false)
+            $log.appendChild(TutorDom.gateNotice({ courseId, navigate, raw: msg.text }))
+          } else if (chat.isOpError(msg.text)) chat.noteOp(msg.text)
           else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`))
         } else if (msg.type === 'exit') {
           chat.feed('')
@@ -118,16 +126,9 @@
       const result = await flowClient.request(path, body)
       if (path === '/flow/start' && result.ok) {
         chat.setFlowFinished(false)
-        rememberFlow(result)
         startSse()
       }
       return result
-    }
-
-    function rememberFlow(flow) {
-      const url = new URL(location.href)
-      url.searchParams.set('flowId', flow.flowId)
-      history.replaceState(null, '', url)
     }
 
     // 多行输入：Enter 发送，Shift+Enter 换行（一条输入仍是一条消息）。
@@ -145,8 +146,15 @@
     async function startExam(targetCourse, targetMilestone) {
       const result = await api('/flow/start', { kind: 'exam', courseId: targetCourse, milestoneId: targetMilestone })
       if (!result.ok) {
-        $banner.hidden = false
-        $banner.textContent = result.error || '开始大考失败'
+        if (TutorDom.isContentGateError(result.error)) {
+          gateBlocked = true
+          chat.setFlowFinished(true)
+          $banner.hidden = true
+          $log.appendChild(TutorDom.gateNotice({ courseId: targetCourse, navigate, raw: result.error }))
+        } else {
+          $banner.hidden = false
+          $banner.textContent = result.error || '开始大考失败'
+        }
         return false
       }
       onStatus({ text: `大考进行中：${targetCourse}`, busy: true })
@@ -158,7 +166,8 @@
     // 同一门课程同时只能跑一个流程（不同课程可并行）。同门课被别的流程占用时如实说明并给切换入口。
     function renderFlowMismatch(running) {
       if (!flowClient.attach(running)) return
-      const runLabel = KIND_LABEL[running.kind] || running.kind
+      chat.setFlowFinished(true)
+      const runLabel = KIND_LABEL[running.kind] || TutorDom.flowLabel(running.kind)
       onStatus({ text: `${runLabel}进行中：${running.courseId}`, busy: false })
       $banner.hidden = false
       $banner.textContent = ''
@@ -184,28 +193,19 @@
 
     const ready = (async () => {
       if (!courseId) {
+        chat.setFlowFinished(true)
         $banner.hidden = false
         $banner.textContent = '缺少 course 参数——请从课程列表点「参加大考」进入。'
         startSse()
         return
       }
-      const params = new URLSearchParams(location.search)
-      const state = await flowClient.state(params.get('flowId'))
+      const state = await flowClient.state()
       if (!state) return
-      if (state.flow && state.flow.kind === 'exam' && state.flow.courseId === courseId
-        && (!milestoneId || state.flow.milestoneId === milestoneId)) {
-        if (!flowClient.attach(state.flow)) return
-        rememberFlow(state.flow)
-        chat.setBusy(state.flow.status === 'running', '正在恢复考试')
-        startSse()
-        return
-      }
       const flows = state.flows ?? []
       const matched = flows.find((flow) => flow.kind === 'exam' && flow.courseId === courseId
         && (!milestoneId || flow.milestoneId === milestoneId))
       if (matched) {
         if (!flowClient.attach(matched)) return
-        rememberFlow(matched)
         onStatus({ text: `大考进行中：${matched.courseId}`, busy: true })
         startSse()
         return
@@ -216,17 +216,16 @@
         renderFlowMismatch(busySameCourse)
         return
       }
-      if (params.has('flowId')) {
+      if (await TutorDom.contentBlocked(courseId)) {
+        gateBlocked = true
         chat.setFlowFinished(true)
-        chat.setBusy(false)
-        onStatus({ text: '考试回放已过期', busy: false })
-        $log.appendChild(TutorDom.el('<div class="sysline">可从已保存的试卷和作答继续考试，或返回课程列表查看结果。</div>'))
-        renderExamDone()
+        $log.appendChild(TutorDom.gateNotice({ courseId, navigate }))
         return
       }
       await startExam(courseId, milestoneId)
       startSse()
     })().catch((error) => {
+      chat.setFlowFinished(true)
       $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(error.message)}</div>`))
     })
 

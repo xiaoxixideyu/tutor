@@ -7,12 +7,14 @@
   V.learn = function (options) {
     const root = options.root
     const courseId = options.courseId ?? new URLSearchParams(location.search).get('course')
+    const navigate = options.navigate ?? ((href) => { location.href = href })
     const flowClient = options.flowClient ?? new TutorFlowClient((message) => {
       chat.setBusy(false)
       root.querySelector('.chat-log').appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(message)}</div>`))
     })
     const onStatus = options.onStatus ?? (() => {})
     const setStopVisible = (visible) => { if ($stop) $stop.hidden = !visible }
+    let gateBlocked = false
 
     root.innerHTML = `
       <div class="chat-surface">
@@ -61,7 +63,7 @@
       const row = TutorDom.el('<div class="chips"></div>')
       const back = TutorDom.el('<button class="chip">← 课程列表</button>')
       back.addEventListener('click', () => { options.onExit?.({ kind: 'list' }) })
-      if (activeCourse) {
+      if (activeCourse && !(failed && gateBlocked)) {
         const cont = TutorDom.el(`<button class="chip">${failed ? '从已保存进度重试 →' : '继续上课 →'}</button>`)
         cont.addEventListener('click', async () => {
           if (chat.busy) return
@@ -70,7 +72,14 @@
           const result = await api('/flow/start', { kind: 'learn', courseId: activeCourse })
           if (!result.ok) {
             chat.setBusy(false)
-            $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(result.error || '继续失败')}</div>`))
+            if (TutorDom.isContentGateError(result.error)) {
+              gateBlocked = true
+              $log.appendChild(TutorDom.gateNotice({ courseId: activeCourse, navigate, raw: result.error }))
+              $log.appendChild(TutorDom.el('<div class="chips"><button class="chip" id="gate-back">← 课程列表</button></div>'))
+              $log.querySelector('#gate-back')?.addEventListener('click', () => options.onExit?.({ kind: 'list' }))
+            } else {
+              $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(result.error || '继续失败')}</div>`))
+            }
             return
           }
           onStatus({ text: `课堂进行中：${activeCourse}`, busy: true })
@@ -92,6 +101,7 @@
           // hello 后紧接重放历史：清空当前视图避免重复
           $log.innerHTML = ''
           chat.reset()
+          gateBlocked = false
           activeCourse = msg.courseId ?? activeCourse
           chat.setFlowFinished(msg.status !== 'running' && msg.status !== 'stopping')
           chat.setBusy(!chat.flowFinished, '正在恢复课堂')
@@ -102,7 +112,12 @@
         }
         if (msg.type === 'out') chat.feed(msg.text)
         else if (msg.type === 'err') {
-          if (chat.isOpError(msg.text)) chat.noteOp(msg.text)
+          if (TutorDom.isContentGateError(msg.text)) {
+            gateBlocked = true
+            chat.setFlowFinished(true)
+            chat.setBusy(false)
+            $log.appendChild(TutorDom.gateNotice({ courseId: activeCourse, navigate, raw: msg.text }))
+          } else if (chat.isOpError(msg.text)) chat.noteOp(msg.text)
           else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`))
         } else if (msg.type === 'exit') {
           chat.feed('')
@@ -213,11 +228,21 @@
         return
       }
       if (courseId) {
+        if (await TutorDom.contentBlocked(courseId)) {
+          gateBlocked = true
+          chat.setFlowFinished(true)
+          $log.appendChild(TutorDom.gateNotice({ courseId, navigate }))
+          return
+        }
         const result = await api('/flow/start', { kind: 'learn', courseId })
         if (result.ok) {
           onStatus({ text: `课堂进行中：${courseId}`, busy: true })
           $banner.hidden = true
           chat.setBusy(true, '正在准备本课并核对内容')
+        } else if (TutorDom.isContentGateError(result.error)) {
+          gateBlocked = true
+          chat.setFlowFinished(true)
+          $log.appendChild(TutorDom.gateNotice({ courseId, navigate, raw: result.error }))
         } else {
           $banner.hidden = false
           $banner.textContent = result.error
@@ -227,8 +252,10 @@
       }
       $banner.hidden = false
       $banner.textContent = '当前没有进行中的课堂——去课程列表点「上课」开始。'
+      chat.setFlowFinished(true)
       startSse()
     })().catch((error) => {
+      chat.setFlowFinished(true)
       $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(error.message)}</div>`))
     })
 

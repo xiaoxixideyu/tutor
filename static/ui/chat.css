@@ -62,3 +62,10 @@ footer { border-top: 1px solid var(--border); background: var(--card); padding: 
 .chat-inputrow textarea { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: inherit; background: var(--card); }
 .chat-inputrow textarea { resize: none; line-height: 1.5; max-height: 200px; overflow-y: auto; }
 .chat-inputrow button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; }
+.gate-notice { border: 1px solid #fca5a5; background: #fef2f2; border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 13px; }
+.gate-head { color: #991b1b; font-weight: 600; margin-bottom: 4px; }
+.gate-body { color: #7f1d1d; line-height: 1.6; }
+.gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.gate-actions .chip { background: #fff; }
+.gate-actions .chip.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gate-actions .chip.primary:hover { background: #1d4ed8; }

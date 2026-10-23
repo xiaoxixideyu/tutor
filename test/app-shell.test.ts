@@ -20,6 +20,8 @@ const COURSES = [{
   counts: { mastered: 1, learning: 1, weak: 0, unknown: 0 },
   milestones: [{ id: 'm1', title: '里程碑', nodes: ['demo-node'], masteredCount: 1, examPassed: false, examable: true }],
   totalNodes: 1, research: { completed: 0, verified: 0, pending: 1, total: 1 },
+}, {
+  id: 'blocked', goal: '未过审课程', mastered: 0, total: 2, stage: 'ready', contentReady: false,
 }]
 
 function startServer(): Promise<{ port: number; close: () => Promise<void> }> {
@@ -115,6 +117,9 @@ it('单壳工作区：左栏课程、路由与看板视图都能渲染（浏览�
   assert.match(list, /demo/, '左栏应列出课程')
   assert.match(list, /示例课程/, '画布应渲染课程列表')
   assert.match(list, /课程列表/, '看板标题')
+  assert.match(list, /教学内容未通过准入审查/, '未过审课程应在看板明确提示')
+  assert.match(list, /data-id="blocked"[\s\S]*?重新审查 →/, '未过审课程的主入口应是重新审查')
+  assert.doesNotMatch(list, /data-id="blocked"[\s\S]{0,600}?上课 →/, '未过审课程不应给上课死路')
 
   const detail = await render('#/course/demo')
   assert.match(detail, /知识点（1）/, '课程详情应渲染知识点表')

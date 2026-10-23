@@ -9,10 +9,23 @@
   let current = null
   let railTimer = null
 
-  const FLOW_LABEL = { new: '访谈', assess: '摸底', plan: '计划', research: '教研', learn: '课堂', exam: '大考', 'practice-gen': '实践生成', practice: '实践', 'audit-content': '内容审查' }
   // 画布内可直接承载的流程；其余情况回落到单壳的对应路由，避免死胡同。
   const LEGACY = {
     'practice-gen': (courseId, node) => `#/course/${encodeURIComponent(courseId)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`,
+  }
+  const WIZARD_TITLE = { assess: '摸底测评', plan: '教学计划', research: '联网教研', 'audit-content': '内容审查', new: '新课程向导' }
+
+  function flowHref(flow) {
+    const course = encodeURIComponent(flow.courseId)
+    const node = flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''
+    if (flow.kind === 'learn') return `#/course/${course}/learn`
+    if (flow.kind === 'exam') return `#/course/${course}/exam${flow.milestoneId ? `/${encodeURIComponent(flow.milestoneId)}` : ''}`
+    if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${course}/practice${node}`
+    if (flow.kind === 'research') return `#/course/${course}/research${node}`
+    if (flow.kind === 'assess') return `#/course/${course}/assess`
+    if (flow.kind === 'plan') return `#/course/${course}/plan`
+    if (flow.kind === 'audit-content') return `#/course/${course}/audit-content`
+    return `#/course/${course}`
   }
 
   function navigate(href) {
@@ -27,12 +40,14 @@
     if (parts[0] === 'settings') return { view: 'settings' }
     if (parts[0] === 'new') return { view: 'new' }
     if (parts[0] === 'course' && parts[1]) {
+      const view = parts[2] ?? 'detail'
+      const tail = parts.slice(3)
       return {
-        view: parts[2] ?? 'detail',
+        view,
         courseId: parts[1],
-        milestone: parts[3],
-        node: parts[4],
-        flowId: new URLSearchParams(location.search).get('flowId'),
+        // 各视图位移不同：大考是 exam/<milestone>，实践/教研是 practice|research/<node>。
+        milestone: view === 'exam' ? tail[0] : undefined,
+        node: view === 'practice' || view === 'research' ? tail[0] : view === 'exam' ? tail[1] : undefined,
       }
     }
     return { view: 'home' }
@@ -82,12 +97,7 @@
         auditHref: (id) => `#/course/${encodeURIComponent(id)}/audit-content`,
         reviewHref: (id) => `#/course/${encodeURIComponent(id)}/review`,
         examHref: (id, milestone) => `#/course/${encodeURIComponent(id)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`,
-        flowHref: (flow) => {
-          if (flow.kind === 'learn') return `#/course/${encodeURIComponent(flow.courseId)}/learn`
-          if (flow.kind === 'exam') return `#/course/${encodeURIComponent(flow.courseId)}/exam`
-          if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${encodeURIComponent(flow.courseId)}/practice`
-          return `#/course/${encodeURIComponent(flow.courseId)}/detail`
-        },
+        flowHref,
       })
       return
     }
@@ -125,6 +135,7 @@
       current = TutorViews.learn({
         root: canvas,
         courseId,
+        navigate,
         onStatus: ({ text, busy }) => setStatus(text, busy),
         onExit: ({ kind }) => { if (kind === 'list') navigate('#/') },
       })
@@ -137,6 +148,7 @@
         root: canvas,
         courseId,
         milestoneId: route.milestone ?? '',
+        navigate,
         onStatus: ({ text, busy }) => setStatus(text, busy),
         onExit: ({ kind }) => { if (kind === 'list') navigate('#/') },
       })
@@ -169,7 +181,7 @@
 
     if (['assess', 'plan', 'research', 'audit-content', 'new'].includes(route.view)) {
       const isNew = route.view === 'new'
-      titleEl.textContent = isNew ? '新课程向导' : `${courseId} · 向导`
+      titleEl.textContent = isNew ? '新课程向导' : `${courseId} · ${WIZARD_TITLE[route.view] ?? '向导'}`
       current = TutorViews.wizard({
         root: canvas,
         courseId: isNew ? undefined : courseId,
@@ -177,7 +189,6 @@
           course: isNew ? undefined : courseId,
           resume: route.view,
           node: route.node,
-          flowId: route.flowId,
         },
         navigate,
         lessonHref: (id) => `#/course/${encodeURIComponent(id)}/learn`,
@@ -190,6 +201,16 @@
   }
 
   let railCourseList = []
+
+  function markActiveCourse() {
+    const { courseId } = parseRoute()
+    for (const item of railCourses.querySelectorAll('.rail-item')) {
+      const active = !!courseId && item.dataset.course === courseId
+      item.classList.toggle('active', active)
+      if (active) item.setAttribute('aria-current', 'page')
+      else item.removeAttribute('aria-current')
+    }
+  }
 
   async function refreshRail() {
     try {
@@ -205,9 +226,9 @@
         : courses.map((course) => {
             const flow = flowByCourse.get(course.id)
             const badge = course.dueCount ? `<span class="rail-badge due">到期 ${course.dueCount}</span>` : ''
-            const running = flow ? `<span class="rail-badge run">${FLOW_LABEL[flow.kind] ?? flow.kind}</span>` : ''
+            const running = flow ? `<span class="rail-badge run">${TutorDom.flowLabel(flow.kind)}</span>` : ''
             const progress = course.total > 0 ? Math.round((course.mastered / course.total) * 100) : 0
-            return `<a class="rail-item" href="#/course/${encodeURIComponent(course.id)}">
+            return `<a class="rail-item" data-course="${TutorDom.esc(course.id)}" href="#/course/${encodeURIComponent(course.id)}">
               <span class="rail-item-title">${TutorDom.esc(course.id)}</span>
               <span class="rail-item-meta">${course.mastered}/${course.total}${running}${badge}</span>
               <span class="rail-bar"><i style="width:${progress}%"></i></span>
@@ -215,16 +236,19 @@
           }).join('')
       railFlows.innerHTML = flows.length === 0
         ? '<div class="rail-empty">当前没有进行中的流程</div>'
-        : flows.map((flow) => `<a class="rail-item" href="#/course/${encodeURIComponent(flow.courseId)}/${flow.kind === 'learn' ? 'learn' : flow.kind === 'exam' ? 'exam' : 'detail'}">
+        : flows.map((flow) => `<a class="rail-item" href="${flowHref(flow)}">
             <span class="rail-item-title">${TutorDom.esc(flow.courseId)}</span>
-            <span class="rail-item-meta">${FLOW_LABEL[flow.kind] ?? flow.kind} · ${TutorDom.esc(flow.status)}</span>
+            <span class="rail-item-meta">${TutorDom.flowLabel(flow.kind)} · ${TutorDom.flowStatusLabel(flow.status)}</span>
           </a>`).join('')
+      markActiveCourse()
     } catch {
       railCourses.innerHTML = '<div class="rail-empty">课程列表读取失败</div>'
     }
   }
 
-  window.addEventListener('hashchange', () => { mount(parseRoute()) })
+  window.addEventListener('hashchange', () => { mount(parseRoute()); markActiveCourse() })
+  // 旧版会把流程 id 写进地址栏查询串；残留值会让之后的向导误认成旧流程，进入时清理。
+  if (location.search) history.replaceState(null, '', location.pathname + location.hash)
   refreshRail()
   railTimer = setInterval(refreshRail, 5000)
   window.addEventListener('beforeunload', () => { if (railTimer) clearInterval(railTimer) })
@@ -262,8 +286,14 @@
       for (const course of railCourseList) {
         const id = course.id
         items.push({ title: `课程 ${id}`, hint: course.goal || '课程详情', run: () => navigate(`#/course/${encodeURIComponent(id)}`) })
-        items.push({ title: `课程 ${id} · 上课`, hint: '课堂', run: () => navigate(`#/course/${encodeURIComponent(id)}/learn`) })
-        items.push({ title: `课程 ${id} · 复习`, hint: '到期知识点', run: () => navigate(`#/course/${encodeURIComponent(id)}/review`) })
+        if (course.contentReady === false) {
+          items.push({ title: `课程 ${id} · 内容审查`, hint: '教学内容未通过审查，先重新审查', run: () => navigate(`#/course/${encodeURIComponent(id)}/audit-content`) })
+        } else if (course.stage === 'ready') {
+          items.push({ title: `课程 ${id} · 上课`, hint: '课堂', run: () => navigate(`#/course/${encodeURIComponent(id)}/learn`) })
+        }
+        if (course.dueCount) {
+          items.push({ title: `课程 ${id} · 复习`, hint: `${course.dueCount} 个到期知识点`, run: () => navigate(`#/course/${encodeURIComponent(id)}/review`) })
+        }
       }
       return items
     },

@@ -51,12 +51,14 @@
     const $run = root.querySelector('.practice-run')
     const $rerun = root.querySelector('.practice-rerun')
     const $quit = root.querySelector('.practice-quit')
+    const $inputRow = root.querySelector('.chat-inputrow')
 
     let wantedNode = nodeId
     let pending = ''
     let term = null
     let running = false
     let canSend = false
+    let gateBlocked = false
     let busyTimer = null
     let busySeconds = 0
     let source = null
@@ -102,6 +104,13 @@
       }
     }
 
+    function updateControls() {
+      $run.hidden = !canSend
+      $rerun.hidden = !canSend
+      $quit.hidden = !(canSend || running)
+      $inputRow.hidden = !canSend
+    }
+
     function setRunning(on, label) {
       running = on
       if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
@@ -109,6 +118,7 @@
       $send.disabled = on || !canSend
       $run.disabled = on || !canSend
       $rerun.disabled = on || !canSend
+      updateControls()
       if (on) {
         busySeconds = 0
         $busyText.textContent = `${label ?? '运行中'}… 0s`
@@ -119,7 +129,7 @@
         }, 1000)
       } else {
         $busy.style.display = 'none'
-        $input.focus()
+        if (canSend && !$inputRow.hidden) $input.focus()
       }
       onStatus({ text: label ?? (on ? '运行中' : ''), busy: on })
     }
@@ -162,12 +172,21 @@
 
     function renderGenPrompt() {
       $log.innerHTML = ''; term = null
+      canSend = false
+      updateControls()
       const card = TutorDom.el('<div class="intro"></div>')
       card.appendChild(TutorDom.el('<div>这个知识点还没有实践任务。</div>'))
       card.appendChild(TutorDom.el('<div style="color:var(--muted);margin-top:6px">实践任务通过内容核对后即可开始练习。准备期间会显示进度，失败后可重试。</div>'))
       const btn = TutorDom.el('<button class="big">生成实践任务</button>')
       btn.addEventListener('click', async () => { btn.disabled = true; if (await startPracticeGen()) startSse(); else btn.disabled = false })
       card.appendChild(btn); $log.appendChild(card)
+    }
+
+    function renderGatePrompt(raw) {
+      $log.innerHTML = ''; term = null
+      canSend = false
+      setRunning(false)
+      $log.appendChild(TutorDom.gateNotice({ courseId, navigate, raw }))
     }
 
     function handleExit(kind, code) {
@@ -183,12 +202,12 @@
         }
         onStatus({ text: '生成失败', busy: false })
         appendLine(`—— 生成实践任务失败（code ${code}）——`, 'no')
-        renderRetry()
+        if (!gateBlocked) renderRetry()
         return
       }
       onStatus({ text: code === 0 ? '已退出' : '实践结束', busy: false })
       appendLine(`—— 实践进程退出（code ${code}）——`, '')
-      renderDone()
+      if (!gateBlocked) renderDone()
     }
 
     function startSse() {
@@ -198,13 +217,23 @@
         const msg = JSON.parse(event.data)
         if (msg.type === 'hello') {
           $log.innerHTML = ''; pending = ''; term = null
+          gateBlocked = false
           canSend = msg.kind === 'practice' && msg.nodeId === wantedNode && msg.status === 'running'
+          updateControls()
           onStatus({ text: msg.courseId ? labelFor(msg.kind, msg.courseId) : '空闲', busy: false })
           return
         }
         if (msg.type === 'out') feed(msg.text)
-        else if (msg.type === 'err') appendLine(String(msg.text).replace(/\n$/, ''), 'no')
-        else if (msg.type === 'exit') handleExit(msg.kind, msg.code)
+        else if (msg.type === 'err') {
+          if (TutorDom.isContentGateError(msg.text)) {
+            gateBlocked = true
+            canSend = false
+            setRunning(false)
+            $log.appendChild(TutorDom.gateNotice({ courseId, navigate, raw: msg.text }))
+          } else {
+            appendLine(String(msg.text).replace(/\n$/, ''), 'no')
+          }
+        } else if (msg.type === 'exit') handleExit(msg.kind, msg.code)
         TutorDom.scrollToEnd($log)
       }
       source.onerror = () => {
@@ -216,7 +245,11 @@
 
     async function startPractice() {
       const result = await api('/flow/start', { kind: 'practice', courseId, nodeId: wantedNode })
-      if (!result.ok) { showBanner(result.error || '开始实践失败'); return false }
+      if (!result.ok) {
+        if (TutorDom.isContentGateError(result.error)) renderGatePrompt(result.error)
+        else showBanner(result.error || '开始实践失败')
+        return false
+      }
       onStatus({ text: `实践进行中：${courseId}`, busy: true })
       hideBanner()
       setRunning(true, '启动中')
@@ -225,7 +258,11 @@
 
     async function startPracticeGen() {
       const result = await api('/flow/start', { kind: 'practice-gen', courseId, nodeId: wantedNode })
-      if (!result.ok) { showBanner(result.error || '生成实践任务失败'); return false }
+      if (!result.ok) {
+        if (TutorDom.isContentGateError(result.error)) renderGatePrompt(result.error)
+        else showBanner(result.error || '生成实践任务失败')
+        return false
+      }
       onStatus({ text: `生成实践任务中：${courseId}`, busy: true })
       hideBanner()
       setRunning(true, '正在生成并核对任务')
@@ -263,6 +300,10 @@
       try {
         const course = await TutorRpc('courseStatus', { id: courseId })
         hasPractice = !!(course.nodes.find((node) => node.id === wantedNode)?.practiceCount)
+        if (course.contentReady === false && !hasPractice) {
+          renderGatePrompt('课程内容未通过审查')
+          return false
+        }
       } catch (error) {
         showBanner('读取课程状态失败：' + error.message)
         return false
@@ -294,6 +335,8 @@
         sendLine(value, `> ${value}`)
       }
     })
+
+    updateControls()
 
     const ready = (async () => {
       if (!courseId) {
@@ -330,7 +373,10 @@
 
     return {
       ready,
-      destroy() { try { source?.close() } catch { /* 已关闭 */ } },
+      destroy() {
+        if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+        try { source?.close() } catch { /* 已关闭 */ }
+      },
     }
   }
 })()
