@@ -118,6 +118,11 @@
             chat.setFlowFinished(true)
             chat.setBusy(false)
             $log.appendChild(TutorDom.gateNotice({ courseId: activeCourse, navigate, raw: msg.text }))
+          } else if (/多次生成仍未通过校验|内容准入审查失败/.test(msg.text)) {
+            chat.setFlowFinished(true)
+            chat.setBusy(false)
+            onStatus({ text: '内容生成未通过校验', busy: false })
+            $log.appendChild(TutorDom.flowFailure({ detail: msg.text }))
           } else if (chat.isOpError(msg.text)) chat.noteOp(msg.text)
           else $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`))
         } else if (msg.type === 'exit') {

@@ -166,4 +166,16 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('ui/views/learn.js'), /if \(!button\.dataset\.cmd\) continue/, '快捷按钮循环应跳过停止按钮')
     assert.match(read('ui/chat.js'), /本轮已结束，请使用上方操作/, '流程结束后输入框不应继续提示“轮到你了”')
   })
+
+  it('课程详情可直接继续上课，生成类内部审查不刷屏', () => {
+    const home = read('ui/views/home.js')
+    assert.match(home, /const lessonBtn = p\.hasPlan/, '详情页应有继续上课入口')
+    assert.match(home, /go-lesson/, '详情页上课按钮应能导航')
+    const chat = read('ui/chat.js')
+    assert.match(chat, /prettyReview/, '课堂/大考的审查进度应翻译并收敛')
+    assert.match(chat, /内容审查发现 \$\{count\} 处问题，正在自动修复/, '单次拦截应作为修复进度')
+    for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
+      assert.match(read(file), /TutorDom\.flowFailure/, `${file} 生成失败应使用折叠诊断卡片`)
+    }
+  })
 })

@@ -8,9 +8,17 @@
   const OP_OUT_RE = /^(正在备课[：:]|备课完成|正在从可用的已审查内容恢复课堂|内容审查[ 　]|审查已有内容[：:]|复用同一内容的|正在核对|[^\n]{0,12}核查中[：:]|资料审查达到|正在汇总本知识点|正在核对本知识点)/
   // 运行时排队/限速提示也是内部提示：进状态条，不进聊天记录。
   const OP_ERR_RE = /(等待渠道额度|渠道暂时|重新检查共享额度|按共享队列每分钟)/
+  const REVIEW_KIND = { map: '知识地图', plan: '教学计划', bank: '摸底题库', exam: '试卷', lesson: '教案', practice: '实践任务', teaching: '讲授' }
 
   function cleanOp(text) {
     return String(text ?? '').replace(/^tutor:\s*/, '').replace(/\s*；已保存的教研进度保留。?\s*$/, '').trim()
+  }
+
+  function prettyReview(text) {
+    return cleanOp(text)
+      .replace(/^内容审查\s+([a-z-]+)：/, (_, kind) => `内容审查 ${REVIEW_KIND[kind] ?? kind}：`)
+      .replace(/（记录已保存）/g, '')
+      .replace(/拦截 (\d+) 处问题/, '未通过 $1 处')
   }
 
   class TutorChat {
@@ -236,6 +244,11 @@
           const closed = this.closeBubble()
           if (closed) this.maybeChips(closed)
         }
+        return
+      }
+      if (/^内容审查[^：]*：/.test(trimmed)) {
+        const count = trimmed.match(/拦截 (\d+) 处问题/)?.[1]
+        this.noteOp(count ? `内容审查发现 ${count} 处问题，正在自动修复…` : prettyReview(trimmed))
         return
       }
       if (OP_OUT_RE.test(trimmed)) { this.noteOp(trimmed); return }

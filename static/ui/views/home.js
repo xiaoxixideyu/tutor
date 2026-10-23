@@ -172,6 +172,10 @@
         return `<div class="meta" style="display:flex;align-items:center;gap:8px;margin-top:6px"><span>${TutorDom.esc(m.id)} ${TutorDom.esc(m.title)}　${frac}</span>${tail}</div>`
       }).join('')
       const c = p.counts
+      // 详情页也要能直接继续下一课：从看板点进课程后不应只剩复习/实践入口。
+      const lessonBtn = p.hasPlan && !blocked && p.current
+        ? `<button class="enter go-lesson" data-href="${TutorDom.esc(lessonHref(p.id))}">上课 →</button>`
+        : ''
       // 实践入口（course 级）：已生成任务→「去实践」；未生成且内容未过审时不给会失败的死路。
       const practiceRow = p.hasPlan && (p.hasPractice || !blocked)
         ? `<div style="margin-top:10px"><button class="enter go-practice" data-href="${TutorDom.esc(practiceHref(p.id))}">${p.hasPractice ? '去实践 →' : '生成实践任务 →'}</button></div>`
@@ -183,7 +187,7 @@
         <div class="meta">指针：${p.current ? TutorDom.esc(p.current) : p.hasPlan ? '（计划内知识点均已掌握）' : '（无计划）'}</div>
         <div class="counts">✓ ${c.mastered} 已掌握 ｜ ● ${c.learning} 学习中 ｜ ▲ ${c.weak} 薄弱 ｜ · ${c.unknown} 未测</div>
         ${warnSection}
-        <div class="detail-actions">${resetBtn}</div>
+        <div class="detail-actions">${lessonBtn}${resetBtn}</div>
         ${p.research ? `<div class="meta">教研资料：已保存 ${p.research.completed}/${p.research.total} 个知识点，来源已验证 ${p.research.verified} 个。${p.research.pending ? ` <button class="enter go-research" data-href="${TutorDom.esc(researchHref(p.id))}">继续剩余 ${p.research.pending} 个教研 →</button>` : ''}</div>` : ''}
         ${practiceRow}
         ${milestoneRows ? `<h2 style="margin-top:16px">里程碑</h2>${milestoneRows}` : ''}
@@ -192,7 +196,7 @@
         <tbody>${nodeRows}</tbody></table></div>
         ${curveSection}`
       root.querySelector('#back').addEventListener('click', () => renderList())
-      for (const btn of root.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit')) {
+      for (const btn of root.querySelectorAll('.ms-exam, .go-practice, .go-research, .go-audit, .go-lesson')) {
         btn.addEventListener('click', () => go(btn.dataset.href))
       }
       root.querySelector('#reset-breaks').addEventListener('click', async () => {
