@@ -203,4 +203,14 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('ui/views/wizard.js'), /kind === 'research'\) researchLive\.connect/, '从详情启动教研时应连接进度面板')
     assert.match(read('research-progress.js'), /查看课程详情/, '进度面板链接应指向课程详情而不是同一页')
   })
+
+  it('视图卸载时清掉聊天/教研计时器，长会话不累积泄漏', () => {
+    assert.match(read('ui/chat.js'), /destroy\(\)[\s\S]{0,120}clearInterval\(this\.busyTimer\)/, '聊天组件应清理忙态计时器')
+    for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
+      assert.match(read(file), /chat\.destroy\(\)/, `${file} 卸载时应清理聊天计时器`)
+    }
+    assert.match(read('research-progress.js'), /clearInterval\(this\.poll\)/, '教研进度应清理轮询')
+    assert.match(read('research-progress.js'), /clearInterval\(this\.clock\)/, '教研进度应清理秒表')
+    assert.match(read('ui/views/wizard.js'), /researchLive\.destroy\(\)/, '向导卸载时应销毁教研进度')
+  })
 })

@@ -278,7 +278,10 @@
     return {
       ready,
       chat,
-      destroy() { try { source?.close() } catch { /* 已关闭 */ } },
+      destroy() {
+        chat.destroy()
+        try { source?.close() } catch { /* 已关闭 */ }
+      },
     }
   }
 })()

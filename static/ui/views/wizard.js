@@ -666,7 +666,8 @@
       destroy() {
         if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
         try { source?.close() } catch { /* 已关闭 */ }
-        researchLive.connect(null)
+        if (typeof researchLive.destroy === 'function') researchLive.destroy()
+        else researchLive.connect(null)
         onStatus({ text: '', busy: false })
       },
     }

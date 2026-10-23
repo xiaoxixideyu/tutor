@@ -276,6 +276,10 @@
         this.pending = ''
       }
     }
+
+    destroy() {
+      if (this.busyTimer) { clearInterval(this.busyTimer); this.busyTimer = null }
+    }
   }
 
   TutorChat.cleanOp = cleanOp

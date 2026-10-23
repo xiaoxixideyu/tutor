@@ -31,6 +31,14 @@ class TutorResearchProgress {
     if (course) this.refresh()
   }
 
+  destroy() {
+    this.source?.close()
+    this.source = null
+    this.course = null
+    clearInterval(this.poll)
+    clearInterval(this.clock)
+  }
+
   async refresh() {
     if (!this.course || this.refreshing) return
     this.refreshing = true
