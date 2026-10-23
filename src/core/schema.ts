@@ -228,6 +228,9 @@ export interface LessonDraft {
   node: string
   title: string
   hook: string
+  // 本课因果链：上一课/前置结论 → 留下的问题 → 各要点依次如何推进。
+  // 旧教案没有该字段，讲授仍按 hook + structure 进行。
+  flow?: string
   structure: string[]
   example: string
   practice: LessonPractice[]
@@ -246,6 +249,7 @@ export const LessonDraftSchema = z.object({
   node: z.string().required(),
   title: z.string().required(),
   hook: z.string().required(),
+  flow: z.string(),
   structure: z.array(z.string()).required(),
   example: z.string().required(),
   practice: z.array(LessonPracticeSchema).required(),

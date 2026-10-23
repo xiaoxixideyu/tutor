@@ -106,7 +106,7 @@ async function startFreshLesson(
   const warmup = previousTurn ? [] : await runWarmup(deps, config.courseId, node, map, mastery)
   const memory = memoryNotes(map, mastery, node, deps.today())
   const teachChat = await deps.createChat({ retryOnLength: false })
-  const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, mastery, draft, resources,
+  const intro = buildTeachingIntro({ courseId: config.courseId, node, plan, profile, map, mastery, draft, resources,
     ...(memory.length > 0 ? { memory } : {}), ...(warmup.length > 0 ? { warmup } : {}) })
   const turn = await withChatUsage(deps.costs, teachChat, 'teach', () => generateApprovedTeaching(teachChat, previousTurn
     ? `${intro}\n恢复课堂：上一段已向学员展示的内容为 ${JSON.stringify(previousTurn)}。从这个进度继续，不重讲已完成的部分。` : intro,

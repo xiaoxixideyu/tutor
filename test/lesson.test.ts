@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { buildPrepPrompt, buildCheckPrompt, buildTeachingIntro, checkCitations, currentNode, lessonStructureCap, memoryNotes, prerequisiteIds, resourcesForNode, selectInterleaveQuestion, selectWarmupQuestions, stalePrerequisites, validateLessonDraft } from '../src/core/lesson.ts'
+import { parseLessonIntro } from '../src/core/fidelity.ts'
 import { judgeQuizAnswer, statusForScore, updateMasteryForNode } from '../src/core/assessment.ts'
 import { CourseStore } from '../src/core/store.ts'
 import type { KnowledgeMap, LessonDraft, LessonState, Mastery, Plan, Profile, QuestionBank } from '../src/core/schema.ts'
@@ -29,6 +30,7 @@ const draft: LessonDraft = {
   node: 'goroutines',
   title: 'Goroutine',
   hook: '从 Java 线程类比切入',
+  flow: 'Java 线程太重，所以需要更轻的并发单元；goroutine 由 go 关键字启动，调度方式又与线程不同。',
   structure: ['什么是 goroutine', 'go 关键字', '与线程的差异'],
   example: 'go fmt.Println("hi")',
   practice: [{ question: '如何启动一个 goroutine？', answer: 'go 函数调用' }],
@@ -93,10 +95,18 @@ describe('validateLessonDraft', () => {
   it('空标题/开场/例子/空要点/空题干被拒绝', () => {
     assert.equal(validateLessonDraft({ ...draft, title: '  ' }).ok, false)
     assert.equal(validateLessonDraft({ ...draft, hook: '' }).ok, false)
+    assert.equal(validateLessonDraft({ ...draft, flow: '  ' }).ok, false)
     assert.equal(validateLessonDraft({ ...draft, example: ' ' }).ok, false)
     assert.equal(validateLessonDraft({ ...draft, structure: ['要点', ''] }).ok, false)
     assert.equal(validateLessonDraft({ ...draft, practice: [{ question: '', answer: 'a' }] }).ok, false)
     assert.equal(validateLessonDraft({ ...draft, quiz: [{ question: ' ', choices: ['A. 1', 'B. 2', 'C. 3', 'D. 4'], answer: 'A' }, draft.quiz[1]] }).ok, false)
+  })
+
+  it('旧教案没有 flow 仍可恢复，新教案的 flow 参与校验', () => {
+    const { flow, ...legacy } = draft
+    void flow
+    assert.equal(validateLessonDraft(legacy).ok, true)
+    assert.equal(validateLessonDraft(draft).ok, true)
   })
 })
 
@@ -133,21 +143,46 @@ describe('buildPrepPrompt / buildTeachingIntro', () => {
   const mastery: Mastery = { goroutines: { status: 'weak', score: 0.3 } }
 
   it('备课 prompt 包含学员画像与本课信息', () => {
-    const prompt = buildPrepPrompt({ courseId: 'golang', node: 'channels', map, plan: { path: ['goroutines'], milestones: [], current: 'goroutines' }, profile, mastery })
+    const prompt = buildPrepPrompt({ courseId: 'golang', node: 'channels', map, plan: { path: ['goroutines', 'channels'], milestones: [], current: 'channels' }, profile, mastery })
     assert.match(prompt, /channels/)
     assert.match(prompt, /goroutines（Goroutine）/)
     assert.match(prompt, /5 年 Java 经验/)
     assert.match(prompt, /例子驱动/)
     assert.match(prompt, /最多 4 个要点/) // daily_minutes=60 → cap 4，硬约束进 prompt
+    assert.match(prompt, /structure 每项写成一句可讲授的结论/)
+    assert.match(prompt, /从【已学与前置内容】或上一课留下的问题\/局限出发/)
+    assert.match(prompt, /本课因果链/)
+    assert.match(prompt, /禁止把本课写成“术语定义 → 特点 → 用法”的清单/)
+    assert.match(prompt, /【已学与前置内容】/)
+    assert.match(prompt, /上一课 goroutines（Goroutine）：轻量级并发单元/)
   })
 
   it('教学首消息包含计划与练习，且为确定内容', () => {
-    const intro1 = buildTeachingIntro({ courseId: 'golang', node: 'goroutines', plan: { path: ['goroutines'], milestones: [], current: 'goroutines' }, profile, mastery, draft })
-    const intro2 = buildTeachingIntro({ courseId: 'golang', node: 'goroutines', plan: { path: ['goroutines'], milestones: [], current: 'goroutines' }, profile, mastery, draft })
+    const plan: Plan = { path: ['goroutines'], milestones: [], current: 'goroutines' }
+    const intro1 = buildTeachingIntro({ courseId: 'golang', node: 'goroutines', plan, profile, map, mastery, draft })
+    const intro2 = buildTeachingIntro({ courseId: 'golang', node: 'goroutines', plan, profile, map, mastery, draft })
     assert.equal(intro1, intro2)
     assert.match(intro1, /【本课计划】/)
     assert.match(intro1, /课中练习1/)
     assert.match(intro1, /goroutine 等于线程/)
+    assert.match(intro1, /【讲授格式】/)
+    assert.match(intro1, /一句话记住/)
+    assert.match(intro1, /把 structure 里的每个要点讲成一句可复述的结论/)
+    assert.match(intro1, /先用一句话接住上一课\/【已学与前置内容】/)
+    assert.match(intro1, /【开课约定】本课没有已学内容：不要编造上一课/)
+    assert.match(intro1, /本课脉络：/)
+    assert.match(intro1, /引入新术语前先说明它解决什么具体问题/)
+    // 新增的已学内容/脉络块不能干扰忠实度审计对 structure 的解析。
+    assert.deepEqual(parseLessonIntro(intro1)?.structure, draft.structure)
+  })
+
+  it('教学首消息注入上一课与前置摘要，供开场衔接', () => {
+    const intro = buildTeachingIntro({
+      courseId: 'golang', node: 'channels', plan: { path: ['goroutines', 'channels'], milestones: [], current: 'channels' },
+      profile, map, draft: { ...draft, node: 'channels', title: 'Channel' },
+    })
+    assert.match(intro, /【已学与前置内容】/)
+    assert.match(intro, /上一课 goroutines（Goroutine）：轻量级并发单元/)
   })
 })
 

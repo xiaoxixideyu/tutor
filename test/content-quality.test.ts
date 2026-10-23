@@ -830,6 +830,37 @@ it('课程地图明确每节点一课，骨架越界即可提前拒绝但不能�
   assert.equal(store.approved(large), false)
 })
 
+it('计划审查明确不含课时正文，里程碑可以只覆盖部分路径', async t => {
+  const { gate, requests } = setup(t)
+  const plan = { path: ['die'], milestones: [{ id: 'm1', title: '能计算一次掷骰概率', nodes: ['die'] }], current: 'die' }
+  assert.equal((await gate.review(planContent(plan, profile, map))).approved, true)
+  const reviewer = requests.find(request => request.role === 'reviewer')!
+  const payload = JSON.parse(reviewer.prompt)
+  assert.match(payload.dataContract, /计划 units 只有 path 和 milestones/)
+  assert.match(payload.dataContract, /里程碑可以只覆盖部分路径节点/)
+})
+
+it('教案审查按原文场景与集合定义核查量词', async t => {
+  const { gate, requests } = setup(t)
+  const draft: LessonDraft = { node: 'die', title: '课', hook: '开场', flow: '从问题到结论',
+    structure: ['ISR 内全部副本确认后才算成功'], example: '例子', practice: [], quiz: [], misconceptions: [] }
+  assert.equal((await gate.review(lessonContent(draft, profile, map))).approved, true)
+  const reviewer = requests.find(request => request.role === 'reviewer')!
+  const payload = JSON.parse(reviewer.prompt)
+  assert.match(payload.dataContract, /X 集合内全部成员/)
+  assert.match(payload.dataContract, /集合缩小时成员数也随之减少/)
+})
+
+it('事实核查要求 verdict 与 explanation 一致，并按集合定义理解量词', async t => {
+  const { gate, requests } = setup(t)
+  const claimed: KnowledgeMap = { verified: false, nodes: [{ id: 'die', title: '一次掷骰', summary: '必须等待 ISR 内全部副本确认' }], edges: [] }
+  assert.equal((await gate.review(mapContent(claimed, profile))).approved, true)
+  const facts = requests.find(request => request.role === 'facts')!
+  const payload = JSON.parse(facts.prompt)
+  assert.match(payload.outputContract, /verdict 必须与 explanation 一致/)
+  assert.match(payload.outputContract, /X 集合内全部成员/)
+})
+
 it('第四次修复重新审查后可发布；未修改的拒绝稿不靠反复审查碰运气', async t => {
   const { gate, store, records } = setup(t, content => {
     const result = reviewFor(content)

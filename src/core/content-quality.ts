@@ -122,12 +122,15 @@ export function canonicalJson(value: unknown): string {
 export function contentKey(input: ContentInput): string {
   return createHash('sha256').update(canonicalJson({ policy: QUALITY_POLICY, solver: SOLVER_PERSONA, reviewer: REVIEWER_PERSONA, facts: FACT_PERSONA,
     ...(input.kind === 'map' ? { contract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { contract: TEACHING_REVIEW_CONTRACT }
-      : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : {}),
+      : input.kind === 'practice' ? { contract: PRACTICE_REVIEW_CONTRACT } : input.kind === 'plan' ? { contract: PLAN_REVIEW_CONTRACT }
+      : input.kind === 'lesson' ? { contract: LESSON_REVIEW_CONTRACT } : {}),
     ...(input.kind === 'map' && input.units.some(unit => unit.id.startsWith('resource:')) ? { resourceScope: MAP_RESOURCE_REVIEW_CONTRACT } : {}),
     ...(factProbes(input).some(claim => claim.conditionCheck) ? { conditionCheck: NECESSARY_CONDITION_CONTRACT } : {}), input })).digest('hex')
 }
 
 export const MAP_REVIEW_CONTRACT = '本项目每个知识地图节点会启动一节实际课堂，因此一个 node 就是一节课，不是课内讲解要点。outline.nodes 是完整节点清单；明确要求 N 节课时必须恰好 N 个节点，不能把多出来的节点解释成同一节内的小知识点。edges 每对是 [知识点, 前置知识点]。'
+export const PLAN_REVIEW_CONTRACT = '计划审查只针对教学路径与里程碑本身。计划 units 只有 path 和 milestones，不包含课时正文、练习、题目或题解；缺少这些是计划的正常形态，不能因此判“无法核查”或 uncertain。里程碑可以只覆盖部分路径节点；完整课程覆盖看 path 与 scope，不能要求每个里程碑覆盖全部路径，也不能因单个里程碑只含一个节点而判越界或无法核查。'
+export const LESSON_REVIEW_CONTRACT = '教案审查以当前课的范围和原文限定场景为准，不要求一课覆盖整个节点或整门课程；结构点、例子和 flow 中的事实句仍须核查。核查“全部/必须”等量词或必要条件时，按原文的限定词和集合定义理解：说“X 集合内全部成员”时，集合缩小时成员数也随之减少，不能因为集合可能只剩一个成员就判该量词不成立；只有原文把某做法说成普遍必要条件时，才需要寻找不满足该条件仍成立的反例。'
 export const TEACHING_REVIEW_CONTRACT = '这是单轮课堂对话，不是整节课的教案。reply 不必在一轮内覆盖当前节点的全部目标；缺少本节其余步骤本身不是越界或知识错误。为回答学员当前问题或澄清本节概念，可简短回顾、比较原课程范围内的必要前置概念；不要求每轮重复当前节点标题中的全部方法。仍禁止提前教授或考查下一课的新方法、扩充学习活动及引入课程明确排除项。'
 export const PRACTICE_REVIEW_CONTRACT = '实践测试必须拒绝常见错误答案。主动构造数值前后多一位、分母错误、集合漏项或多项等反例，逐条推演命令是否误通过。expect_output_contains 和未加 -x 或行边界的 grep 只做子串匹配：例如正确分数的前缀会匹配错误分母，要求的容量也会匹配多一位数字。若末条行为检查仅靠这类子串证明完整答案正确，应 fail 并给出具体反例。验证完整值应在命令内按完整行、严格结构或数值比较，并保留被测程序失败的退出状态；可用 grep -qxF 或等效的有边界检查。源代码关键词查找和无数值的成功标记可用子串，不能把它们当作行为正确的全部证据。验收依据题目明确给出的接口；固定 main 输出任务可以严格比较所要求的完整输出及顺序。当前是练习自检，不是抗作弊系统，不要求证明任意程序的内部实现或抵御有意伪造全部输出，也不能为此要求新增函数接口、活动或未学知识。'
 

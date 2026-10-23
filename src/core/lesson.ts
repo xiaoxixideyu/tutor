@@ -52,6 +52,7 @@ export function validateLessonDraft(
   }
   if (!value.title.trim()) return { ok: false, error: '备课产物缺少标题' }
   if (!value.hook.trim()) return { ok: false, error: '备课产物缺少开场引入' }
+  if (value.flow !== undefined && !value.flow.trim()) return { ok: false, error: '备课产物缺少本课脉络' }
   if (!value.example.trim()) return { ok: false, error: '备课产物缺少核心例子' }
   if (value.structure.some((point) => !point.trim())) {
     return { ok: false, error: 'structure 中存在空要点' }
@@ -278,12 +279,22 @@ export function buildPrepPrompt(input: PrepInput): string {
   const recent = input.today !== undefined ? latestTouchedAt(input.mastery) : undefined
   const errors = input.errors ?? []
   const styleNotes = input.styleNotes ?? []
+  const nodeTitle = (id: string) => input.map.nodes.find((n) => n.id === id)?.title ?? id
+  const nodeSummary = (id: string) => input.map.nodes.find((n) => n.id === id)?.summary
+  // 路径上的上一课未必是直接前置（如面试串讲），两处都注入，让备课能选真正的衔接点。
+  const pathIndex = input.plan.path.indexOf(input.node)
+  const previousId = pathIndex > 0 ? input.plan.path[pathIndex - 1] : undefined
+  const learned = [...new Set([...(previousId !== undefined ? [previousId] : []), ...prerequisites])]
+    .filter((id) => id !== input.node)
+    .map((id) => `- ${id === previousId ? '上一课 ' : ''}${id}（${nodeTitle(id)}）${nodeSummary(id) ? `：${nodeSummary(id)}` : ''}`)
   const lines = [
     `任务：为课程《${input.courseId}》的下一节课备课。`,
     '',
     '【本课知识点】',
     `- ${input.node}（${node?.title ?? input.node}）：${node?.summary ?? '无摘要'}`,
-    prerequisites.length > 0 ? `- 前置知识：${prerequisites.join('、')}（学员状态见下）` : '- 前置知识：无',
+    ...(learned.length > 0
+      ? ['', '【已学与前置内容】（用于衔接：已掌握的从结论出发、不重讲；未掌握的先用类比或最小例子重建）', ...learned]
+      : ['- 前置知识：无']),
     '',
     '【学员档案】',
     `- 学习目的与原始范围：${profileScope(input.profile)}`,
@@ -315,13 +326,17 @@ export function buildPrepPrompt(input: PrepInput): string {
     '- 保留率低的前置：开场先用类比或最小例子重建，再衔接新内容，避免默认学员还记得',
     '- 讲法贴合学员讲解偏好与现有基础',
     '- 严格遵守学习目的中的范围与排除项，资料中的超范围例子不进入本课；区分必要条件与推荐做法，不把一种示例写成唯一合法做法',
-    '- example 给一个核心例子（如涉及代码给出完整可读的代码块）',
-    '- practice 为 1-3 道课中练习（随讲授穿插），每题给出参考答案',
+    '- hook 从【已学与前置内容】或上一课留下的问题/局限出发（1-2 句），点明“旧办法为什么不够”，自然引出本课要解决的唯一核心问题；没有已学内容时从学员档案里的真实场景或故障现象切入；禁止用“今天学习 X”、术语定义或泛泛背景开场',
+    '- flow 用 2-4 句写本课因果链：上一课/前置结论（没有则从学员场景或故障现象）→ 它留下的问题 → 第 1 个要点如何解决 → 又暴露什么 → 第 2 个要点……；每个要点都必须由前一步的问题逼出来，不能是并列知识点',
+    '- structure 每项写成一句可讲授的结论（8-20 字，如“写满即滚动新段，旧段只读”），顺序与 flow 的因果链一致，不要只写名词或章节标题；学员只看这些要点也能记住本课重点',
+    '- 禁止把本课写成“术语定义 → 特点 → 用法”的清单：一节课只围绕一个核心问题，与主线无关的概念留到后续课；宁可少讲一个术语，也不要把没有说明由来的概念塞进本课',
+    '- example 先复现 hook 里的问题，再随要点推进展示解法（如涉及代码给出完整可读的代码块）；例子必须为因果链服务，不能是与动机无关的片段',
+    '- practice 为 1-3 道课中练习（随讲授穿插），优先检验最容易记错或混淆的点，不考定义复述；每题给出参考答案',
     '- quiz 为 2-3 道课后单元小测题，全部为客观题：四选一（choices 恰好 4 项、answer 为 A-D 字母），或单一数值填空（answer 仅整数、小数或分数，题干明确只填数值）；概念解释、代码、多项输出必须改成四选一，不得要求一句话说明再用整句精确匹配；不得与课中练习重复',
-    '- misconceptions 列出该知识点常见误区（1-3 条）',
+    '- misconceptions 用“误以为……，其实……”的句式写出 1-3 条常见误区',
     '',
     '请输出备课 JSON（```json 代码块）：',
-    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句）", "structure": ["要点1", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "quiz": [{"question": "…", "choices": ["A. …","B. …","C. …","D. …"], "answer": "B"}, {"question": "…（只填数值）", "answer": "2"}], "misconceptions": ["…"]}',
+    '{"node": "' + input.node + '", "title": "…", "hook": "开场引入（1-2 句，从已学内容/上一课的问题或局限切入）", "flow": "本课因果链（2-4 句，说明每个要点为什么必须出现）", "structure": ["一句可讲授的结论", …], "example": "…", "practice": [{"question": "…", "answer": "…"}], "quiz": [{"question": "…", "choices": ["A. …","B. …","C. …","D. …"], "answer": "B"}, {"question": "…（只填数值）", "answer": "2"}], "misconceptions": ["…"]}',
     '除该 JSON 外不要输出其他内容。',
   ]
   return lines.join('\n')
@@ -341,6 +356,7 @@ export interface TeachingIntroInput {
   node: string
   plan: Plan
   profile: Profile
+  map?: KnowledgeMap
   mastery?: Mastery
   draft: LessonDraft
   resources?: LessonResourceView[]
@@ -353,10 +369,27 @@ export function buildTeachingIntro(input: TeachingIntroInput): string {
   const resources = input.resources ?? []
   const memory = input.memory ?? []
   const warmup = input.warmup ?? []
+  const learned: string[] = []
+  if (input.map) {
+    const pathIndex = input.plan.path.indexOf(input.node)
+    const previousId = pathIndex > 0 ? input.plan.path[pathIndex - 1] : undefined
+    const ids = [...new Set([...(previousId !== undefined ? [previousId] : []), ...prerequisiteIds(input.map, input.node)])]
+      .filter((id) => id !== input.node)
+    for (const id of ids) {
+      const item = input.map.nodes.find((n) => n.id === id)
+      if (item) {
+        const status = input.mastery?.[id]?.status ?? 'unknown'
+        learned.push(`- ${id === previousId ? '上一课 ' : ''}${id}（${item.title}）${item.summary ? `：${item.summary}` : ''}（掌握度：${status}）`)
+      }
+    }
+  }
   const lines = [
     `【课程】${input.courseId}`,
     `【学员档案】目的与原始范围：${profileScope(input.profile)}｜基础：${input.profile.background || '未填写'}｜偏好：${input.profile.style || '未填写'}｜每日投入：${input.profile.daily_minutes ?? '未填写'} 分钟`,
     `【本课知识点】${input.draft.node}（${input.draft.title}）`,
+    ...(learned.length > 0
+      ? ['', '【已学与前置内容】（已掌握的先用一句话接住、不重讲；未掌握的先用类比或最小例子重建）', ...learned]
+      : ['', '【开课约定】本课没有已学内容：不要编造上一课，也不要提前讲后续课；直接从开场现象或学员已有经验切入。']),
     ...(memory.length > 0
       ? ['', '【学员记忆状态】（估计值，用于决定讲法与热身）', ...memory.map((m) =>
           `- ${m.node}（${m.title ?? m.node}）：距上次实测 ${m.elapsedDays} 天，预计保留 ≈${Math.round(m.retention * 100)}%${m.retention < WARMUP_RETENTION_THRESHOLD ? '——低保留，讲新内容前先用类比或最小例子重建' : ''}`)]
@@ -370,9 +403,16 @@ export function buildTeachingIntro(input: TeachingIntroInput): string {
       ? ['', '【本课资料】（讲授中引用事实时标注 [资料:编号]）', ...resourceLines(resources, 500)]
       : []),
     '',
+    '【讲授格式】',
+    '- 首次回复：先用一句话接住上一课/【已学与前置内容】（它解决了什么、又留下什么），再给 **本课目标：** 一行 + 2-3 条 **本课路线图：** + 只讲第 1 个要点；结尾 **一句话记住：** + 一个回忆问题',
+    '- 之后每轮：先用一句话接上一点（它解决了什么、又暴露什么），再给 **本节结论：** + 最多两段解释 + **一句话记住：** + 一个问题；正文 260 字以内（代码、公式与 [资料:n] 标记不计）',
+    '- 引入新术语前先说明它解决什么具体问题，或由上一要点的什么不足逼出来；禁止直接抛定义。**本节结论**要回答“为什么需要它/它解决什么”，不能只是“它是什么”',
+    '- 把 structure 里的每个要点讲成一句可复述的结论，不要只念标题；要点之间按 flow 的因果链衔接',
+    '',
     '【本课计划】',
     `开场：${input.draft.hook}`,
     ...input.draft.structure.map((s, i) => `${i + 1}. ${s}`),
+    ...(input.draft.flow ? [`本课脉络：${input.draft.flow}`] : []),
     `核心例子：${input.draft.example}`,
     ...input.draft.practice.map((p, i) => `课中练习${i + 1}：${p.question}（参考答案：${p.answer}）`),
     ...(input.draft.misconceptions?.length ? [`常见误区：${input.draft.misconceptions.join('；')}`] : []),

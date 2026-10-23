@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, MAP_REVIEW_CONTRACT, MAP_NODE_REVIEW_CONTRACT, MAP_OUTLINE_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, mapTeachingTime, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
+import { blindQuestions, contentIssues, contentKey, factProbes, FACT_PERSONA, LESSON_REVIEW_CONTRACT, MAP_REVIEW_CONTRACT, MAP_NODE_REVIEW_CONTRACT, MAP_OUTLINE_REVIEW_CONTRACT, MAP_RESOURCE_REVIEW_CONTRACT, mapReviewContext, mapTeachingTime, PLAN_REVIEW_CONTRACT, TEACHING_REVIEW_CONTRACT, PRACTICE_REVIEW_CONTRACT, parseBlindSolutions, parseContentReview, parseFactChecks, QUALITY_POLICY, REVIEWER_PERSONA, SOLVER_PERSONA,
   requiredAssertions, teachingContent, validateContentInput, type ApprovedTeachingTurn, type ContentInput } from '../core/content-quality.ts'
 import type { KnowledgeMap, Profile } from '../core/schema.ts'
 import { QualityStore, type QualityRecord } from '../core/quality-store.ts'
@@ -165,7 +165,8 @@ export class ContentGate {
       const reviewPart = async (units: ContentInput['units']) => {
         const reviewed = await checkPart('reviewer', units, partUnits => JSON.stringify({
           ...(input.kind === 'map' ? { dataContract: MAP_REVIEW_CONTRACT } : input.kind === 'teaching' ? { dataContract: TEACHING_REVIEW_CONTRACT }
-            : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : {}),
+            : input.kind === 'practice' ? { dataContract: PRACTICE_REVIEW_CONTRACT } : input.kind === 'plan' ? { dataContract: PLAN_REVIEW_CONTRACT }
+            : input.kind === 'lesson' ? { dataContract: LESSON_REVIEW_CONTRACT } : {}),
           ...(input.kind === 'map' && partUnits.some(unit => unit.id === 'outline') ? { outlineScopeContract: MAP_OUTLINE_REVIEW_CONTRACT, teachingTime: mapTeachingTime(input) } : {}),
           ...(input.kind === 'map' && partUnits.some(unit => unit.id.startsWith('node:')) ? { nodeScopeContract: MAP_NODE_REVIEW_CONTRACT } : {}),
           ...(input.kind === 'map' && partUnits.some(unit => unit.id.startsWith('resource:')) ? { resourceScopeContract: MAP_RESOURCE_REVIEW_CONTRACT } : {}),
@@ -184,7 +185,7 @@ export class ContentGate {
         const contradicted = () => contentIssues(input, [], { units: [] }, record.facts).length > 0
         await parallelParts(unitBatches(factProbes(input), 2), async claims => {
           record.facts!.push(...await checkPart('facts', claims, items => JSON.stringify({
-            outputContract: '返回核查结果，不要回显输入 claims。每项必须含 id、verdict（pass/fail/uncertain）、explanation 和 arithmetic。arithmetic 无运算时为 []；有运算时每项必须同时写 expression 与 result，例如 [{"expression":"3-1","result":"2"}]，不能只给算式字符串。',
+            outputContract: '返回核查结果，不要回显输入 claims。每项必须含 id、verdict（pass/fail/uncertain）、explanation 和 arithmetic。arithmetic 无运算时为 []；有运算时每项必须同时写 expression 与 result，例如 [{"expression":"3-1","result":"2"}]，不能只给算式字符串。verdict 必须与 explanation 一致：解释得出“在指定场景下成立/没有反例/可判通过”时必须写 pass；判 fail 必须给出明确反例，不能写“判 pass”。核查“X 集合内全部成员”这类量词时按集合定义理解：集合缩小时成员数也随之减少，不能因为集合可能只剩一个成员就判“全部”不成立。',
             claims: items,
           }), (value, items) => parseFactChecks(value, items.map(c => c.id)), contradicted))
         }, contradicted)

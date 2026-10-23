@@ -6,6 +6,7 @@ import path from 'node:path'
 import { CourseStore } from '../src/core/store.ts'
 import { mergeResearchBatch } from '../src/core/knowledge.ts'
 import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../src/core/research.ts'
+import { nodePrompt, skeletonPrompt } from '../src/flows/research.ts'
 import { mapContent } from '../src/core/content-quality.ts'
 import { QualityStore } from '../src/core/quality-store.ts'
 import type { KnowledgeMap } from '../src/core/schema.ts'
@@ -24,6 +25,17 @@ it('单点教研保留骨架标题和其他节点，只合入经过核查的摘�
   assert.equal(result.nodes[0].summary, '补充摘要')
   assert.deepEqual(result.nodes.slice(1), initial.nodes.slice(1))
   assert.deepEqual(result.edges, initial.edges)
+})
+
+it('课程骨架与教研摘要都要求问题驱动，不把术语清单当作一节课', () => {
+  const profile = { goal: '能排查线上 Kafka 问题' }
+  const skeleton = skeletonPrompt(profile, { min: 4, max: 12 })
+  assert.match(skeleton, /每节课必须围绕一个具体问题或任务/)
+  assert.match(skeleton, /不要把教材同一章的名词打包成一节“核心概念\/总览”课/)
+  assert.match(skeleton, /后一个节点最好由前一个节点解决后暴露的新问题\/新限制自然引出/)
+  const node = nodePrompt(profile, { id: 'kafka-storage', title: '分区与副本', summary: 'ISR、HW、LEO' })
+  assert.match(node, /先写这节课要解决的具体问题，再写核心机制\/结论，不要改写成术语清单/)
+  assert.match(node, /若骨架只给了术语，就从节点标题和学员目的推断他实际会遇到的问题/)
 })
 
 it('逐个落盘；中间节点失败后继续其他节点，重启只需补未完成项', async t => {
