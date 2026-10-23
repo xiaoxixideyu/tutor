@@ -187,6 +187,7 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(home, /const runningSection = running/, '详情页应提示正在进行的流程')
     assert.match(home, /p\.hasPlan && !running/, '有流程在跑时不应再给实践入口')
     assert.match(home, /const resetBtn = running \? ''/, '有流程在跑时不应显示断点清理')
+    assert.match(home, /watchFlow/, '详情页应轮询并在流程结束后恢复操作')
   })
 
   it('复习选项带字母、提交后禁用，结果页不再出现两个重复的返回列表按钮', () => {

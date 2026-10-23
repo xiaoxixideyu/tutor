@@ -98,3 +98,29 @@ it('模型连续输出无效档案时有上限，不会无限重试', async (t) 
   assert.equal(asks, MAX_PROFILE_REPAIRS + 1)
   assert.equal(store.exists('alpha'), false)
 })
+
+it('已有课程不能再走新建访谈覆盖档案，也不会创建模型会话', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-interview-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const store = new CourseStore(root)
+  store.create('alpha', { goal: '原目标' })
+  let chats = 0
+  const errors: string[] = []
+  const io: FlowIO = {
+    out: () => {},
+    err: (text) => { errors.push(text) },
+    readLine: async () => '',
+    closeInput: () => {},
+    signal: new AbortController().signal,
+  }
+  const deps = {
+    store, io, status: () => {}, env: {}, workspace: root, today: () => '2026-10-20',
+    createChat: async () => { chats += 1; throw new Error('不应创建会话') },
+  } as unknown as FlowDeps
+
+  await assert.rejects(runInterview(deps, { courseId: 'alpha' }),
+    (error: unknown) => error instanceof FlowExit && error.code === 1)
+  assert.equal(chats, 0)
+  assert.match(errors.join('\n'), /已存在/)
+  assert.equal((store.read('alpha', 'profile') as { goal: string }).goal, '原目标')
+})

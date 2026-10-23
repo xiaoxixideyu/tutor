@@ -248,7 +248,12 @@
     }
   }
 
-  window.addEventListener('hashchange', () => { mount(parseRoute()); markActiveCourse() })
+  window.addEventListener('hashchange', () => {
+    const route = parseRoute()
+    if (drawer.classList.contains('open') && route.view !== 'settings') setDrawer(false)
+    mount(route)
+    markActiveCourse()
+  })
   // 旧版会把流程 id 写进地址栏查询串；残留值会让之后的向导误认成旧流程，进入时清理。
   if (location.search) history.replaceState(null, '', location.pathname + location.hash)
   refreshRail()

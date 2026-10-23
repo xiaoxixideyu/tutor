@@ -32,8 +32,25 @@
     const reviewHref = options.reviewHref ?? ((id) => `#/course/${encodeURIComponent(id)}/review`)
     const examHref = options.examHref ?? ((id, milestone) => `#/course/${encodeURIComponent(id)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`)
     const go = options.navigate ?? ((href) => { if (href) location.href = href })
+    let statusPoll = null
+
+    function stopStatusPoll() {
+      if (statusPoll) { clearTimeout(statusPoll); statusPoll = null }
+    }
+
+    function watchFlow(id) {
+      statusPoll = setTimeout(async () => {
+        statusPoll = null
+        try {
+          const state = await fetch('/flow/state').then((response) => response.json())
+          if ((state.flows ?? []).some((flow) => flow.courseId === id)) watchFlow(id)
+          else renderStatus(id).catch(() => {})
+        } catch { /* 下一次渲染或手动刷新再试 */ }
+      }, 5000)
+    }
 
     async function renderList() {
+      stopStatusPoll()
       if (researchLive) researchLive.connect(null)
       const courses = await TutorRpc('listCourses')
       const due = await TutorRpc('dueReviews')
@@ -104,6 +121,7 @@
     }
 
     async function renderStatus(id) {
+      stopStatusPoll()
       const p = await TutorRpc('courseStatus', { id })
       if (researchLive) researchLive.connect(id)
       // 展开课程详情时拉取"当前内容里哪条没过审"（地图/计划/各节点题库），省得用户去翻 JSON 证据文件。
@@ -229,6 +247,7 @@
           alert(`清理失败：${error.message}`)
         }
       })
+      if (running) watchFlow(p.id)
     }
 
     async function start() {
@@ -243,7 +262,10 @@
       ready,
       showCourse: (courseId) => renderStatus(courseId),
       showList: () => renderList(),
-      destroy() { if (researchLive) researchLive.connect(null) },
+      destroy() {
+        stopStatusPoll()
+        if (researchLive) researchLive.connect(null)
+      },
     }
   }
 })()

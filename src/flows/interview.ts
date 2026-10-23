@@ -10,6 +10,12 @@ export const MAX_PROFILE_REPAIRS = 3
 export async function runInterview(deps: FlowDeps, config: { courseId: string; maxTurns?: number }): Promise<void> {
   const maxTurns = config.maxTurns ?? 24
   const { store, io } = deps
+  // 新建流程只能创建新课程；已有课程继续学习请走 assess/plan/learn，避免访谈档案覆盖原课程。
+  if (store.exists(config.courseId)) {
+    io.err(`tutor: 课程 "${config.courseId}" 已存在，请换一个课程标识，或从课程列表继续学习。\n`)
+    io.closeInput()
+    throw new FlowExit(1)
+  }
   const chat = await deps.createChat({ retryOnLength: false })
 
   let reply = await chat.ask(START_MESSAGE)
