@@ -17,6 +17,7 @@
     const root = options.root
     const navigate = options.navigate ?? ((href) => { location.href = href })
     const onStatus = options.onStatus ?? (() => {})
+    const onTitle = options.onTitle ?? (() => {})
     const flowClient = options.flowClient ?? new TutorFlowClient((message) => {
       setBusy(false)
       $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(message)}</div>`))
@@ -83,6 +84,7 @@
     let bubbleText = ''
     let source = null
     let gateBlocked = false
+    let skipJson = false
 
     function scrollToEnd() { TutorDom.scrollToEnd($log) }
 
@@ -118,6 +120,13 @@
       $opStatus.style.display = 'none'
     }
 
+    function prettyReview(text) {
+      return cleanOp(text)
+        .replace(/^内容审查\s+([a-z-]+)：/, (_, kind) => `内容审查 ${AUDIT_KIND_LABEL[kind] ?? kind}：`)
+        .replace(/（记录已保存）/g, '')
+        .replace(/拦截 (\d+) 处问题/, '未通过 $1 处')
+    }
+
     // 引擎文本分流：返回 true 表示已归入状态条/里程碑或已静默丢弃，不再进对话流。
     function routeEngineLine(text) {
       const trimmed = String(text ?? '').trim()
@@ -142,11 +151,15 @@
         return true
       }
       if (/^内容审查[^：]*：/.test(trimmed)) {
-        if (/拦截|未完成/.test(trimmed)) {
+        // 生成过程中的单次拦截会继续修复，不当作最终失败刷屏；只有“内容审查”流程本身的拒绝才留在对话里。
+        if (/拦截|未完成/.test(trimmed) && currentKind === 'audit-content') {
           closeBubble()
-          $log.appendChild(TutorDom.el(`<div class="milestone warn">⚠ ${TutorDom.esc(cleanOp(trimmed))}</div>`))
+          $log.appendChild(TutorDom.el(`<div class="milestone warn">⚠ ${TutorDom.esc(prettyReview(trimmed))}</div>`))
           scrollToEnd()
-        } else noteOp(trimmed)
+        } else {
+          const count = trimmed.match(/拦截 (\d+) 处问题/)?.[1]
+          noteOp(count ? `内容审查发现 ${count} 处问题，正在自动修复…` : prettyReview(trimmed))
+        }
         return true
       }
       if (/已保存：来源|本次教研已保存/.test(trimmed)) {
@@ -205,7 +218,10 @@
             chip.classList.toggle('selected')
           } else {
             chipsAnswered = true
-            for (const other of container.querySelectorAll('.chip')) other.classList.add('disabled')
+            for (const other of container.querySelectorAll('.chip')) {
+              other.classList.add('disabled')
+              other.disabled = true
+            }
             chip.classList.add('selected')
             submitChips([option.letter])
           }
@@ -217,7 +233,10 @@
         submit.addEventListener('click', () => {
           if (chipsAnswered || chipSelection.length === 0) return
           chipsAnswered = true
-          for (const other of container.querySelectorAll('.chip')) other.classList.add('disabled')
+          for (const other of container.querySelectorAll('.chip')) {
+            other.classList.add('disabled')
+            other.disabled = true
+          }
           submitChips(chipSelection)
         })
         container.appendChild(submit)
@@ -235,6 +254,10 @@
     }
 
     function handleLine(line) {
+      line = String(line ?? '')
+        .replace(/；?随时 Ctrl-C 中断/g, '；可随时停止')
+        .replace(/要中断请按 Ctrl-C/g, '可随时停止')
+        .replace(/Ctrl-C/g, '停止')
       const trimmed = line.trim()
       if (trimmed === '>') {
         const closed = closeBubble()
@@ -243,6 +266,25 @@
         setBusy(false)
         return
       }
+      // 访谈收尾的档案 JSON 和本机路径是内部产物，不进入学员对话。
+      if (currentKind === 'new') {
+        if (skipJson) {
+          if (trimmed === '}' || trimmed === '```') skipJson = false
+          return
+        }
+        if (trimmed === '```json' || trimmed === '```') { skipJson = true; return }
+        if (trimmed === '{' || (trimmed.startsWith('{') && trimmed.endsWith('}'))) return
+        if (/^课程 .+ 已创建，档案位于 /.test(trimmed)) return
+      }
+      // 档案路径、归档路径对学员没有意义，只保留结果与下一步。
+      if (/^能力画像已写入 /.test(trimmed)) return
+      if (/^旧教学计划已归档到 |^旧掌握度\/计划已归档到 /.test(trimmed)) {
+        closeBubble()
+        $log.appendChild(TutorDom.el('<div class="sysline">旧计划已归档，将按最新状态重新生成。</div>'))
+        scrollToEnd()
+        return
+      }
+      if (/^教学计划已生成（.+\.yaml）：$/.test(trimmed)) line = '教学计划已生成：'
       if (routeEngineLine(line)) return
       if (trimmed === '') return
       if (!bubble) { clearOp(); bubble = TutorDom.el('<div class="tutor"></div>'); $log.appendChild(bubble) }
@@ -316,6 +358,7 @@
       $log.hidden = false
       $steps.style.display = 'flex'
       $footer.style.display = 'block'
+      onTitle(courseName ? `${courseName} · ${STEP_TITLES[currentKind] ?? '向导'}` : '新课程向导')
       onStatus({ text: `${STEP_TITLES[currentKind] ?? currentKind} · ${courseName}`, busy })
     }
 
@@ -323,6 +366,8 @@
       currentKind = kind
       currentNodeId = kind === 'research' ? nodeId : ''
       gateBlocked = false
+      skipJson = false
+      if (courseName && kind !== 'new') onTitle(`${courseName} · ${STEP_TITLES[kind] ?? '向导'}`)
       markStep(kind, 'active')
       onStatusText = `${STEP_TITLES[kind] ?? kind} · ${courseName}`
       $footer.style.display = 'block'
@@ -360,6 +405,7 @@
         if (msg.type === 'hello') {
           currentNodeId = msg.nodeId || ''
           gateBlocked = false
+          skipJson = false
           if (msg.kind && msg.kind !== currentKind) {
             currentKind = msg.kind
             courseName = msg.courseId
@@ -374,6 +420,11 @@
             closeBubble()
             $log.appendChild(TutorDom.gateNotice({ courseId: courseName, navigate, raw: msg.text }))
             scrollToEnd()
+          } else if (/多次生成仍未通过校验|内容准入审查失败/.test(msg.text)) {
+            closeBubble()
+            onStatus({ text: '内容生成未通过校验', busy: false })
+            $log.appendChild(TutorDom.flowFailure({ detail: msg.text }))
+            scrollToEnd()
           } else if (!routeEngineLine(msg.text)) $log.appendChild(TutorDom.el(`<div class="errline">${TutorDom.esc(msg.text)}</div>`))
         } else if (msg.type === 'exit') {
           feed('')
@@ -385,15 +436,18 @@
           $footer.style.display = 'none'
           if (msg.kind === 'new' && msg.code === 0) {
             markStep('new', 'done')
+            onStatus({ text: '访谈完成', busy: false })
             $log.appendChild(TutorDom.el('<div class="sysline">—— 访谈完成。可先联网教研（官方来源、讲授可溯源），或直接进入摸底 ——</div>'))
             researchDecision('assess', '跳过教研，直接摸底 →')
           } else if (msg.kind === 'assess' && msg.code === 0) {
             markStep('assess', 'done')
+            onStatus({ text: '摸底完成', busy: false })
             $log.appendChild(TutorDom.el('<div class="sysline">—— 摸底完成 ——</div>'))
             $gotoBtn.style.display = 'none'
             nextStepChip('plan', '生成教学计划 →')
           } else if (msg.kind === 'research' && msg.code === 0) {
             if (!currentNodeId) markStep('research', 'done')
+            onStatus({ text: '本次教研已完成', busy: false })
             $researchBtn.style.display = 'none'
             $log.appendChild(TutorDom.el('<div class="sysline">—— 本次教研已保存，可继续剩余教研或进入摸底 ——</div>'))
             nextStepChip('research', '继续未完成的教研 →')
@@ -401,11 +455,20 @@
             nextStepChip('assess', '开始摸底 →')
           } else if (msg.kind === 'plan' && msg.code === 0) {
             markStep('plan', 'done')
+            onStatus({ text: '教学计划已就绪', busy: false })
             $log.appendChild(TutorDom.el('<div class="sysline">—— 计划就绪，准备上课 ——</div>'))
+            const row = TutorDom.el('<div class="chips"></div>')
+            const goLearn = TutorDom.el('<button class="chip">去上课 →</button>')
+            goLearn.addEventListener('click', () => navigate(options.lessonHref
+              ? options.lessonHref(courseName)
+              : `#/course/${encodeURIComponent(courseName)}/learn`))
+            row.appendChild(goLearn)
+            $log.appendChild(row)
             $gotoBtn.style.display = 'inline-block'
           } else if (msg.kind === 'audit-content') {
             const ok = msg.code === 0
-            $log.appendChild(TutorDom.el(`<div class="sysline">—— 内容重新审查${ok ? '全部通过' : '完成，仍有未通过条目'}（code ${msg.code}）——</div>`))
+            onStatus({ text: ok ? '内容审查全部通过' : '内容审查完成，仍有未通过项', busy: false })
+            $log.appendChild(TutorDom.el(`<div class="sysline">—— 内容重新审查${ok ? '全部通过' : '完成，仍有未通过条目'} ——</div>`))
             if (ok) {
               markStep('new', 'done'); markStep('plan', 'done')
               $log.appendChild(TutorDom.el('<div class="sysline">内容已通过当前审查，可以开始上课。</div>'))
@@ -426,8 +489,9 @@
             }
             scrollToEnd()
           } else {
-            $log.appendChild(TutorDom.el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? msg.kind} 结束（code ${msg.code}）——</div>`))
+            $log.appendChild(TutorDom.el(`<div class="sysline">—— ${STEP_TITLES[msg.kind] ?? '流程'}${msg.code === 0 ? '已结束' : '已暂停'} ——</div>`))
             if (msg.code !== 0) {
+              onStatus({ text: `${STEP_TITLES[msg.kind] ?? '流程'}未完成`, busy: false })
               if (gateBlocked) {
                 const row = TutorDom.el('<div class="chips"></div>')
                 const detail = TutorDom.el('<button class="chip">返回课程详情处理内容问题 →</button>')

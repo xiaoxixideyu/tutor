@@ -42,6 +42,7 @@
       log: $log,
       input: $input,
       sendButton: $send,
+      stopButton: $stop,
       busyEl: root.querySelector('.chat-busy'),
       busyText: root.querySelector('.chat-busy-text'),
       opStatus: root.querySelector('.chat-opstatus'),
@@ -85,7 +86,7 @@
           examOutcome = null
           gateBlocked = false
           chat.setFlowFinished(msg.status !== 'running' && msg.status !== 'stopping')
-          chat.setBusy(msg.status === 'running', '正在恢复考试')
+          chat.setBusy(msg.status === 'running', msg.replay !== undefined ? '正在恢复考试' : '正在准备试卷')
           onStatus({ text: msg.courseId ? `大考进行中：${msg.courseId}` : '空闲', busy: msg.status === 'running' })
           setStopVisible(msg.status === 'running')
           return
@@ -109,7 +110,7 @@
           setStopVisible(false)
           const text = examOutcome === 'passed' ? '大考通过' : examOutcome === 'failed' ? '大考未通过' : '大考暂停，尚未产生成绩'
           onStatus({ text, busy: false })
-          $log.appendChild(TutorDom.el(`<div class="sysline">—— 大考进程退出（code ${msg.code}）——</div>`))
+          $log.appendChild(TutorDom.el('<div class="sysline">—— 大考已结束 ——</div>'))
           renderExamDone()
           try { source?.close() } catch { /* 已关闭 */ }
           options.onExit?.({ kind: 'done', code: msg.code, outcome: examOutcome })
@@ -134,7 +135,16 @@
     // 多行输入：Enter 发送，Shift+Enter 换行（一条输入仍是一条消息）。
     chat.bindComposer(() => $input.value.trim())
 
-    $stop?.addEventListener('click', () => { api('/flow/stop') })
+    $stop?.addEventListener('click', async () => {
+      if ($stop.disabled) return
+      $stop.disabled = true
+      onStatus({ text: '正在停止大考…', busy: true })
+      const result = await api('/flow/stop')
+      if (!result || result.ok === false) {
+        $stop.disabled = false
+        onStatus({ text: result?.error || '停止失败，请重试', busy: false })
+      }
+    })
     $send.addEventListener('click', () => {
       const line = $input.value.trim()
       if (!line) return

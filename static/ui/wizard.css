@@ -31,6 +31,7 @@
 .wizard .chip:hover { background: #eef2ff; }
 .wizard .chip.selected { background: var(--accent); color: #fff; }
 .wizard .chip.disabled { opacity: .55; cursor: default; }
+.wizard .chip.selected:disabled, .wizard .chip.selected.disabled { opacity: 1; cursor: default; }
 .wizard .tutor { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; line-height: 1.65; font-size: 14px; }
 .wizard .tutor h1, .wizard .tutor h2, .wizard .tutor h3 { font-size: 14px; margin: 12px 0 6px; }
 .wizard .tutor h3 { padding-left: 8px; border-left: 3px solid var(--accent); }

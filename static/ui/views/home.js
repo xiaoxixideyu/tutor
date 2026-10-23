@@ -7,6 +7,7 @@
   function defaultFlowHref(flow) {
     const course = encodeURIComponent(flow.courseId)
     const node = flow.nodeId ? `/${encodeURIComponent(flow.nodeId)}` : ''
+    if (flow.kind === 'new') return '#/new'
     if (flow.kind === 'learn') return `#/course/${course}/learn`
     if (flow.kind === 'exam') return `#/course/${course}/exam${flow.milestoneId ? `/${encodeURIComponent(flow.milestoneId)}` : ''}`
     if (flow.kind === 'practice' || flow.kind === 'practice-gen') return `#/course/${course}/practice${node}`

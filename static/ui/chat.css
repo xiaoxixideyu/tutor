@@ -36,6 +36,7 @@ header a.backlink:hover { background: var(--bg); }
 .chip:hover { background: #eef2ff; }
 .chip.selected { background: var(--accent); color: #fff; }
 .chip.disabled { opacity: .55; cursor: default; }
+.chip.selected:disabled, .chip.selected.disabled { opacity: 1; cursor: default; }
 .errline { color: var(--red); font-size: 13px; white-space: pre-wrap; }
 .sysline { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
 .opstatus { display: none; max-width: 860px; margin: 8px auto 0; width: 100%; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
@@ -69,3 +70,9 @@ footer { border-top: 1px solid var(--border); background: var(--card); padding: 
 .gate-actions .chip { background: #fff; }
 .gate-actions .chip.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .gate-actions .chip.primary:hover { background: #1d4ed8; }
+.flow-failure { border-color: #f1c084; background: #fffbeb; }
+.flow-failure .gate-head { color: #b45309; }
+.flow-failure .gate-body { color: #78350f; }
+.failure-detail { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.failure-detail summary { cursor: pointer; }
+.failure-detail pre { white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 8px 0 0; }

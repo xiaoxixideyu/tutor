@@ -206,7 +206,7 @@
         return
       }
       onStatus({ text: code === 0 ? '已退出' : '实践结束', busy: false })
-      appendLine(`—— 实践进程退出（code ${code}）——`, '')
+      appendLine('—— 实践已退出 ——', '')
       if (!gateBlocked) renderDone()
     }
 

@@ -143,4 +143,27 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(wizard, /class="wizard-stop"/, '向导应有停止按钮')
     assert.match(wizard, /api\('\/flow\/stop'\)/, '停止按钮应调用停止接口')
   })
+
+  it('访谈档案 JSON、本机路径与生成失败诊断不直接堆进对话', () => {
+    const wizard = read('ui/views/wizard.js')
+    assert.match(wizard, /skipJson/, '访谈应过滤档案 JSON')
+    assert.match(wizard, /能力画像已写入/, '应过滤能力画像路径')
+    assert.match(wizard, /教学计划已生成（/, '应去掉计划路径')
+    assert.match(wizard, /flowFailure/, '生成失败应使用折叠的技术细节卡片')
+    assert.match(read('ui/dom.js'), /function flowFailure/, '应提供共享生成失败卡片')
+  })
+
+  it('活动中的访谈从侧栏回到新课程向导，而不是不存在的课程详情', () => {
+    for (const file of ['ui/app.js', 'ui/views/home.js']) {
+      assert.match(read(file), /flow\.kind === 'new'\) return '#\/new'/, `${file} 应把访谈流程指回向导`)
+    }
+  })
+
+  it('课堂/大考准备期间仍可暂停，停止按钮不会误发一条消息', () => {
+    for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
+      assert.match(read(file), /stopButton: \$stop/, `${file} 应把停止按钮交给共享聊天组件管理`)
+    }
+    assert.match(read('ui/views/learn.js'), /if \(!button\.dataset\.cmd\) continue/, '快捷按钮循环应跳过停止按钮')
+    assert.match(read('ui/chat.js'), /本轮已结束，请使用上方操作/, '流程结束后输入框不应继续提示“轮到你了”')
+  })
 })

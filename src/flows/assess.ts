@@ -96,7 +96,7 @@ async function runQuiz(deps: FlowDeps, courseId: string, engine: AssessmentEngin
       // 绝不能把整轮摸底判死。只有输入真正 EOF（answer===null，如 CLI 下 Ctrl-D）才存档退出。
       let answer = await io.readLine()
       while (answer !== null && !answer.trim()) {
-        io.out('（请输入选项字母，如 A；要中断请按 Ctrl-C）\n> ')
+        io.out('（请输入选项字母，如 A；可随时停止，进度已保存）\n> ')
         answer = await io.readLine()
       }
       if (answer === null) {
@@ -186,7 +186,7 @@ export async function runAssess(deps: FlowDeps, config: { courseId: string; rese
   const resumed = store.has(config.courseId, 'assessment')
   const state = resumed ? (store.read(config.courseId, 'assessment') as AssessmentState) : AssessmentEngine.create(topoOrder(map))
   const engine = new AssessmentEngine(bank, state)
-  io.out(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；随时 Ctrl-C 中断，进度已保存）。\n')
+  io.out(resumed ? '检测到未完成的摸底，从上次进度继续。\n' : '摸底测评开始（每知识点最多 3 题，答对加深、答错收窄；可随时停止，进度已保存）。\n')
   await runQuiz(deps, config.courseId, engine, map, prepareNode)
 
   const learner = engine.buildLearnerProfile(deps.today())

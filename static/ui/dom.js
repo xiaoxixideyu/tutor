@@ -54,6 +54,20 @@
     return card
   }
 
+  // 内容生成多次未通过校验：对外只给结论，原始诊断收进可展开的技术细节。
+  function flowFailure({ title = '内容生成未通过校验，本轮已暂停', body = '模型生成的内容没有通过独立核对，已停止继续生成。已完成的进度已保存，可稍后重试；若多次失败，可在模型设置里换一个能力更强的模型。', detail = '' } = {}) {
+    const card = el(`<div class="gate-notice flow-failure">
+      <div class="gate-head">⚠ ${esc(title)}</div>
+      <div class="gate-body">${esc(body)}</div>
+    </div>`)
+    if (detail) {
+      const details = el('<details class="failure-detail"><summary>技术细节</summary><pre></pre></details>')
+      details.querySelector('pre').textContent = String(detail)
+      card.appendChild(details)
+    }
+    return card
+  }
+
   // 进教学流程前先看课程准入，避免为了“自动开始”先触发一次昂贵的内容复审再失败。
   async function contentBlocked(courseId) {
     try {
@@ -62,5 +76,5 @@
     } catch { return false }
   }
 
-  window.TutorDom = { el, esc, scrollToEnd, setText, flowLabel, flowStatusLabel, isContentGateError, gateNotice, contentBlocked }
+  window.TutorDom = { el, esc, scrollToEnd, setText, flowLabel, flowStatusLabel, isContentGateError, gateNotice, flowFailure, contentBlocked }
 })()

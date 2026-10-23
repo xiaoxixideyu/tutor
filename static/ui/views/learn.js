@@ -48,6 +48,7 @@
       log: $log,
       input: $input,
       sendButton: $send,
+      stopButton: $stop,
       quickButtons: [...root.querySelectorAll('.chat-quick button')],
       busyEl: root.querySelector('.chat-busy'),
       busyText: root.querySelector('.chat-busy-text'),
@@ -104,7 +105,7 @@
           gateBlocked = false
           activeCourse = msg.courseId ?? activeCourse
           chat.setFlowFinished(msg.status !== 'running' && msg.status !== 'stopping')
-          chat.setBusy(!chat.flowFinished, '正在恢复课堂')
+          chat.setBusy(!chat.flowFinished, msg.replay !== undefined ? '正在恢复课堂' : '正在准备本课')
           onStatus({ text: msg.courseId ? `课堂进行中：${msg.courseId}` : '空闲', busy: !chat.flowFinished })
           setStopVisible(!chat.flowFinished)
           if (!msg.courseId) $banner.hidden = false
@@ -132,7 +133,7 @@
             onStatus({ text: '本节告一段落', busy: false })
             renderLearnContinue()
           } else {
-            $log.appendChild(TutorDom.el(`<div class="sysline">—— 课堂进程退出（code ${msg.code}）——</div>`))
+            $log.appendChild(TutorDom.el('<div class="sysline">—— 课堂已暂停 ——</div>'))
             if (msg.kind === 'learn') renderLearnContinue(true)
           }
           options.onExit?.({ kind: 'done', code: msg.code })
@@ -166,7 +167,16 @@
     // 多行输入：Enter 发送，Shift+Enter 换行（一条输入仍是一条消息）。
     chat.bindComposer(() => $input.value.trim())
 
-    $stop?.addEventListener('click', () => { api('/flow/stop') })
+    $stop?.addEventListener('click', async () => {
+      if ($stop.disabled) return
+      $stop.disabled = true
+      onStatus({ text: '正在停止课堂…', busy: true })
+      const result = await api('/flow/stop')
+      if (!result || result.ok === false) {
+        $stop.disabled = false
+        onStatus({ text: result?.error || '停止失败，请重试', busy: false })
+      }
+    })
     $send.addEventListener('click', () => {
       const line = $input.value.trim()
       if (!line) return
@@ -174,6 +184,7 @@
       chat.sendLine(line)
     })
     for (const button of root.querySelectorAll('.chat-quick button')) {
+      if (!button.dataset.cmd) continue
       button.addEventListener('click', () => {
         if (chat.busy || chat.flowFinished) return
         chat.sendLine(button.dataset.cmd)

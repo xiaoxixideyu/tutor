@@ -49,6 +49,7 @@
     setFlowFinished(value) {
       this.flowFinished = value
       this.setBusy(this.busy)
+      if (this.input) this.input.placeholder = value ? '本轮已结束，请使用上方操作' : this.readyPlaceholder
     }
 
     setBusy(on, label) {
@@ -182,7 +183,10 @@
             chip.classList.toggle('selected')
           } else {
             chipsAnswered = true
-            for (const button of container.querySelectorAll('.chip')) button.classList.add('disabled')
+            for (const button of container.querySelectorAll('.chip')) {
+              button.classList.add('disabled')
+              button.disabled = true
+            }
             chip.classList.add('selected')
             this.submitChips([option.letter])
           }
@@ -194,7 +198,10 @@
         submit.addEventListener('click', () => {
           if (chipsAnswered || this.busy || this.flowFinished || chipSelection.length === 0) return
           chipsAnswered = true
-          for (const button of container.querySelectorAll('.chip')) button.classList.add('disabled')
+          for (const button of container.querySelectorAll('.chip')) {
+            button.classList.add('disabled')
+            button.disabled = true
+          }
           this.submitChips(chipSelection)
         })
         container.appendChild(submit)

@@ -337,7 +337,7 @@ export async function runLearn(deps: FlowDeps, config: { courseId: string }): Pr
       store.write(config.courseId, 'plan', updatedPlan)
       store.remove(config.courseId, 'lesson')
       const entry = updatedMastery[node]
-      io.out(`\n小测得分：${score}（${correct}/${draft.quiz.length}）\n`)
+      io.out(`\n小测得分：${Math.round(score * 100)}%（${correct}/${draft.quiz.length}）\n`)
       if (predicted !== undefined) {
         const actual = Math.round(score * 100)
         const bias = predicted - actual

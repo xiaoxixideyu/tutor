@@ -55,7 +55,7 @@ export async function runInterview(deps: FlowDeps, config: { courseId: string; m
     // 重新提示即可，别把访谈判死。只有输入真正 EOF（answer===null，如 CLI 下 Ctrl-D）才收尾退出。
     let answer = await io.readLine()
     while (answer !== null && !answer.trim()) {
-      io.out('（还没收到回答，输入内容后回车；要中断请按 Ctrl-C）\n> ')
+      io.out('（还没收到回答，输入内容后回车）\n> ')
       answer = await io.readLine()
     }
     if (answer === null) {
