@@ -10,7 +10,9 @@ test('minimax 系列用 reasoning_effort 表达推理强度：三档单调不降
   assert.deepEqual(thinkingRequestParams('MiniMax-M2.1', 'default'), { reasoning_effort: 'low' })
 })
 
-test('deepseek 系列继续用 thinking 显式开关', () => {
+test('deepseek 网关路由开启推理时下发最高强度 effort，官方路由保持 thinking', () => {
+  assert.deepEqual(thinkingRequestParams('deepseek-v4.1-flash', 'on'), { thinking: { type: 'enabled' }, reasoning_effort: 'high' })
+  assert.deepEqual(thinkingRequestParams('deepseek-v4-pro', 'on'), { thinking: { type: 'enabled' }, reasoning_effort: 'high' })
   assert.deepEqual(thinkingRequestParams('deepseek-chat', 'on'), { thinking: { type: 'enabled' } })
   assert.deepEqual(thinkingRequestParams('deepseek-reasoner', 'off'), { thinking: { type: 'disabled' } })
   assert.deepEqual(thinkingRequestParams('deepseek-chat', 'default'), {})
