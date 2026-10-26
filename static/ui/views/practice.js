@@ -83,6 +83,13 @@
     }
 
     function renderStreamLine(line) {
+      // 生成/审查是内部流程：终端只保留中文进度，不显示 practice 这类内部 kind 和记录路径。
+      if (/^内容审查\s+practice：/.test(line)) {
+        const count = line.match(/拦截 (\d+) 处问题/)?.[1]
+        appendLine(count ? `实践任务审查未通过 ${count} 处，正在自动修复…` : '实践任务审查中…', 'hd')
+        return
+      }
+      if (/^(审查已有内容|当前内容已有有效审查记录|复用同一内容的)/.test(line)) return
       let cls = ''
       if (/^\s*✓/.test(line)) cls = 'ok'
       else if (/^\s*✗/.test(line)) cls = 'no'
@@ -156,9 +163,11 @@
       const row = TutorDom.el('<div class="chips"></div>')
       const again = TutorDom.el('<button class="chip">重新进入实践</button>')
       again.addEventListener('click', async () => { $log.innerHTML = ''; term = null; pending = ''; await startPractice() })
+      const learn = TutorDom.el('<button class="chip">去课堂 →</button>')
+      learn.addEventListener('click', () => navigate(`#/course/${encodeURIComponent(courseId)}/learn`))
       const back = TutorDom.el('<button class="chip">← 课程列表</button>')
       back.addEventListener('click', () => navigate('/'))
-      row.appendChild(again); row.appendChild(back); $log.appendChild(row); TutorDom.scrollToEnd($log)
+      row.appendChild(again); row.appendChild(learn); row.appendChild(back); $log.appendChild(row); TutorDom.scrollToEnd($log)
     }
 
     function renderRetry() {
@@ -205,7 +214,7 @@
         if (!gateBlocked) renderRetry()
         return
       }
-      onStatus({ text: code === 0 ? '已退出' : '实践结束', busy: false })
+      onStatus({ text: code === 0 ? '实践完成' : '实践结束', busy: false })
       appendLine('—— 实践已退出 ——', '')
       if (!gateBlocked) renderDone()
     }

@@ -217,6 +217,13 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('../src/flows/exam.ts'), /大考成绩：\$\{Math\.round\(score \* 100\)\}%/, '成绩应按百分比输出')
   })
 
+  it('实践完成提供去课堂入口，且不向网页暴露 CLI 命令', () => {
+    const practice = read('ui/views/practice.js')
+    assert.match(practice, /去课堂/, '实践完成应有去课堂入口')
+    assert.match(practice, /实践完成/, '实践成功状态应为实践完成')
+    assert.doesNotMatch(read('../src/flows/practice.ts'), /npm run agent -- learn/, '网页可见输出不应包含 CLI 命令')
+  })
+
   it('教研进度面板在单壳有样式，从详情启动教研时也会连接', () => {
     assert.match(read('app.html'), /research-progress\.css/, '单壳应加载教研进度样式')
     assert.match(read('ui/views/wizard.js'), /kind === 'research'\) researchLive\.connect/, '从详情启动教研时应连接进度面板')

@@ -146,7 +146,7 @@ export async function runPractice(deps: FlowDeps, config: { courseId: string; no
     io.out(
       `\n实践完成！掌握度更新：${node} → ${entry.status}${entry.score !== undefined ? `（${entry.score}）` : ''}${entry.review_due !== undefined ? `，复习到期 ${entry.review_due}` : ''}\n`
     )
-    io.out('可以回到课堂让导师点评你的实现：npm run agent -- learn ' + courseId + '\n')
+    io.out('可以回到课堂，让导师点评你的实现。\n')
     throw new FlowExit(0)
   }
 }
