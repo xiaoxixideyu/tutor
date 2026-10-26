@@ -31,13 +31,17 @@
     <details>
       <summary>高级设置</summary>
       <div class="field">
-        <label for="thinking">推理模式</label>
+        <label for="thinking">推理档位</label>
         <select id="thinking">
-          <option value="default">跟随服务默认（推荐）</option>
-          <option value="on">开启推理</option>
+          <option value="default">跟随服务默认</option>
           <option value="off">关闭推理</option>
+          <option value="minimal">最低</option>
+          <option value="low">低</option>
+          <option value="medium">中</option>
+          <option value="high">高</option>
+          <option value="max">最高</option>
         </select>
-        <p class="hint">开启推理：DeepSeek 网关的 v 系列/flash 路由使用最高档 max（同时下发 thinking 与 reasoning_effort=max），官方 chat/reasoner 仍按 thinking 开关，minimax 系列为中强度。关闭推理可能影响教学与审查质量；其他模型请使用服务默认。</p>
+        <p class="hint">按模型族映射：DeepSeek 为 low/high/max，MiniMax 为 minimal/low/medium（默认对齐 low）；其他模型按 OpenAI 兼容的 reasoning_effort 传所选档位。不支持推理参数的模型请选择“跟随服务默认”，保存前可用下方“测试模型”确认。</p>
       </div>
       <div class="field">
         <label for="contextWindow">上下文长度（token）</label>
@@ -63,7 +67,8 @@
       <form class="settings-form">
         <fieldset class="settings-fields" disabled>
           ${FIELDS}
-          <div class="actions"><button type="submit" class="settings-save">保存设置</button><span class="saved settings-saved"></span></div>
+          <div class="actions"><button type="button" class="settings-test">测试模型</button><button type="submit" class="settings-save">保存设置</button><span class="saved settings-saved"></span></div>
+          <p class="hint">测试模型不会保存设置，但会按当前表单向渠道发送一次最小真实请求。</p>
         </fieldset>
         <div class="settings-message" role="status" aria-live="polite"></div>
       </form>`
@@ -151,16 +156,20 @@
       }
     }
 
-    $('baseUrl').addEventListener('input', updateKeyHint)
-    $('searchMcpUrl').addEventListener('input', updateSearchHint)
-    root.querySelector('.settings-form').addEventListener('submit', async (event) => {
-      event.preventDefault()
-      const config = {
+    function formConfig() {
+      return {
         baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
         thinking: $('thinking').value, contextWindow: Number($('contextWindow').value), requestsPerMinute: Number($('requestsPerMinute').value),
         researchDeadlineMs: Number($('researchMinutes').value) * 60000,
         searchMcpUrl: $('searchMcpUrl').value.trim(), searchToken: $('searchToken').value.trim(),
       }
+    }
+
+    $('baseUrl').addEventListener('input', updateKeyHint)
+    $('searchMcpUrl').addEventListener('input', updateSearchHint)
+    root.querySelector('.settings-form').addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const config = formConfig()
       fields.disabled = true
       root.querySelector('.settings-save').textContent = '保存中…'
       try {
@@ -177,6 +186,34 @@
       } finally {
         fields.disabled = false
         root.querySelector('.settings-save').textContent = '保存设置'
+      }
+    })
+
+    root.querySelector('.settings-test').addEventListener('click', async () => {
+      const button = root.querySelector('.settings-test')
+      const save = root.querySelector('.settings-save')
+      if (button.disabled) return
+      button.disabled = true
+      save.disabled = true
+      button.textContent = '测试中…'
+      show('正在向当前表单中的渠道发送一次最小请求…')
+      try {
+        const response = await fetch('/api/model-test', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(formConfig()),
+          signal: AbortSignal.timeout(120000),
+        })
+        if (response.status === 404) throw new Error('后台版本尚不支持模型测试，请重启 tutor 服务后刷新页面')
+        let result
+        try { result = await response.json() } catch { throw new Error('无法读取测试响应，请重启 tutor 服务后刷新页面') }
+        if (!response.ok || result.ok !== true) throw new Error(result.error || '模型测试失败')
+        const reply = result.text ? `，回复：${String(result.text).slice(0, 120)}` : result.finish === 'length' ? '，返回被输出上限截断' : ''
+        show(`连接成功：${result.model} · ${result.level} · ${result.elapsedMs}ms${reply}`)
+      } catch (error) {
+        show(`测试失败：${error.name === 'TimeoutError' ? '等待超过 120 秒' : error.message}`, true)
+      } finally {
+        button.disabled = false
+        save.disabled = false
+        button.textContent = '测试模型'
       }
     })
 

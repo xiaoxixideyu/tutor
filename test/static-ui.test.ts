@@ -103,6 +103,16 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('ui/chat.js'), /event\.shiftKey/, 'Enter 发送、Shift+Enter 换行')
   })
 
+  it('模型设置提供多档推理与真实连通测试', () => {
+    const settings = read('ui/settings.js')
+    for (const level of ['default', 'off', 'minimal', 'low', 'medium', 'high', 'max']) {
+      assert.match(settings, new RegExp(`<option value="${level}"`), `应提供推理档位 ${level}`)
+    }
+    assert.match(settings, /settings-test/, '应有测试模型按钮')
+    assert.match(settings, /\/api\/model-test/, '测试按钮应调用模型测试接口')
+    assert.match(settings, /不会保存|不会.*保存|不保存配置/, '测试不应保存配置')
+  })
+
   it('课堂与大考的输入选择器必须匹配多行输入框', () => {
     for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
       const source = read(file)

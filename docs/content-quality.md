@@ -103,6 +103,6 @@ npm run eval:content:all -- --live --fixtures evals/content-turn-regressions.jso
 
 单个评测进程上限 10 分钟、72 次请求，单次最多 8192 输出 token。`eval:content:all` 为每例启动独立进程，并保存整套汇总，避免整套共用十分钟导致后半段未运行。报告与会话保存在 `data/evals/content-*/`，汇总在 `data/evals/content-suite-*/`；`--repeats` 支持 1–3，验收建议至少 2 轮。超时仍计为未完成，不能从分母删除。
 
-`TUTOR_LLM_THINKING=on|off` 可为 DeepSeek 接口显式设置推理模式；未设置时保留供应商默认行为。关闭推理的对照已出现误拦截，不能作为已验证的试学提速设置。网关公布模型名称不等于路由可用，临时模型对比及费用必须另行记录，不修改个人 `.env`。
+`TUTOR_LLM_THINKING` 支持 `default|off|minimal|low|medium|high|max`（旧值 `on` 兼容为 `max`）；DeepSeek、MiniMax 与通用 `reasoning_effort` 的映射见模型设置。关闭推理的对照已出现误拦截，不能作为已验证的试学提速设置。网关公布模型名称不等于路由可用，临时模型对比及费用必须另行记录，不修改个人 `.env`。
 
 这套准入仍依赖模型推理，同一模型的不同会话可能共享偏差，不能证明普遍正确或真人学习有效。它增加了延迟和调用成本；超时与不完整结果会影响可用性。范围歧义、误拦截、超时比例和漏判必须继续用冻结样本及真实课程量化，不能只报告已批准样本。

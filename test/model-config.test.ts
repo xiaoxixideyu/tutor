@@ -62,11 +62,26 @@ it('不合法的渠道、字段或推理设置不覆盖已保存配置', (t) => 
     { baseUrl: 'file:///private/config' }, { baseUrl: 'https://user:password@first.invalid/v1' },
     { baseUrl: 'https://first.invalid/v1?api_key=hidden' }, { baseUrl: 'https://first.invalid/v1/chat/completions' },
     { model: 'model\nother: value' }, { model: 'bad\0model' }, { apiKey: 123 }, { apiKey: 'bad\nkey' }, { apiKey: 'bad\0key' },
-    { thinking: 'unknown' }, { thinking: ['on'] }, { thinking: 'off', model: 'other-model' }, { contextWindow: 0 }, { contextWindow: 1.5 },
+    { thinking: 'unknown' }, { thinking: ['max'] }, { thinking: 'ultra' }, { contextWindow: 0 }, { contextWindow: 1.5 },
     { researchDeadlineMs: 0 }, { researchDeadlineMs: 1_800_001 }, { researchDeadlineMs: '600000' },
     { requestsPerMinute: 0 }, { requestsPerMinute: 601 }, { requestsPerMinute: 1.5 }, { requestsPerMinute: '8' },
   ]) assert.throws(() => store.save({ ...valid, ...invalid }))
   assert.equal(fs.readFileSync(store.file, 'utf8'), previous)
+})
+
+it('推理档位支持多档与通用模型，旧 on 兼容为 max；draft 不落盘', (t) => {
+  const { store } = fixture(t)
+  const base = { baseUrl: 'https://first.invalid/v1', apiKey: 'replacement-secret' }
+  const high = store.save({ ...base, model: 'other-model', thinking: 'high' })
+  assert.equal(high.thinking, 'high')
+  const legacy = store.save({ ...base, model: 'other-model', thinking: 'on' })
+  assert.equal(legacy.thinking, 'max')
+  assert.equal(store.environment().TUTOR_LLM_THINKING, 'max')
+  const before = fs.readFileSync(store.file, 'utf8')
+  const draft = store.draft({ baseUrl: 'https://first.invalid/v1', model: 'other-model-2', apiKey: '', thinking: 'low' })
+  assert.equal(draft.model, 'other-model-2')
+  assert.equal(draft.thinking, 'low')
+  assert.equal(fs.readFileSync(store.file, 'utf8'), before, 'draft 只校验表单，不应写入配置')
 })
 
 it('旧版已保存设置默认 8 次，独立 DSH_HOME 仍共用渠道队列', (t) => {

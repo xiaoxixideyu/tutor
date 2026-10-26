@@ -9,6 +9,7 @@ import type { KnowledgeMap } from '../core/schema.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
 import { FlowExit, createLineQueue, type FlowIO, type LineQueue } from '../flows/io.ts'
 import { modelSettingsFromEnv, runFlowInProcess } from '../flows/run.ts'
+import { openaiTransport } from '../runtime/llm.ts'
 import { searchSettingsFromEnv } from '../runtime/tools.ts'
 
 export const FLOW_PROTOCOL_VERSION = 1
@@ -240,6 +241,38 @@ export function createTutorServer(options: TutorServerOptions) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     try {
+      if (url.pathname === '/api/model-test') {
+        if (!requireLocal(req, res)) return
+        if (req.method !== 'POST') { json(res, 405, { ok: false, error: '不支持此操作' }); return }
+        if (!requireJson(req, res)) return
+        let input
+        try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型测试请求必须是有效的 JSON' }); return }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) {
+          json(res, 400, { ok: false, error: '模型设置必须是一个对象' }); return
+        }
+        let config
+        try {
+          // 模型测试只验证模型字段；搜索服务的地址/Token 变更不应阻塞这次连通性检查。
+          config = models.draft({ ...(input as Record<string, unknown>), searchMcpUrl: undefined, searchToken: undefined })
+        } catch (error) {
+          json(res, 400, { ok: false, error: error instanceof Error ? error.message : '模型设置不合法' }); return
+        }
+        const started = Date.now()
+        try {
+          // 直接复用生产传输层：测到的是实际会下发的 URL、鉴权、推理档位与响应解析。
+          const transport = openaiTransport({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, thinking: config.thinking })
+          const result = await transport({ messages: [{ role: 'user', content: '这是一次连通性测试。只回复 OK。' }], maxTokens: 512 },
+            AbortSignal.timeout(90_000), () => {})
+          const elapsedMs = Date.now() - started
+          if (result.finish === 'error') {
+            json(res, 200, { ok: false, error: result.error.message, code: result.error.code, status: result.error.status ?? null, elapsedMs }); return
+          }
+          json(res, 200, { ok: true, model: config.model, level: config.thinking, finish: result.finish,
+            text: result.text.trim().slice(0, 500), usage: result.usage ?? null, elapsedMs }); return
+        } catch (error) {
+          json(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error), elapsedMs: Date.now() - started }); return
+        }
+      }
       if (url.pathname === '/api/model-config') {
         if (!requireLocal(req, res)) return
         if (req.method === 'GET') {

@@ -11,12 +11,13 @@ import { SessionLog } from './session.ts'
 import { openaiTransport, type ApiMessage, type ApiToolCall, type ApiToolDef, type LlmFailure, type LlmRequest, type LlmResult, type LlmTransport } from './llm.ts'
 import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings } from './tools.ts'
 import type { ResearchStatusSink } from './status.ts'
+import type { ReasoningLevel } from '../core/reasoning.ts'
 
 export interface ModelSettings {
   baseUrl: string
   apiKey: string
   model: string
-  thinking: 'default' | 'on' | 'off'
+  thinking: ReasoningLevel
   contextWindow: number
   requestsPerMinute: number
   researchDeadlineMs: number

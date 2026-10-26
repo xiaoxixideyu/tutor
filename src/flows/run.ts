@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { CourseStore } from '../core/store.ts'
+import { normalizeReasoning } from '../core/reasoning.ts'
 import { localDate } from '../core/dates.ts'
 import { acquireCourseLock, type CourseLock } from '../core/course-lock.ts'
 import { ModelConfigStore } from '../core/model-config.ts'
@@ -58,7 +59,7 @@ export function modelSettingsFromEnv(env: NodeJS.ProcessEnv): ModelSettings {
     baseUrl: (env.TUTOR_LLM_BASE_URL ?? '').replace(/\/+$/, ''),
     apiKey: env.TUTOR_LLM_API_KEY ?? '',
     model: env.TUTOR_LLM_MODEL ?? '',
-    thinking: env.TUTOR_LLM_THINKING === 'on' ? 'on' : env.TUTOR_LLM_THINKING === 'off' ? 'off' : 'default',
+    thinking: normalizeReasoning(env.TUTOR_LLM_THINKING),
     contextWindow: Number(env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
     requestsPerMinute: Number(env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
     researchDeadlineMs: Number(env.TUTOR_RESEARCH_DEADLINE_MS || env.TUTOR_LLM_DEADLINE_MS || 480_000),

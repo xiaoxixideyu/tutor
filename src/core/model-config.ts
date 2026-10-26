@@ -1,14 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-
-export type ThinkingMode = 'default' | 'on' | 'off'
+import { normalizeReasoning, parseReasoning, type ReasoningLevel } from './reasoning.ts'
 
 interface ModelConfig {
   baseUrl: string
   model: string
   apiKey: string
-  thinking: ThinkingMode
+  thinking: ReasoningLevel
   contextWindow: number
   researchDeadlineMs: number
   requestsPerMinute: number
@@ -65,10 +64,9 @@ function validate(value: Record<string, unknown>): ModelConfig {
   if (typeof value.apiKey !== 'string' || !value.apiKey.trim() || value.apiKey.length > 8192 || /[\s\x00-\x1f\x7f]/.test(value.apiKey.trim())) {
     throw new ModelConfigError('请填写有效的 API Key')
   }
-  const thinking = value.thinking ?? 'default'
-  if (typeof thinking !== 'string' || !['default', 'on', 'off'].includes(thinking)) throw new ModelConfigError('推理设置必须为服务默认、开启或关闭')
-  if (thinking !== 'default' && !value.model.trim().startsWith('deepseek-')) {
-    throw new ModelConfigError('显式推理开关目前仅支持 deepseek-* 模型；其他模型请选择“服务默认”')
+  let thinking: ReasoningLevel
+  try { thinking = parseReasoning(value.thinking ?? 'default') } catch (error) {
+    throw new ModelConfigError(error instanceof Error ? error.message : '推理档位不合法')
   }
   const contextWindow = value.contextWindow ?? 262144
   if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow < 1024 || contextWindow > 2_000_000) {
@@ -85,7 +83,7 @@ function validate(value: Record<string, unknown>): ModelConfig {
   const searchMcpUrl = optionalSearchUrl(value.searchMcpUrl)
   const searchToken = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
   if (searchToken.length > 8192 || /[\s\x00-\x1f\x7f]/.test(searchToken)) throw new ModelConfigError('搜索服务 Token 不合法')
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking: thinking as ThinkingMode, contextWindow, researchDeadlineMs, requestsPerMinute,
+  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking, contextWindow, researchDeadlineMs, requestsPerMinute,
     searchMcpUrl, searchToken }
 }
 
@@ -102,7 +100,7 @@ export class ModelConfigStore {
     this.defaults = {
       baseUrl: (this.env.TUTOR_LLM_BASE_URL ?? '').replace(/\/+$/, ''),
       model: this.env.TUTOR_LLM_MODEL ?? '', apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
-      thinking: (this.env.TUTOR_LLM_THINKING || 'default') as ThinkingMode,
+      thinking: normalizeReasoning(this.env.TUTOR_LLM_THINKING),
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
       researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
       requestsPerMinute: Number(this.env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
@@ -138,7 +136,8 @@ export class ModelConfigStore {
       searchMcpUrl: config.searchMcpUrl, searchTokenSet: Boolean(config.searchToken), searchConfigured: Boolean(config.searchMcpUrl && config.searchToken) }
   }
 
-  save(input: unknown) {
+  // 将网页表单（含留空沿用密钥/搜索 Token 的规则）解析为可用的临时配置；不写文件，供保存与连接测试共用。
+  draft(input: unknown): ModelConfig {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ModelConfigError('模型设置必须是一个对象')
     const value = input as Record<string, unknown>
     if (value.apiKey !== undefined && typeof value.apiKey !== 'string') throw new ModelConfigError('API Key 必须是文本')
@@ -155,10 +154,14 @@ export class ModelConfigStore {
       throw new ModelConfigError('更换搜索服务地址时，请填写新服务的 Token；不会沿用旧服务的令牌')
     }
     const searchToken = searchTokenInput || (nextSearchUrl === previous.searchMcpUrl ? previous.searchToken : '')
-    const config = validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
+    return validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
       searchMcpUrl: nextSearchUrl, searchToken,
       researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs,
       requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute })
+  }
+
+  save(input: unknown) {
+    const config = this.draft(input)
     const saved: SavedModelConfig = { version: 1, ...config, updatedAt: new Date().toISOString() }
     const temporary = `${this.file}.${randomUUID()}.tmp`
     try {

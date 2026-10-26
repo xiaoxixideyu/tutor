@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'
-import { request as httpRequest } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { CourseStore } from '../src/core/store.ts'
 import { createTutorServer, type FlowStart } from '../src/server/http.ts'
 import type { FlowIO } from '../src/flows/io.ts'
@@ -213,6 +213,43 @@ it('未配置模型和搜索密钥也能通过正式启动器打开网页设置'
   const refused = await fetch(base + '/flow/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'new', courseId: 'empty-config' }) })
   assert.equal(refused.status, 400)
   assert.match((await refused.json() as any).error, /模型设置/)
+})
+
+it('模型测试接口用表单草稿校验且不保存，换址未填密钥直接拒绝', async (t) => {
+  const { base, post } = await fixture(t)
+  const invalid = await post('/api/model-test', { baseUrl: 'file:///private/config', model: 'm', apiKey: 'k' })
+  assert.equal(invalid.status, 400)
+  const changed = await post('/api/model-test', { baseUrl: 'https://second.invalid/v1', model: 'm', apiKey: '' })
+  assert.equal(changed.status, 400)
+  assert.match(changed.body.error, /新渠道的 API Key/)
+  const config = await (await fetch(base + '/api/model-config')).json() as any
+  assert.equal(config.config.baseUrl, 'https://first.invalid/v1', '测试不能覆盖已保存/环境配置')
+})
+
+it('模型测试接口用真实传输层发送所选档位并返回回复', async (t) => {
+  let received = ''
+  const mock = createServer((req, res) => {
+    req.on('data', (chunk) => { received += chunk })
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1 } }))
+    })
+  })
+  mock.listen(0, '127.0.0.1')
+  await once(mock, 'listening')
+  t.after(() => new Promise<void>((resolve) => { mock.close(() => resolve()) }))
+  const address = mock.address()
+  assert.ok(address && typeof address !== 'string')
+  const { post } = await fixture(t)
+  const result = await post('/api/model-test', {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'mock-model', apiKey: 'mock-key', thinking: 'max',
+  })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.ok, true)
+  assert.equal(result.body.level, 'max')
+  assert.equal(result.body.text, 'OK')
+  assert.equal(JSON.parse(received).model, 'mock-model')
+  assert.equal(JSON.parse(received).reasoning_effort, 'max', '模型测试应发送所选推理档位')
 })
 
 it('流程 ID 隔离输入、停止与回放；停止后最终输出仍可重连', async (t) => {

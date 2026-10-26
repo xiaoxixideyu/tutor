@@ -1,6 +1,7 @@
 // OpenAI 兼容 Chat Completions 客户端：流式 SSE、工具调用、用量映射与错误分类。
 // 与网关的传输细节集中在这里；上层（chat.ts）只关心结构化的 LlmResult 与 LlmFailure。
 import type { ReportedUsage } from '../core/cost.ts'
+import type { ReasoningLevel } from '../core/reasoning.ts'
 
 export interface ApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -45,7 +46,7 @@ export interface LlmTransportOptions {
   baseUrl: string
   apiKey: string
   model: string
-  thinking: 'default' | 'on' | 'off'
+  thinking: ReasoningLevel
   fetchImpl?: typeof fetch
 }
 
@@ -128,31 +129,26 @@ interface StreamChunk {
   error?: { message?: string; code?: string | number; type?: string }
 }
 
-// 推理控制按模型族生效：不同厂商用不同参数名表达"推理强度"。
-// - minimax-*：reasoning_effort（minimal < low < medium）。实测该渠道在"服务默认"下会把整份输出预算
-//   烧在推理上、正文为空（8192 输出里 8192 是 reasoning），长结构化任务必然失败；因此 default 映射到 low，
-//   保证默认设置就能拿到正文。
-// - deepseek-*：官方 V4.1 文档的 reasoning_effort 取值为 low/high/max，默认 high；当前网关的
-//   deepseek-v4.1-flash 会忽略单独的 thinking:{type}（reasoning_tokens=0），但接受 reasoning_effort。
-//   网关的 v 系列/flash 路由在开启推理时同时下发 thinking 与最高档 max，兼容只识别其中一种的实现；
-//   官方 chat/reasoner 仍只发 thinking。推理 token 数会因题目和采样波动，不能用来判断档位高低。
-// - 其他模型：不加参数，跟随服务默认。
-export function thinkingRequestParams(model: string, thinking: 'default' | 'on' | 'off'): Record<string, unknown> {
+// 推理控制按模型族生效：不同厂商用不同参数名和档位表达"推理强度"。
+// - minimax-*：reasoning_effort（minimal < low < medium）；更高档回落到 medium。
+// - deepseek-*：reasoning_effort（minimal/low→low，medium/high→high，max→max）；官方 V4.1 文档为 low/high/max，
+//   当前网关还接受 thinking 开关。网关 v 系列/flash 路由只发 thinking 时不下推理，因此同时下发两种参数。
+// - 其他模型：把所选档位按 OpenAI 兼容的 reasoning_effort 下发；不支持该参数的模型需用设置里的“测试模型”确认。
+// - default：不注入参数，跟随渠道默认；off：优先关闭 thinking/给出最低档。
+export function thinkingRequestParams(model: string, level: ReasoningLevel): Record<string, unknown> {
   if (/^minimax/i.test(model)) {
-    const effort = thinking === 'off' ? 'minimal' : thinking === 'on' ? 'medium' : 'low'
+    // 该渠道的"服务默认"会把输出预算烧在推理上；default 仍对齐到 low，保留原有保护。
+    const effort = level === 'default' || level === 'low' ? 'low' : level === 'off' || level === 'minimal' ? 'minimal' : 'medium'
     return { reasoning_effort: effort }
   }
+  if (level === 'default') return {}
   if (/^deepseek/i.test(model)) {
-    if (thinking === 'off') return { thinking: { type: 'disabled' } }
-    if (thinking === 'on') {
-      const gatewayRoute = /^deepseek-v|flash/i.test(model)
-      return gatewayRoute ? { thinking: { type: 'enabled' }, reasoning_effort: 'max' } : { thinking: { type: 'enabled' } }
-    }
-    return {}
+    if (level === 'off') return { thinking: { type: 'disabled' } }
+    const effort = level === 'max' ? 'max' : level === 'minimal' || level === 'low' ? 'low' : 'high'
+    return { thinking: { type: 'enabled' }, reasoning_effort: effort }
   }
-  if (thinking === 'on') return { thinking: { type: 'enabled' } }
-  if (thinking === 'off') return { thinking: { type: 'disabled' } }
-  return {}
+  if (level === 'off') return { thinking: { type: 'disabled' } }
+  return { reasoning_effort: level }
 }
 
 function buildRequestBody(options: LlmTransportOptions, request: LlmRequest): Record<string, unknown> {
