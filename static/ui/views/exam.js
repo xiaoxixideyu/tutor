@@ -22,7 +22,7 @@
         <div class="chat-statusrow"><span class="busy chat-busy" style="display:none"><span class="dot"></span><span class="chat-busy-text">等待模型回复…</span></span></div>
         <div class="chat-log"></div>
         <div class="chat-foot">
-          <div class="chat-quick"><button class="chat-stop" hidden>暂停大考</button></div>
+          <div class="chat-quick"><button class="chat-stop" hidden>暂停大考</button><button class="exam-submit" hidden title="先输入你的答案，再点这里提交">提交答案</button></div>
           <div class="chat-opstatus"></div>
           <div class="chat-inputrow">
             <textarea rows="1" placeholder="输入你的答案…（Enter 发送）" autocomplete="off"></textarea>
@@ -36,7 +36,15 @@
     const $send = root.querySelector('.chat-inputrow button')
     const $banner = root.querySelector('.chat-banner')
     const $stop = root.querySelector('.chat-stop')
+    const $submitAnswer = root.querySelector('.exam-submit')
     let examOutcome = null
+    // 主观题需要多行作答并以单独一行“.”结束；先发过至少一条答案再显示提交按钮，避免空提交。
+    let awaitingSubjective = false
+    let subjectiveDraft = false
+    const updateSubmitAnswer = () => {
+      if (!$submitAnswer) return
+      $submitAnswer.hidden = !(awaitingSubjective && subjectiveDraft && !chat.flowFinished)
+    }
 
     const chat = new TutorChat({
       log: $log,
@@ -50,9 +58,20 @@
       flowFinished: false,
       onSend: (line) => api('/flow/input', { line }),
       onLine: (line) => {
-        if (/^大考成绩：.*（通过）/.test(line)) examOutcome = 'passed'
-        else if (/^大考成绩：.*（未过/.test(line)) examOutcome = 'failed'
+        if (/^大考成绩：.*通过/.test(line)) examOutcome = 'passed'
+        else if (/^大考成绩：.*未过/.test(line)) examOutcome = 'failed'
         else if (line.startsWith('考试暂停')) examOutcome = 'paused'
+        if (/输入单独一行 \. 提交/.test(line)) {
+          awaitingSubjective = true
+          // 服务器在读到第一条答案后才打印该提示；恢复断点时也已有草稿，因此可直接提交。
+          subjectiveDraft = true
+          updateSubmitAnswer()
+        }
+        if (/^大考成绩|^考试暂停|^主观题判分|^已记录，稍后统一判分/.test(line)) {
+          awaitingSubjective = false
+          subjectiveDraft = false
+          updateSubmitAnswer()
+        }
       },
     })
 
@@ -85,10 +104,13 @@
           chat.reset()
           examOutcome = null
           gateBlocked = false
+          awaitingSubjective = false
+          subjectiveDraft = false
           chat.setFlowFinished(msg.status !== 'running' && msg.status !== 'stopping')
           chat.setBusy(msg.status === 'running', msg.replay !== undefined ? '正在恢复考试' : '正在准备试卷')
           onStatus({ text: msg.courseId ? `大考进行中：${msg.courseId}` : '空闲', busy: msg.status === 'running' })
           setStopVisible(msg.status === 'running')
+          updateSubmitAnswer()
           return
         }
         if (msg.type === 'out') chat.feed(msg.text)
@@ -113,6 +135,9 @@
           chat.clearOp()
           chat.setBusy(false)
           setStopVisible(false)
+          awaitingSubjective = false
+          subjectiveDraft = false
+          updateSubmitAnswer()
           const text = examOutcome === 'passed' ? '大考通过' : examOutcome === 'failed' ? '大考未通过' : '大考暂停，尚未产生成绩'
           onStatus({ text, busy: false })
           $log.appendChild(TutorDom.el('<div class="sysline">—— 大考已结束 ——</div>'))
@@ -150,10 +175,23 @@
         onStatus({ text: result?.error || '停止失败，请重试', busy: false })
       }
     })
+    $submitAnswer?.addEventListener('click', () => {
+      if (!$submitAnswer || $submitAnswer.hidden || chat.busy || chat.flowFinished) return
+      $submitAnswer.hidden = true
+      chat.sendLine('.')
+    })
+    // 主观题答案发出后，才显示一个明确的“提交答案”（发送单独一行“.”）。
+    $input.addEventListener('keydown', (event) => {
+      if (awaitingSubjective && event.key === 'Enter' && !event.shiftKey && !event.isComposing && $input.value.trim()) {
+        subjectiveDraft = true
+        updateSubmitAnswer()
+      }
+    }, true)
     $send.addEventListener('click', () => {
       const line = $input.value.trim()
       if (!line) return
       $input.value = ''
+      if (awaitingSubjective) { subjectiveDraft = true; updateSubmitAnswer() }
       chat.sendLine(line)
     })
 

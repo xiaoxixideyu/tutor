@@ -162,7 +162,7 @@ it('正式考试暂停和阅卷失败后恢复同一试卷，跳过已答题并�
   assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
   assert.match(resumed.stdout, /恢复考试：已保存 4\/4 题作答/)
   assert.doesNotMatch(resumed.stdout, /正在生成试卷|【第 \d\/4 题/)
-  assert.match(resumed.stdout, /大考成绩：1（通过）/)
+  assert.match(resumed.stdout, /大考成绩：100%（5\/5 分，通过）/)
   assert.equal(attempts.read()!.id, attempt.id)
   assert.equal(attempts.read()!.status, 'completed')
   assert.equal((store.read('alpha', 'plan') as Plan).milestones[0].exam_passed, true)

@@ -249,7 +249,8 @@ export async function runExam(deps: FlowDeps, config: { courseId: string; milest
     }
     for (const [nodeId, items] of wrongByNode) notes.recordErrors(nodeId, items, date, 'exam')
   } catch { /* 辅助数据写入失败忽略 */ }
-  io.out(`\n大考成绩：${score}（${passed ? '通过' : `未过，需 ≥ ${EXAM_PASS_SCORE}`}）\n`)
+  const earned = gradings.reduce((sum, grading) => sum + grading.score * (paper.questions.find((q) => q.id === grading.questionId)?.points ?? 0), 0)
+  io.out(`\n大考成绩：${Math.round(score * 100)}%（${Math.round(earned * 100) / 100}/${totalPoints} 分，${passed ? '通过' : `未过，需 ≥ ${Math.round(EXAM_PASS_SCORE * 100)}%`}）\n`)
   for (const grading of gradings) {
     const note = grading.note ? `（${grading.note}）` : ''
     const points = paper.questions.find((q) => q.id === grading.questionId)!.points

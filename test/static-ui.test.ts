@@ -209,6 +209,14 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(read('ui/views/practice.js'), /TutorDom\.flowFailure/, '实践生成失败应使用折叠诊断卡片')
   })
 
+  it('大考主观题有多行作答的提交入口，成绩用百分比展示', () => {
+    const exam = read('ui/views/exam.js')
+    assert.match(exam, /class="exam-submit"/, '大考应有提交答案按钮')
+    assert.match(exam, /输入单独一行 \\. 提交/, '应识别主观题的多行提交提示')
+    assert.match(exam, /subjectiveDraft/, '应先输入答案再显示提交按钮')
+    assert.match(read('../src/flows/exam.ts'), /大考成绩：\$\{Math\.round\(score \* 100\)\}%/, '成绩应按百分比输出')
+  })
+
   it('教研进度面板在单壳有样式，从详情启动教研时也会连接', () => {
     assert.match(read('app.html'), /research-progress\.css/, '单壳应加载教研进度样式')
     assert.match(read('ui/views/wizard.js'), /kind === 'research'\) researchLive\.connect/, '从详情启动教研时应连接进度面板')
