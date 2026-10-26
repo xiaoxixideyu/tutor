@@ -37,7 +37,7 @@
           <option value="on">开启推理</option>
           <option value="off">关闭推理</option>
         </select>
-        <p class="hint">开启推理：DeepSeek 网关的 v 系列/flash 路由使用最高强度（同时下发 thinking 与 reasoning_effort=high），官方 chat/reasoner 仍按 thinking 开关，minimax 系列为中强度。关闭推理可能影响教学与审查质量；其他模型请使用服务默认。</p>
+        <p class="hint">开启推理：DeepSeek 网关的 v 系列/flash 路由使用最高档 max（同时下发 thinking 与 reasoning_effort=max），官方 chat/reasoner 仍按 thinking 开关，minimax 系列为中强度。关闭推理可能影响教学与审查质量；其他模型请使用服务默认。</p>
       </div>
       <div class="field">
         <label for="contextWindow">上下文长度（token）</label>

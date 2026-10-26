@@ -132,10 +132,10 @@ interface StreamChunk {
 // - minimax-*：reasoning_effort（minimal < low < medium）。实测该渠道在"服务默认"下会把整份输出预算
 //   烧在推理上、正文为空（8192 输出里 8192 是 reasoning），长结构化任务必然失败；因此 default 映射到 low，
 //   保证默认设置就能拿到正文。
-// - deepseek-*：官方接口用 thinking:{type}；当前网关的 deepseek-v4.1-flash 会忽略该字段（reasoning_tokens=0），
-//   但接受 reasoning_effort。实测同一简单算术题：仅 thinking 无推理且答错；加 reasoning_effort:high 才有推理并答对。
-//   网关的 v 系列/flash 路由在开启推理时同时下发 thinking 与最高强度 effort，兼容只识别其中一种的实现；
-//   官方 chat/reasoner 仍只发 thinking。
+// - deepseek-*：官方 V4.1 文档的 reasoning_effort 取值为 low/high/max，默认 high；当前网关的
+//   deepseek-v4.1-flash 会忽略单独的 thinking:{type}（reasoning_tokens=0），但接受 reasoning_effort。
+//   网关的 v 系列/flash 路由在开启推理时同时下发 thinking 与最高档 max，兼容只识别其中一种的实现；
+//   官方 chat/reasoner 仍只发 thinking。推理 token 数会因题目和采样波动，不能用来判断档位高低。
 // - 其他模型：不加参数，跟随服务默认。
 export function thinkingRequestParams(model: string, thinking: 'default' | 'on' | 'off'): Record<string, unknown> {
   if (/^minimax/i.test(model)) {
@@ -146,7 +146,7 @@ export function thinkingRequestParams(model: string, thinking: 'default' | 'on' 
     if (thinking === 'off') return { thinking: { type: 'disabled' } }
     if (thinking === 'on') {
       const gatewayRoute = /^deepseek-v|flash/i.test(model)
-      return gatewayRoute ? { thinking: { type: 'enabled' }, reasoning_effort: 'high' } : { thinking: { type: 'enabled' } }
+      return gatewayRoute ? { thinking: { type: 'enabled' }, reasoning_effort: 'max' } : { thinking: { type: 'enabled' } }
     }
     return {}
   }
