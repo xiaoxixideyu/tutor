@@ -19,14 +19,23 @@
       <p id="keyHint" class="hint">密钥保存在本机，保存后不会回显到页面。</p>
     </div>
     <div class="field">
+      <label for="searchProvider">搜索服务</label>
+      <select id="searchProvider">
+        <option value="exa">Exa</option>
+        <option value="tavily">Tavily Hikari</option>
+        <option value="custom">自定义 MCP</option>
+      </select>
+      <p class="hint">选择后自动填入该服务的 MCP 地址；地址仍可手动修改。保存后在下一回合生效。</p>
+    </div>
+    <div class="field">
       <label for="searchMcpUrl">教研搜索 MCP 地址（可选）</label>
-      <input id="searchMcpUrl" type="url" placeholder="https://tavily.ivanli.cc/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
-      <p class="hint">联网教研的搜索服务（MCP over HTTP）。Tavily Hikari 填 <code>https://&lt;host&gt;/mcp</code>；留空沿用 .env 的 TUTOR_MCP_SEARCH_URL。</p>
+      <input id="searchMcpUrl" type="url" placeholder="https://mcp.exa.ai/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
+      <p class="hint">联网教研的搜索服务（MCP over HTTP）。Exa 填 https://mcp.exa.ai/mcp；Tavily Hikari 填 https://&lt;host&gt;/mcp；留空沿用 .env 的 TUTOR_MCP_SEARCH_URL。</p>
     </div>
     <div class="field">
       <label for="searchToken">搜索服务 Token <span id="searchKeyState" class="key-state" hidden>已配置</span></label>
       <input id="searchToken" type="password" placeholder="填写该搜索服务的 Token" autocomplete="new-password" spellcheck="false" maxlength="8192">
-      <p id="searchKeyHint" class="hint">Tavily Hikari 使用 th- 开头的访问令牌；密钥保存在本机，保存后不会回显。</p>
+      <p id="searchKeyHint" class="hint">Exa 填 API Key（按 x-api-key 发送），Tavily Hikari 填 th- 开头令牌；密钥保存在本机，保存后不会回显。</p>
     </div>
     <details>
       <summary>高级设置</summary>
@@ -59,6 +68,25 @@
         <p class="hint">约束实际模型请求、搜索和抓取；额度排队与恢复等待另计，单回合最多等待 30 分钟。独立内容审查另计时，达到上限保留已保存进度。</p>
       </div>
     </details>`
+
+  // 搜索服务的地址与令牌提示：选择器只负责填地址，保存的仍是 URL + Token。
+  const SEARCH_PROVIDERS = {
+    exa: { url: 'https://mcp.exa.ai/mcp', token: '填写 Exa API Key（按 x-api-key 发送）',
+      hint: 'Exa 使用 https://mcp.exa.ai/mcp 与 API Key；默认提供 web_search_exa / web_fetch_exa 两个工具。' },
+    tavily: { url: '', token: '填写 Tavily Hikari 的 th- 开头令牌',
+      hint: 'Tavily Hikari 填 https://<host>/mcp 与 th- 开头的令牌。' },
+    custom: { url: '', token: '填写该搜索服务的 Token',
+      hint: '任意兼容 MCP over HTTP 的搜索服务；工具名需包含 search / fetch / extract 片段才会被教研预算放行。' },
+  }
+
+  function providerOf(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase()
+      if (/(^|\.)exa\.ai$/.test(host)) return 'exa'
+      if (/tavily/.test(host)) return 'tavily'
+    } catch { /* 未配置或输入中 */ }
+    return 'custom'
+  }
 
   // 挂载设置表单到任意容器；返回 { reload, destroy }。
   S.mount = function (root, options = {}) {
@@ -101,6 +129,7 @@
 
     function updateSearchHint() {
       if (!current) return
+      const provider = SEARCH_PROVIDERS[$('searchProvider').value] ?? SEARCH_PROVIDERS.custom
       let nextUrl = $('searchMcpUrl').value.trim().replace(/\/+$/, '')
       try { nextUrl = new URL(nextUrl).toString().replace(/\/+$/, '') } catch { /* 输入中，保存时校验 */ }
       let previousUrl = current.searchMcpUrl
@@ -108,11 +137,11 @@
       const changed = nextUrl !== previousUrl
       $('searchKeyState').hidden = changed || !current.searchTokenSet
       $('searchToken').placeholder = changed ? '填写新搜索服务的 Token'
-        : current.searchTokenSet ? '留空继续使用已配置的 Token' : '填写该搜索服务的 Token（如 th-…）'
+        : current.searchTokenSet ? '留空继续使用已配置的 Token' : provider.token
       $('searchKeyHint').textContent = changed
         ? '搜索服务地址已修改，请填写新服务的 Token；留空表示不修改搜索配置。'
         : current.searchTokenSet ? '已配置搜索 Token；留空继续使用，输入新值可更换。保存后在下一回合生效。'
-          : 'Tavily Hikari 使用 th- 开头的访问令牌；密钥保存在本机，保存后不会回显。'
+          : `${provider.hint}密钥保存在本机，保存后不会回显。`
     }
 
     function populate(config) {
@@ -127,6 +156,7 @@
       $('apiKey').placeholder = config.apiKeySet ? '留空继续使用已配置的密钥' : '填写该渠道的 API Key'
       $('keyState').hidden = !config.apiKeySet
       $('searchMcpUrl').value = config.searchMcpUrl ?? ''
+      $('searchProvider').value = providerOf(config.searchMcpUrl ?? '')
       $('searchToken').value = ''
       $('searchToken').placeholder = config.searchTokenSet ? '留空继续使用已配置的 Token' : '填写该搜索服务的 Token（如 th-…）'
       $('searchKeyState').hidden = !config.searchTokenSet
@@ -167,6 +197,12 @@
 
     $('baseUrl').addEventListener('input', updateKeyHint)
     $('searchMcpUrl').addEventListener('input', updateSearchHint)
+    $('searchProvider').addEventListener('change', () => {
+      const provider = SEARCH_PROVIDERS[$('searchProvider').value]
+      // 只自动填地址；Token 必须由用户填写，换服务时服务端也会要求重填。
+      if (provider?.url) $('searchMcpUrl').value = provider.url
+      updateSearchHint()
+    })
     root.querySelector('.settings-form').addEventListener('submit', async (event) => {
       event.preventDefault()
       const config = formConfig()

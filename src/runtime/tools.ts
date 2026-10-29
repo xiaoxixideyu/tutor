@@ -47,7 +47,145 @@ export function htmlToText(html: string): string {
     .trim()
 }
 
-export interface ToolResult { text: string; isError: boolean }
+// failure 区分"模型把参数写错"与"服务本身不可用"：前者可自纠，不应耗尽本知识点的预算。
+// auth 是 401/403 这类密钥问题，重试没有意义，需要直接停用并提示检查 Token。
+export interface ToolResult { text: string; isError: boolean; failure?: 'argument' | 'service' | 'auth' }
+
+// 搜索服务的参数校验错误（如 Tavily 的 "Invalid value for include_answer"）属可纠正失败。
+const ARGUMENT_ERROR_PATTERN = /(Invalid value for|Field required|Input should be|validation error|not a valid|is not of type|missing required|Unprocessable)/i
+// 密钥无效或权限不足：Exa 返回 "Invalid API key"，Tavily 网关返回 401/403。
+const AUTH_ERROR_PATTERN = /(\b401\b|\b403\b|unauthori[sz]ed|invalid api key|forbidden|authentication failed)/i
+
+export function classifyToolError(text: string): 'argument' | 'service' | 'auth' {
+  if (AUTH_ERROR_PATTERN.test(text)) return 'auth'
+  return ARGUMENT_ERROR_PATTERN.test(text) ? 'argument' : 'service'
+}
+
+type JsonSchema = Record<string, unknown>
+
+function schemaType(schema: JsonSchema | undefined): string | undefined {
+  if (!schema) return undefined
+  const type = schema.type
+  if (typeof type === 'string') return type
+  if (Array.isArray(type)) {
+    const found = type.find(item => typeof item === 'string' && item !== 'null')
+    return typeof found === 'string' ? found : undefined
+  }
+  if (schema.properties || schema.required) return 'object'
+  return undefined
+}
+
+function inEnum(value: unknown, schema: JsonSchema): boolean {
+  return Array.isArray(schema.enum) && schema.enum.some(item => item === value)
+}
+
+// 值是否已经符合该 schema 的类型（用于 oneOf 分支选择：先接受本来就正确的值，再尝试归一）。
+function matchesType(value: unknown, schema: JsonSchema): boolean {
+  if (inEnum(value, schema)) return true
+  const type = schemaType(schema)
+  if (!type) return !Array.isArray(schema.enum)
+  switch (type) {
+    case 'boolean': return typeof value === 'boolean'
+    case 'integer': return typeof value === 'number' && Number.isInteger(value)
+    case 'number': return typeof value === 'number' && Number.isFinite(value)
+    case 'string': return Array.isArray(schema.enum) ? false : typeof value === 'string'
+    case 'array': return Array.isArray(value)
+    case 'object': return typeof value === 'object' && !Array.isArray(value)
+    default: return true
+  }
+}
+
+// 弱模型常把布尔和数字写成字符串（"false"、"5"）。按 schema 归一后再发，
+// 比让服务端报错、再吃掉一次搜索预算要划算。
+function coerceValue(value: unknown, schema: JsonSchema | undefined): unknown {
+  if (!schema || value === null || value === undefined) return value
+  if (inEnum(value, schema)) return value
+  // Tavily 的 include_answer 就是 oneOf: [boolean, enum] 这种形状，没有顶层 type；
+  // 逐个分支试归一，第一个能改变值的分支胜出，枚举值保持原样。
+  const branches = [...(Array.isArray(schema.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema.anyOf) ? schema.anyOf : [])] as JsonSchema[]
+  if (branches.length > 0) {
+    if (branches.some(branch => matchesType(value, branch))) return value
+    for (const branch of branches) {
+      const next = coerceValue(value, branch)
+      if (next !== value) return next
+    }
+    return value
+  }
+  switch (schemaType(schema)) {
+    case 'boolean': {
+      if (typeof value === 'boolean') return value
+      if (typeof value === 'string') {
+        const text = value.trim().toLowerCase()
+        if (text === 'true' || text === '1' || text === 'yes') return true
+        if (text === 'false' || text === '0' || text === 'no') return false
+      }
+      if (value === 1 || value === 0) return value === 1
+      return value
+    }
+    case 'integer':
+    case 'number': {
+      if (typeof value === 'number') return value
+      if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value)
+      return value
+    }
+    case 'string': {
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+      return value
+    }
+    case 'array': {
+      let items: unknown = value
+      if (typeof value === 'string') {
+        const text = value.trim()
+        if (text.startsWith('[')) { try { items = JSON.parse(text) } catch { items = [value] } }
+        else if (text !== '') items = [value]
+      }
+      if (!Array.isArray(items)) return items
+      const itemSchema = schema.items as JsonSchema | undefined
+      return items.map(item => coerceValue(item, itemSchema))
+    }
+    case 'object': {
+      let entries: unknown = value
+      if (typeof value === 'string') {
+        const text = value.trim()
+        if (!text.startsWith('{')) return value
+        try { entries = JSON.parse(text) } catch { return value }
+      }
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return entries
+      const properties = (schema.properties ?? {}) as Record<string, JsonSchema>
+      const next: Record<string, unknown> = { ...(entries as Record<string, unknown>) }
+      for (const [key, item] of Object.entries(next)) next[key] = coerceValue(item, properties[key])
+      return next
+    }
+    default:
+      return value
+  }
+}
+
+export function coerceArguments(args: Record<string, unknown>, schema: JsonSchema | undefined): Record<string, unknown> {
+  const properties = (schema?.properties ?? undefined) as Record<string, JsonSchema> | undefined
+  if (!properties) return args
+  const next: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(args)) next[key] = coerceValue(value, properties[key])
+  return next
+}
+
+// 归一之后仍然类型不符的字段，直接告诉模型期望类型，不再白跑一次网络请求。
+export function argumentMismatches(args: Record<string, unknown>, schema: JsonSchema | undefined): string[] {
+  const properties = (schema?.properties ?? undefined) as Record<string, JsonSchema> | undefined
+  if (!properties) return []
+  const mismatches: string[] = []
+  for (const [key, value] of Object.entries(args)) {
+    const property = properties[key]
+    if (!property || value === null || value === undefined || inEnum(value, property)) continue
+    if (property.oneOf || property.anyOf || property.allOf || property.$ref) continue
+    const type = schemaType(property)
+    if (!type) continue
+    if (matchesType(value, property)) continue
+    const actual = Array.isArray(value) ? 'array' : typeof value
+    mismatches.push(`${key} 需要 ${type}，收到 ${actual}（${JSON.stringify(value).slice(0, 60)}）`)
+  }
+  return mismatches
+}
 
 export async function webFetch(url: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<ToolResult> {
   let target: URL
@@ -92,6 +230,15 @@ export interface SearchSettings {
   token: string
 }
 
+// Exa 官方文档要求 x-api-key，Tavily 网关用 Bearer；同时发送两个头互不干扰。
+export function searchHeaders(url: string, token: string): Record<string, string> {
+  const headers: Record<string, string> = { authorization: `Bearer ${token}` }
+  try {
+    if (/(^|\.)exa\.ai$/i.test(new URL(url).hostname)) headers['x-api-key'] = token
+  } catch { /* 地址在配置层已校验；解析失败时只发 Bearer */ }
+  return headers
+}
+
 // 从环境变量解析搜索服务（网页保存的配置会映射到这两个变量，优先于 .env；同名时以传入 env 为准）。
 export function searchSettingsFromEnv(env: NodeJS.ProcessEnv): SearchSettings | undefined {
   const url = env.TUTOR_MCP_SEARCH_URL
@@ -106,6 +253,7 @@ export function createResearchTools(settings: SearchSettings, onNotice: (message
   const token = settings.token
   let client: Client | undefined
   let definitions: ApiToolDef[] | undefined
+  let schemas: Map<string, JsonSchema> | undefined
   let failed = false
   let connecting: Promise<void> | undefined
 
@@ -114,12 +262,13 @@ export function createResearchTools(settings: SearchSettings, onNotice: (message
     connecting ??= (async () => {
       try {
         const transport = new StreamableHTTPClientTransport(new URL(url), {
-          requestInit: { headers: { authorization: `Bearer ${token}` } },
+          requestInit: { headers: searchHeaders(url, token) },
         })
         const next = new Client({ name: 'tutor', version: '0.1.0' })
         await next.connect(transport)
         const listed = await next.listTools()
         client = next
+        schemas = new Map(listed.tools.map(tool => [tool.name, tool.inputSchema as JsonSchema]))
         definitions = listed.tools.map(tool => ({
           name: `${MCP_SEARCH_PREFIX}${tool.name}`,
           ...(tool.description !== undefined ? { description: tool.description } : {}),
@@ -140,22 +289,33 @@ export function createResearchTools(settings: SearchSettings, onNotice: (message
     },
     async call(name: string, argsJson: string, signal: AbortSignal): Promise<ToolResult> {
       await connect()
-      if (!client) return { text: '搜索服务不可用，请使用 web_fetch 或依据已有资料收束。', isError: true }
+      if (!client) return { text: '搜索服务不可用，请使用 web_fetch 或依据已有资料收束。', isError: true, failure: 'service' }
       let args: Record<string, unknown>
       try { args = argsJson.trim() === '' ? {} : JSON.parse(argsJson) as Record<string, unknown> }
-      catch { return { text: '工具参数不是合法 JSON，请重新调用', isError: true } }
+      catch { return { text: '工具参数不是合法 JSON，请重新调用（未计入预算）', isError: true, failure: 'argument' } }
+      const bare = name.slice(MCP_SEARCH_PREFIX.length)
+      const schema = schemas?.get(bare)
+      const coerced = coerceArguments(args, schema)
+      const mismatches = argumentMismatches(coerced, schema)
+      if (mismatches.length > 0) {
+        return { text: `工具参数类型不符，未发出请求（未计入预算）：${mismatches.join('；')}。请按 schema 修正后重试。`,
+          isError: true, failure: 'argument' }
+      }
       try {
-        const result = await client.callTool({ name: name.slice(MCP_SEARCH_PREFIX.length), arguments: args }, undefined,
+        const result = await client.callTool({ name: bare, arguments: coerced }, undefined,
           { timeout: 120_000, signal })
         const blocks: { type?: string; text?: string }[] = Array.isArray(result.content) ? result.content as { type?: string; text?: string }[] : []
         const text = blocks
           .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
           .map(block => block.text)
           .join('\n')
-        return { text: text || '（无文本结果）', isError: result.isError === true }
+        if (result.isError !== true) return { text: text || '（无文本结果）', isError: false }
+        const failure = classifyToolError(text)
+        return { text: failure === 'argument' ? `参数未被搜索服务接受（可修正后重试）：${text}` : text || '（无文本结果）',
+          isError: true, failure }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        return { text: `搜索服务调用失败：${message}`, isError: true }
+        return { text: `搜索服务调用失败：${message}`, isError: true, failure: 'service' }
       }
     },
     async close(): Promise<void> {

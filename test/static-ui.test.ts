@@ -113,6 +113,13 @@ describe('静态页面与共享 UI 组件', () => {
     assert.match(settings, /不会保存|不会.*保存|不保存配置/, '测试不应保存配置')
   })
 
+  it('教研搜索可在设置页选择 Exa 或 Tavily', () => {
+    const settings = read('ui/settings.js')
+    assert.match(settings, /id="searchProvider"/, '应有搜索服务选择器')
+    assert.match(settings, /https:\/\/mcp\.exa\.ai\/mcp/, '选择 Exa 时应填入官方 MCP 地址')
+    assert.match(settings, /x-api-key/, 'Exa 的密钥按 x-api-key 发送')
+  })
+
   it('课堂与大考的输入选择器必须匹配多行输入框', () => {
     for (const file of ['ui/views/learn.js', 'ui/views/exam.js']) {
       const source = read(file)

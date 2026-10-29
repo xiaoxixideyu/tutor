@@ -11,6 +11,9 @@ data/
 courses/
 *.session.jsonl
 
+# 本地助手的工作记录（与项目无关的会话记忆）
+.workbuddy-ai/
+
 # 环境变量与密钥
 .env
 .env.local

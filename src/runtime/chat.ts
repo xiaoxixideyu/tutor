@@ -9,7 +9,7 @@ import { ResearchBudget } from './budget.ts'
 import { ContextWindowError, estimateTokens, fitHistory, normalizeContextWindow, outputTokenLimit } from './context.ts'
 import { SessionLog } from './session.ts'
 import { openaiTransport, type ApiMessage, type ApiToolCall, type ApiToolDef, type LlmFailure, type LlmRequest, type LlmResult, type LlmTransport } from './llm.ts'
-import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings } from './tools.ts'
+import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings, type ToolResult } from './tools.ts'
 import type { ResearchStatusSink } from './status.ts'
 import type { ReasoningLevel } from '../core/reasoning.ts'
 
@@ -289,7 +289,7 @@ class Chat implements AgentChat {
     }
     const denial = this.research.claim(name)
     if (denial) return { text: denial, isError: true }
-    let result: { text: string; isError: boolean }
+    let result: ToolResult
     if (name === 'web_fetch') {
       let url = ''
       try { url = String((JSON.parse(call.function.arguments || '{}') as { url?: unknown }).url ?? '') } catch { /* 参数非法按空 URL 处理 */ }
@@ -299,7 +299,7 @@ class Chat implements AgentChat {
       if (!tools) return { text: '搜索服务未配置或暂不可用，请使用 web_fetch 或依据已有资料收束。', isError: true }
       result = await tools.call(name, call.function.arguments, signal)
     }
-    const blocks = this.research.result(name, [{ type: 'text', text: result.text }], result.isError)
+    const blocks = this.research.result(name, [{ type: 'text', text: result.text }], result.isError, result.failure)
     return { text: blocks.map(block => block.text).join('\n'), isError: result.isError }
   }
 

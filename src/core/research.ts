@@ -60,7 +60,9 @@ export class ResearchProgressStore {
   }
   save(map: KnowledgeMap, profile: Profile, node: string): void {
     const file = this.file(node)
-    const value = { version: 1, key: this.key(map, profile, node), completedAt: new Date().toISOString() }
+    // sourceCount 只作审计线索：断点判定仍只看 version/key/completedAt，"完成"不等于"有来源"。
+    const value = { version: 1, key: this.key(map, profile, node), completedAt: new Date().toISOString(),
+      sourceCount: (map.resources ?? []).filter(resource => resource.node === node).length }
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     const tmp = `${file}.${randomUUID()}.tmp`
     try { fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file) }

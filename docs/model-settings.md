@@ -24,9 +24,13 @@
 
 ## 教研搜索（可选）
 
-页面上的"教研搜索 MCP 地址"用于联网教研的检索服务（MCP over HTTP）：填服务地址（Tavily Hikari 为 `https://<host>/mcp`；searchix 类服务为各自 `/mcp` 地址）与 Token（Tavily Hikari 使用 `th-` 开头的访问令牌，不是官方 Tavily key）。保存后按网页配置优先，其次服务环境变量，最后 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`；清空网页字段即回退到环境配置。搜索与授课一样支持热更新：进行中的教研流程在下一回合使用新搜索服务，无需重开。换搜索地址时必须填写新服务的 Token（不会沿用旧令牌）；密钥保存在本机配置文件，不会回显。
+页面上的"搜索服务"可选择 Exa、Tavily Hikari 或自定义 MCP：选 Exa 会自动填入 `https://mcp.exa.ai/mcp`，Token 填 Exa 的 API Key（按 `x-api-key` 发送）；Tavily Hikari 填 `https://<host>/mcp` 与 `th-` 开头的访问令牌（不是官方 Tavily key）；其他服务选"自定义 MCP"，工具名需包含 `search` / `fetch` / `extract` 片段才会被教研预算放行。保存后按网页配置优先，其次服务环境变量，最后 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`；清空网页字段即回退到环境配置。搜索与授课一样支持热更新：进行中的教研流程在下一回合使用新搜索服务，无需重开。换搜索地址时必须填写新服务的 Token（不会沿用旧令牌）；密钥保存在本机配置文件，不会回显。
 
-搜索工具名以 `mcp__searchix__` 开头的命名空间注入；教研预算只放行搜索类（名称以 `search` 结尾）与抓取类（`web_fetch` 或 `extract` 结尾）工具，其余工具（crawl/map/research 等）不会暴露给模型。
+搜索工具名以 `mcp__searchix__` 开头的命名空间注入；教研预算只放行搜索类（`search` 前后是分隔符，覆盖 `tavily-search`、`web_search_exa`、`web_search_advanced_exa`）与抓取类（`web_fetch`、`web_fetch_exa`、`crawling_exa`、`*_extract`）工具，其余工具（crawl/map/research、agent_run 等）不会暴露给模型。
+
+搜索失败分两类处理：**参数不合规**（如把布尔写成字符串）会退还本次预算并允许模型改正后重试，工具不会被停用；**服务/传输失败**不占检索次数，连续两次失败才在本知识点内停用该服务，避免一次网关抖动废掉整个知识点。`web_fetch` 抓取失败仍按原样消耗抓取次数。
+
+来源准入在地图合并前执行：搜索结果页，以及百科、问答、文库、博客平台、内容农场（百度百科/知乎/CSDN/简书/搜狐/公众号等）会被直接剔除并提示，宁可让该知识点没有来源（`verified=false`），也不把不可核对的页面写进地图。
 
 ## 生效范围与保存位置
 

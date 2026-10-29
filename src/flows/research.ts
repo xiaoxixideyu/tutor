@@ -8,6 +8,7 @@ import { pendingResearchNodes, ResearchProgressStore, researchNodes } from '../c
 import { parseJsonBlock, trySchema } from './generation.ts'
 import { recordChatTotal } from './cost-ledger.ts'
 import { mapContent } from '../core/content-quality.ts'
+import { rejectSourceReason } from '../core/source-quality.ts'
 import { createContentGate, generateApproved } from './content-gate.ts'
 import { profileScope } from '../core/interview.ts'
 import { capKnowledgeMap, mapNodeBudget, type MapBudget } from './map-budget.ts'
@@ -61,6 +62,8 @@ export function nodePrompt(profile: Profile, node: { id: string; title?: string;
     '- 两个来源冲突时在 resources[].note 注明分歧',
     '- 区分必要条件与常用做法，不把示例中的写法概括成“必须”；material 只摘录本课范围内需要的事实与例子，排除项不进入摘要',
     '- resources 只收直接支撑本知识点结论的资料：讲前置或后续课内容的资料不要挂到本知识点（整图复审判为越界会要求删改，浪费返工）',
+    '- 来源只收正文可核对的原始/权威页面：官方文档、政府与教育机构网站、项目官方仓库、标准组织；官网首页、栏目导航页、登录页、搜索结果页，以及百科、问答、文库、博客平台、内容农场都会被程序剔除，不要提交；宁可不写 resources，也不要拿这类页面凑数',
+    '- summary 只写学习内容，不写教研过程：不要出现“检索失败”“未取得资料”“待补证”“无法核实”这类说明；证据不足时按已有知识写范围，并保持 verified=false',
     '- 引用稳定的页面标题与链接，不写与知识内容无关的章节编号；版本相关结论必须写明版本，不能混用不同版本的编号或行为',
     '- 选型类课程以任务需求、实测质量、延迟、成本、数据与部署约束为主；未经本次来源核实的型号、价格、窗口长度、显存或许可数字不要写入，不凭记忆补全产品排行表',
     '- resources 最多 3 条；输出前逐字段自检长度（程序硬校验，超限会被拒绝并浪费重试预算）：summary 40–120 字（一句话讲清范围，写完删掉举例与修饰）、每条 material ≤180 字（最多 3 条事实、平均每条 ≤60 字，能短则短）、note 一句话 ≤120 字、title ≤120 字；缺少足够证据时提交现有资料并保持 verified=false',
@@ -90,10 +93,19 @@ async function checkUrl(url: string): Promise<string | null> {
   return null
 }
 
-async function pruneDeadResources(
+export async function pruneResources(
   resources: { node: string; title: string; url?: string; note?: string; material?: string }[],
   out: (text: string) => void
 ): Promise<void> {
+  // 先按来源类型剔除（零网络开销），再检查死链：搜索结果页、百科与博客平台不进入地图。
+  for (let i = resources.length - 1; i >= 0; i--) {
+    const resource = resources[i]
+    if (!resource.url) continue
+    const reason = rejectSourceReason(resource.url)
+    if (!reason) continue
+    out(`  ⚠ 来源不合格，已剔除：${resource.title}（${reason}）\n`)
+    resources.splice(i, 1)
+  }
   const withUrl = resources.filter((r) => r.url !== undefined)
   const verdicts = await Promise.all(withUrl.map((r) => checkUrl(r.url!)))
   for (let i = withUrl.length - 1; i >= 0; i--) {
@@ -120,6 +132,14 @@ export function validateBatch(data: unknown, batchIds: Set<string>): ParseResult
   if (orphan) return { ok: false, error: `resources 中的知识点 "${orphan.node}" 不在本批里` }
   const invalidUrl = resources.find((r) => r.url && !/^https?:\/\//.test(r.url))
   if (invalidUrl) return { ok: false, error: `资源 "${invalidUrl.title}" 的 URL 非法` }
+  // 教研过程的失败说明不是教学内容：summary 会经备课提示词进入课堂，必须改写成学习范围。
+  // 只匹配过程自述，"未取得许可"这类正常表述不受影响。
+  const narration = /检索失败|搜索失败|联网失败|联网检索|未取得[^。；]{0,10}?(资料|来源|正文|证据)|待补证|待补充核实|待核实|无法核实|无法验证|资料不足|证据不足|暂不纳入/
+  const narrated = batch.nodes.find((node) => narration.test(node.summary ?? ''))
+  if (narrated) {
+    const phrase = (narrated.summary ?? '').match(narration)?.[0] ?? ''
+    return { ok: false, error: `summary 写了教研过程说明（“${phrase}”）：学员不需要知道资料是否查到。请改成只写这节课要解决的问题与做法，保持 verified=false 即可，不要解释检索情况。` }
+  }
   // 长度违规一次报全（逐字段给当前字数与需删字数）：只报第一个会让模型只修一处、来回拉锯，
   // 而"每节点模型请求"预算有限，每次拉锯都在烧修复机会。
   const overages: string[] = []
@@ -228,7 +248,11 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
   const pending = config.nodeId ? [config.nodeId] : pendingResearchNodes(map, profile, progress)
   if (pending.length === 0) {
     const unverified = map.nodes.filter(node => !node.verified).length
-    io.out(unverified ? `全部知识点均已完成资料检查；其中 ${unverified} 个仍待来源交叉验证，可选择知识点单独补查。\n` : '全部知识点均已联网验证。\n')
+    const sourced = new Set((map.resources ?? []).map(resource => resource.node))
+    const empty = map.nodes.filter(node => !sourced.has(node.id)).length
+    io.out(unverified
+      ? `全部知识点均已完成资料检查；其中 ${unverified} 个仍待来源交叉验证${empty ? `，${empty} 个未取得任何来源（可单点补查）` : ''}。\n`
+      : '全部知识点均已联网验证。\n')
     await chat.flush()
     io.closeInput()
     throw new FlowExit(0)
@@ -251,7 +275,7 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
           const validated = validateBatch(data.value, new Set([id]))
           if (!validated.ok) return validated
           const batch = validated.value as BatchResult
-          if (batch.resources?.length) await pruneDeadResources(batch.resources, io.out)
+          if (batch.resources?.length) await pruneResources(batch.resources, io.out)
           // 教研补充摘要和资料，课程标题由已有骨架决定；无需为同义改写重跑模型。
           return { ok: true, value: { ...mergeResearchBatch(current, batch, { preserveTitles: true }), researched_at: deps.today() } }
         }, gate, value => mapContent(value, profile), {
@@ -285,7 +309,11 @@ export async function runResearch(deps: FlowDeps, config: { courseId: string; no
 
   const verifiedTotal = map.nodes.filter((n) => n.verified).length
   const remaining = pendingResearchNodes(map, profile, progress).length
-  io.out(`\n本次教研已保存：${map.nodes.length - remaining}/${map.nodes.length} 个知识点已完成资料检查，${verifiedTotal} 个已联网验证，来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
+  const done = map.nodes.length - remaining
+  const sourced = new Set((map.resources ?? []).map(resource => resource.node))
+  const savedOnly = map.nodes.filter(node => sourced.has(node.id) && !node.verified).length
+  const empty = map.nodes.filter(node => !sourced.has(node.id)).length
+  io.out(`\n本次教研已保存：${done}/${map.nodes.length} 个知识点完成资料检查——${verifiedTotal} 个已联网验证、${savedOnly} 个有来源但未通过交叉验证、${empty} 个未取得来源；来源 ${map.resources?.length ?? 0} 条；尚待教研 ${remaining} 个。\n`)
   await chat.flush()
   recordChatTotal(deps.costs, chat, 'research-skeleton')
   io.closeInput()

@@ -10,6 +10,9 @@ export const RESEARCH_LIMITS = {
   resultChars: 6000, totalChars: 24000,
 } as const
 
+// 同一搜索服务连续失败达到该次数才在本知识点内停用：网关偶发 5xx 值得再试一次。
+export const SEARCH_RETRY_LIMIT = 2
+
 export class ResearchBudgetError extends Error {
   constructor() {
     super('本知识点已达到教研请求预算，尚未完成；已保存的其他知识点不受影响')
@@ -31,17 +34,22 @@ export class ResearchBudget {
   characters = 0
   failure?: ResearchBudgetError
   private readonly unavailable = new Set<string>()
+  private readonly failures = new Map<string, number>()
   private readonly requestKeys = new Set<string>()
   private readonly progress: (message: string) => void
 
   constructor(progress: (message: string) => void = () => {}) { this.progress = progress }
 
-  // 工具分类同时兼容下划线与连字符命名（searchix 用 *_search；Tavily Hikari 用 tavily-search）。
+  // 工具分类同时兼容下划线与连字符命名（searchix 用 *_search；Tavily Hikari 用 tavily-search；
+  // Exa 用 web_search_exa / web_fetch_exa / crawling_exa）。
   // extract 类工具按正文抓取计费（与 web_fetch 共用抓取预算），其余工具不暴露。
   private kind(name: string): 'search' | 'fetch' | undefined {
     const bare = name.startsWith(MCP_SEARCH_PREFIX) ? name.slice(MCP_SEARCH_PREFIX.length) : name
-    if (/(^|[_-])search$/.test(bare)) return 'search'
-    if (name === 'web_fetch' || /(^|[_-])extract$/.test(bare)) return 'fetch'
+    // 注意 tavily_research 里的 "research" 不算 search：要求 search 前后是分隔符或首尾。
+    if (/(^|[_-])search([_-]|$)/.test(bare)) return 'search'
+    if (name === 'web_fetch' || /(^|[_-])extract([_-]|$)/.test(bare) || /(^|[_-])fetch([_-]|$)/.test(bare)) return 'fetch'
+    // Exa 的整页读取工具名不含 fetch/extract 片段。
+    if (bare === 'crawling_exa') return 'fetch'
     return undefined
   }
 
@@ -83,10 +91,39 @@ export class ResearchBudget {
     return undefined
   }
 
-  result(name: string, content: TextContentBlock[], isError: boolean): TextContentBlock[] {
-    if (isError && this.kind(name) === 'search') {
-      this.unavailable.add(name)
-      this.progress('该搜索服务本次不可用，保留失败记录并使用剩余检索预算。')
+  private refund(kind: 'search' | 'fetch' | undefined): void {
+    if (kind === 'search') this.searches = Math.max(0, this.searches - 1)
+    else if (kind === 'fetch') this.fetches = Math.max(0, this.fetches - 1)
+  }
+
+  result(name: string, content: TextContentBlock[], isError: boolean, failure: 'argument' | 'service' | 'auth' = 'service'): TextContentBlock[] {
+    if (isError) {
+      const kind = this.kind(name)
+      if (failure === 'auth') {
+        // 密钥无效/无权重试没有意义：立刻停用并给出可操作的提示。
+        this.refund(kind)
+        if (kind === 'search') {
+          this.unavailable.add(name)
+          this.progress('搜索服务鉴权失败（密钥无效或无权限），本知识点内不再尝试；请到“模型设置”检查搜索 Token。')
+        }
+      } else if (failure === 'argument') {
+        // 参数写错是模型可自纠的失败：退还本次预算，也不把工具拉黑，否则一次手滑就废掉整个知识点。
+        this.refund(kind)
+        this.progress(kind === 'search' ? '搜索参数不合规，已退还本次检索预算。' : '抓取参数不合规，已退还本次抓取预算。')
+      } else if (kind === 'search') {
+        // 传输/服务失败不占检索次数；连续失败达到上限才停用该服务，避免一次网关抖动废掉知识点。
+        this.refund(kind)
+        const failures = (this.failures.get(name) ?? 0) + 1
+        this.failures.set(name, failures)
+        if (failures >= SEARCH_RETRY_LIMIT) {
+          this.unavailable.add(name)
+          this.progress('该搜索服务连续失败，本知识点内不再尝试；保留失败记录并使用剩余预算。')
+        } else {
+          this.progress('搜索服务本次失败（未计入检索次数），可调整查询后再试一次。')
+        }
+      }
+    } else {
+      this.failures.delete(name)
     }
     const source = content.filter(block => block.type === 'text').map(block => block.text).join('\n')
     const available = Math.max(0, Math.min(RESEARCH_LIMITS.resultChars, RESEARCH_LIMITS.totalChars - this.characters))
