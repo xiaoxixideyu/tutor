@@ -1,8 +1,12 @@
 export type JudgmentProvider = 'llm' | 'typesafe'
+export type JudgmentUrlMode = 'base' | 'endpoint'
+export type JudgmentQuestionType = 'choice' | 'noul'
 
 export interface JudgmentSettings {
   provider: JudgmentProvider
   baseUrl: string
+  urlMode: JudgmentUrlMode
+  questionType: JudgmentQuestionType
   model: string
   apiKey: string
   minimumConfidence: number
@@ -15,6 +19,8 @@ export class JudgmentConfigError extends Error {}
 export const DEFAULT_JUDGMENT_SETTINGS: JudgmentSettings = {
   provider: 'llm',
   baseUrl: 'https://api.typesafe.ai/v1',
+  urlMode: 'base',
+  questionType: 'choice',
   model: 'jev-latest',
   apiKey: '',
   minimumConfidence: 0.95,
@@ -22,7 +28,9 @@ export const DEFAULT_JUDGMENT_SETTINGS: JudgmentSettings = {
   requestsPerMinute: 60,
 }
 
-export function judgmentBaseUrl(value: unknown): string {
+export function judgmentBaseUrl(value: unknown, mode: JudgmentUrlMode = 'base'): string {
+  if (!['base', 'endpoint'].includes(mode))
+    throw new JudgmentConfigError('判断地址方式仅支持基础地址或完整请求地址')
   if (typeof value !== 'string' || !value.trim() || value.length > 2048)
     throw new JudgmentConfigError('请填写快速判断服务的基础地址')
   let url: URL
@@ -31,11 +39,24 @@ export function judgmentBaseUrl(value: unknown): string {
   } catch {
     throw new JudgmentConfigError('判断服务地址必须是完整的 HTTP/HTTPS 地址')
   }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
-    throw new JudgmentConfigError('判断服务地址不能包含账号、密码、查询参数或片段')
-  if (/\/(systemone|chat\/completions)\/?$/.test(url.pathname))
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash)
+    throw new JudgmentConfigError('判断服务地址不能包含账号、密码或片段')
+  if (mode === 'base' && url.search)
+    throw new JudgmentConfigError('基础地址不能包含查询参数，请选择完整请求地址')
+  if (
+    [...url.searchParams.keys()].some((name) =>
+      /key|token|secret|password|signature|authorization|^auth$/i.test(name),
+    )
+  )
+    throw new JudgmentConfigError('地址中不能携带密钥，请使用独立的 API Key 字段')
+  if (mode === 'base' && /\/(systemone|chat\/completions)\/?$/.test(url.pathname))
     throw new JudgmentConfigError('请填写判断服务的基础地址，不要包含 /systemone 或 /chat/completions')
-  return url.toString().replace(/\/+$/, '')
+  return mode === 'endpoint' ? url.toString() : url.toString().replace(/\/+$/, '')
+}
+
+export function judgmentRequestUrl(settings: JudgmentSettings): string {
+  const address = judgmentBaseUrl(settings.baseUrl, settings.urlMode)
+  return settings.urlMode === 'endpoint' ? address : address + '/systemone'
 }
 
 export function optionalModelName(value: unknown): string {
@@ -51,7 +72,9 @@ export function validateJudgmentSettings(value: unknown, requireKey = false): Ju
   const raw = { ...DEFAULT_JUDGMENT_SETTINGS, ...(value as Partial<JudgmentSettings> | undefined) }
   if (!['llm', 'typesafe'].includes(raw.provider))
     throw new JudgmentConfigError('判断方式仅支持大模型或 TypeSafe')
-  const baseUrl = judgmentBaseUrl(raw.baseUrl)
+  if (!['choice', 'noul'].includes(raw.questionType))
+    throw new JudgmentConfigError('判断请求格式仅支持 Choice 或 Noul')
+  const baseUrl = judgmentBaseUrl(raw.baseUrl, raw.urlMode)
   const model = optionalModelName(raw.model)
   if (!model) throw new JudgmentConfigError('请填写快速判断模型名称')
   if (
@@ -81,6 +104,8 @@ export function validateJudgmentSettings(value: unknown, requireKey = false): Ju
   return {
     provider: raw.provider,
     baseUrl,
+    urlMode: raw.urlMode,
+    questionType: raw.questionType,
     model,
     apiKey,
     minimumConfidence: raw.minimumConfidence,
@@ -93,6 +118,8 @@ export function judgmentSettingsFromEnvironment(env: NodeJS.ProcessEnv): Judgmen
   return validateJudgmentSettings({
     provider: env.TUTOR_JUDGMENT_PROVIDER ?? DEFAULT_JUDGMENT_SETTINGS.provider,
     baseUrl: env.TUTOR_JUDGMENT_BASE_URL || DEFAULT_JUDGMENT_SETTINGS.baseUrl,
+    urlMode: env.TUTOR_JUDGMENT_URL_MODE || DEFAULT_JUDGMENT_SETTINGS.urlMode,
+    questionType: env.TUTOR_JUDGMENT_QUESTION_TYPE || DEFAULT_JUDGMENT_SETTINGS.questionType,
     model: env.TUTOR_JUDGMENT_MODEL || DEFAULT_JUDGMENT_SETTINGS.model,
     apiKey: env.TUTOR_JUDGMENT_API_KEY ?? '',
     minimumConfidence: Number(
@@ -109,6 +136,8 @@ export function judgmentEnvironment(settings: JudgmentSettings): NodeJS.ProcessE
   return {
     TUTOR_JUDGMENT_PROVIDER: settings.provider,
     TUTOR_JUDGMENT_BASE_URL: settings.baseUrl,
+    TUTOR_JUDGMENT_URL_MODE: settings.urlMode,
+    TUTOR_JUDGMENT_QUESTION_TYPE: settings.questionType,
     TUTOR_JUDGMENT_MODEL: settings.model,
     TUTOR_JUDGMENT_API_KEY: settings.apiKey,
     TUTOR_JUDGMENT_MIN_CONFIDENCE: String(settings.minimumConfidence),

@@ -9,7 +9,11 @@
 - **大模型判断（默认）**：完全使用原有核验路径，不调用快速判断服务。“核验大模型”可填写同一渠道的其他模型名；留空沿用主模型。
 - **TypeSafe / Jev 辅助判断**：使用独立的服务地址、模型名与 API Key。默认地址 https://api.typesafe.ai/v1，默认模型 jev-latest。画像背景和每条偏好按学员原话核对；候选内容进行范围预检。明显不符的候选可以提前拒绝，其他教材内容继续接受完整的大模型正确性审核、盲解及数值检查。
 
-选择 TypeSafe 时，问题按类型化接口批量提交。置信度和所选结论的概率均达到阈值时才采用，默认阈值 0.95；这是保守初值，需要使用自己的教学样例校准。服务不确定、响应不合法、超时或上下文过大时，回退所选核验大模型；预算用尽和用户暂停不会通过回退绕过限制。对候选教材，即使快速预检通过，大模型审核仍保留，因此不能保证整体速度或成本下降。
+判断地址可选择“基础地址”或“完整请求地址”。基础地址自动拼接 /systemone；完整地址保留路由、末尾斜杠及普通路由查询参数，不再拼接。中转示例：完整地址 https://emrank.tech/v1/decisions，模型 commandcode/jev-1.14.0。密钥放在独立 API Key 字段，地址不能携带账号、密码或认证查询参数。
+
+请求格式可选 Choice 或 Noul。Choice 使用三态结论、概率和模型置信度；Noul 使用 type=noul 的是/否问题及 true/false 标准，仅根据真实概率采用判断或回退，不伪造置信度。上述中转示例可选择 Noul。返回需要使用 TypeSafe 兼容的 model / answers / usage 结构；完整地址不自动适配其他响应协议。
+
+选择 TypeSafe 时，问题按类型化接口批量提交。Choice 的置信度和所选结论概率均达到阈值时才采用；Noul 的是/否概率达到阈值时采用，其他情况交给大模型。默认阈值 0.95；这是保守初值，需要使用自己的教学样例校准。服务不确定、响应不合法、超时或上下文过大时，回退所选核验大模型；预算用尽和用户暂停不会通过回退绕过限制。对候选教材，即使快速预检通过，大模型审核仍保留，因此不能保证整体速度或成本下降。
 
 “测试快速判断连接”仅发送固定的非个人样例，不发送课程记录，不保存或启用表单配置；实际使用需要点击“保存设置”。测试与业务判断都计入每日请求和用量记录。TypeSafe 的输出 token 仍记录，但按当前官方规则不计输出费用；输入费用按 config/cost.yaml 估算，使用时应按实际渠道费率更新。
 
@@ -32,10 +36,12 @@
 | TUTOR_RESEARCH_MODEL | 教研模型 |
 | TUTOR_REPAIR_MODEL | 内容修复模型 |
 | TUTOR_JUDGMENT_PROVIDER | llm（默认）或 typesafe；网页选择优先 |
-| TUTOR_JUDGMENT_BASE_URL | 快速判断服务基础地址，默认 https://api.typesafe.ai/v1 |
+| TUTOR_JUDGMENT_BASE_URL | 快速判断服务地址，默认 https://api.typesafe.ai/v1 |
+| TUTOR_JUDGMENT_URL_MODE | base（默认，自动补全）或 endpoint（完整请求地址） |
+| TUTOR_JUDGMENT_QUESTION_TYPE | choice（默认）或 noul（是/否概率） |
 | TUTOR_JUDGMENT_MODEL | 该服务的判断模型，默认 jev-latest |
 | TUTOR_JUDGMENT_API_KEY | 独立的快速判断服务密钥 |
-| TUTOR_JUDGMENT_MIN_CONFIDENCE | 所选结论概率与置信度阈值，默认 0.95 |
+| TUTOR_JUDGMENT_MIN_CONFIDENCE | 采用阈值，默认 0.95；Choice 检查概率及置信度，Noul 仅检查概率 |
 | TUTOR_JUDGMENT_TIMEOUT_MS | 含排队的等待上限，默认 5000 毫秒 |
 | TUTOR_JUDGMENT_REQUESTS_PER_MINUTE | 该判断渠道的每分钟请求数，默认 60 |
 | TUTOR_AGENT_MAX_REQUESTS | 整回合请求上限，默认 16 |

@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { createTutorServer } from '../src/server/http.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply } from './fixtures/tutor.ts'
 import { browser, hasChrome } from './fixtures/browser.ts'
-import { judgmentFetch } from './fixtures/judgment.ts'
+import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
 
 it('网页能创建目标、接受 agent 活动、选择答案并显示真实反馈', { skip: !hasChrome }, async (t) => {
   const content = activity()
@@ -136,12 +136,16 @@ it('页面刷新后从服务端恢复未提交的多行草稿', { skip: !hasChro
 
 it('设置页能切换判断方式，连接测试不启用配置，保存后可再次关闭', { skip: !hasChrome }, async (t) => {
   let calls = 0
+  let requestedUrl = '',
+    requestedModel = ''
   const fixture = systemFixture(t, scriptedTransport([]))
   const app = createTutorServer({
     ...fixture.options,
-    judgmentFetch: judgmentFetch(() => {
+    judgmentFetch: judgmentFetch((request, url) => {
       calls++
-    }),
+      requestedUrl = url
+      requestedModel = request.model
+    }, noulReply),
   })
   app.server.listen(0, '127.0.0.1')
   await once(app.server, 'listening')
@@ -164,15 +168,19 @@ it('设置页能切换判断方式，连接测试不启用配置，保存后可�
   assert.equal(await page.evaluate('document.querySelector(".typesafe-fields").hidden'), false)
   assert.equal(await page.evaluate('document.querySelector("[name=judgmentApiKey]").required'), true)
   await page.evaluate(
-    'document.querySelector("[name=judgmentApiKey]").value="browser-fast-secret";document.querySelector("[name=reviewModel]").value="review-fixture";document.querySelector("[name=judgmentConfidence]").value="95.5";document.querySelector("[name=judgmentSeconds]").value="1.234";document.querySelector(".settings-judge-test").click()',
+    'document.querySelector("[name=judgmentApiKey]").value="browser-fast-secret";document.querySelector("[name=reviewModel]").value="review-fixture";document.querySelector("[name=judgmentConfidence]").value="95.5";document.querySelector("[name=judgmentSeconds]").value="1.234";document.querySelector("[name=judgmentBaseUrl]").value="https://emrank.tech/v1/decisions";document.querySelector("[name=judgmentUrlMode]").value="endpoint";document.querySelector("[name=judgmentUrlMode]").dispatchEvent(new Event("change"));document.querySelector("[name=judgmentQuestionType]").value="noul";document.querySelector("[name=judgmentQuestionType]").dispatchEvent(new Event("change"));document.querySelector("[name=judgmentModel]").value="commandcode/jev-1.14.0";document.querySelector(".settings-judge-test").click()',
   )
   await page.wait('document.querySelector(".settings-status").textContent.includes("已连通")')
   assert.equal(app.system.models.publicConfig().judgment.provider, 'llm')
+  assert.equal(requestedUrl, 'https://emrank.tech/v1/decisions')
+  assert.equal(requestedModel, 'commandcode/jev-1.14.0')
   await page.evaluate('document.querySelector(".settings-form").requestSubmit()')
   await page.wait('document.querySelector(".settings-status").textContent.includes("已保存")')
   assert.equal(app.system.models.publicConfig().judgment.provider, 'typesafe')
   assert.equal(app.system.models.publicConfig().judgment.minimumConfidence, 0.955)
   assert.equal(app.system.models.publicConfig().judgment.timeoutMs, 1234)
+  assert.equal(app.system.models.publicConfig().judgment.urlMode, 'endpoint')
+  assert.equal(app.system.models.publicConfig().judgment.questionType, 'noul')
   assert.equal(await page.evaluate('document.querySelector("[name=judgmentApiKey]").value'), '')
   assert.equal(JSON.stringify(app.system.models.publicConfig()).includes('browser-fast-secret'), false)
   await page.evaluate(

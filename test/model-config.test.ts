@@ -331,8 +331,57 @@ it('不合法的判断方式、模型、置信度或等待设置不覆盖已保�
     { timeoutMs: 60001 },
     { requestsPerMinute: 0 },
     { requestsPerMinute: 1.5 },
+    { urlMode: 'unknown' },
+    { questionType: 'unknown' },
+    { urlMode: 'endpoint', baseUrl: 'https://judge.invalid/v1/decisions?api_key=secret' },
   ])
     assert.throws(() => store.save({ ...main, judgment }))
   assert.throws(() => store.save({ ...main, reviewModel: 'bad\nmodel' }))
   assert.equal(fs.readFileSync(store.file, 'utf8'), before)
+})
+
+it('完整地址和请求格式能保存、重启与部分更新，模型名允许中转命名空间', (t) => {
+  const { root, store } = fixture(t)
+  const main = { baseUrl: 'https://first.invalid/v1', model: 'teaching-model' }
+  const endpoint = 'https://emrank.tech/v1/decisions/?api-version=preview'
+  const saved = store.save({
+    ...main,
+    judgment: {
+      provider: 'typesafe',
+      urlMode: 'endpoint',
+      questionType: 'noul',
+      baseUrl: endpoint,
+      model: 'commandcode/jev-1.14.0',
+      apiKey: 'gateway-secret',
+    },
+  })
+  assert.equal(saved.judgment.baseUrl, endpoint)
+  assert.equal(saved.judgment.urlMode, 'endpoint')
+  assert.equal(saved.judgment.questionType, 'noul')
+  store.save(main)
+  const restarted = new ModelConfigStore(root, { env: {} })
+  assert.equal(restarted.environment().TUTOR_JUDGMENT_BASE_URL, endpoint)
+  assert.equal(restarted.environment().TUTOR_JUDGMENT_URL_MODE, 'endpoint')
+  assert.equal(restarted.environment().TUTOR_JUDGMENT_QUESTION_TYPE, 'noul')
+  assert.equal(restarted.environment().TUTOR_JUDGMENT_MODEL, 'commandcode/jev-1.14.0')
+  assert.equal(restarted.environment().TUTOR_JUDGMENT_API_KEY, 'gateway-secret')
+})
+
+it('地址表示方式切换可以沿用同一服务密钥，改换请求地址仍要求新密钥', (t) => {
+  const { store } = fixture(t)
+  const main = { baseUrl: 'https://first.invalid/v1', model: 'teaching-model' }
+  store.save({ ...main, judgment: { provider: 'typesafe', apiKey: 'gateway-secret' } })
+  store.save({ ...main, judgment: { urlMode: 'endpoint', baseUrl: 'https://api.typesafe.ai/v1/systemone' } })
+  assert.equal(store.environment().TUTOR_JUDGMENT_API_KEY, 'gateway-secret')
+  store.save({ ...main, judgment: { urlMode: 'base', baseUrl: 'https://api.typesafe.ai/v1' } })
+  store.save({
+    ...main,
+    judgment: { baseUrl: 'https://emrank.tech/v1/decisions', apiKey: 'new-gateway-secret' },
+  })
+  store.save({ ...main, judgment: { urlMode: 'endpoint' } })
+  assert.equal(store.environment().TUTOR_JUDGMENT_API_KEY, 'new-gateway-secret')
+  assert.throws(
+    () => store.save({ ...main, judgment: { baseUrl: 'https://other.invalid/v1/decisions' } }),
+    /新服务的 API Key/,
+  )
 })

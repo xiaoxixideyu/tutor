@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { normalizeReasoning, parseReasoning, type ReasoningLevel } from './reasoning.ts'
 import {
   judgmentBaseUrl,
+  judgmentRequestUrl,
   judgmentEnvironment,
   judgmentSettingsFromEnvironment,
   optionalModelName,
@@ -259,6 +260,8 @@ export class ModelConfigStore {
       judgment: {
         provider: config.judgment.provider,
         baseUrl: config.judgment.baseUrl,
+        urlMode: config.judgment.urlMode,
+        questionType: config.judgment.questionType,
         model: config.judgment.model,
         minimumConfidence: config.judgment.minimumConfidence,
         timeoutMs: config.judgment.timeoutMs,
@@ -314,15 +317,17 @@ export class ModelConfigStore {
       throw new ModelConfigError('判断设置必须是一个对象')
     const judgeInput = value.judgment as Partial<JudgmentSettings> | undefined
     const judgment = { ...previous.judgment, ...judgeInput }
-    const nextJudgeUrl = judgmentBaseUrl(judgment.baseUrl)
+    const nextJudgeUrl = judgmentBaseUrl(judgment.baseUrl, judgment.urlMode)
     const judgeReplacement = typeof judgeInput?.apiKey === 'string' ? judgeInput.apiKey.trim() : ''
     if (judgeInput?.apiKey !== undefined && typeof judgeInput.apiKey !== 'string')
       throw new ModelConfigError('快速判断 API Key 必须是文本')
-    if (!judgeReplacement && nextJudgeUrl !== previous.judgment.baseUrl && judgment.provider === 'typesafe')
+    const sameJudgeTarget =
+      judgmentRequestUrl({ ...judgment, baseUrl: nextJudgeUrl }) === judgmentRequestUrl(previous.judgment)
+    const keepJudgeKey = sameJudgeTarget || nextJudgeUrl === previous.judgment.baseUrl
+    if (!judgeReplacement && !keepJudgeKey && judgment.provider === 'typesafe')
       throw new ModelConfigError('更换判断服务地址时，请填写新服务的 API Key；不会沿用旧服务的密钥')
     judgment.baseUrl = nextJudgeUrl
-    judgment.apiKey =
-      judgeReplacement || (nextJudgeUrl === previous.judgment.baseUrl ? previous.judgment.apiKey : '')
+    judgment.apiKey = judgeReplacement || (keepJudgeKey ? previous.judgment.apiKey : '')
     validateJudgmentSettings(judgment, true)
     return validate({
       ...value,

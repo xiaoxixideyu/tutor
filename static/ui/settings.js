@@ -62,6 +62,7 @@
           '可指定当前服务渠道中的其他模型；留空沿用主模型。',
         ) +
         '<div class="typesafe-fields" hidden>' +
+        '<div class="field"><label for="cfg-judgmentUrlMode">地址方式</label><select id="cfg-judgmentUrlMode" name="judgmentUrlMode"><option value="base">基础地址（自动补全）</option><option value="endpoint">完整请求地址（中转接口）</option></select></div>' +
         field(
           'judgmentBaseUrl',
           '快速判断服务地址',
@@ -69,6 +70,7 @@
           'TypeSafe 默认使用 https://api.typesafe.ai/v1。',
         ) +
         field('judgmentModel', '快速判断模型', 'text', '默认 jev-latest，也可填写该服务提供的模型名称。') +
+        '<div class="field"><label for="cfg-judgmentQuestionType">判断请求格式</label><select id="cfg-judgmentQuestionType" name="judgmentQuestionType"><option value="choice">Choice（结论与置信度）</option><option value="noul">Noul（是/否概率）</option></select><p class="hint">按中转接口支持的格式选择，Noul 对应 type: noul。</p></div>' +
         field(
           'judgmentApiKey',
           '快速判断 API Key',
@@ -76,7 +78,7 @@
           '密钥单独保存在本机；同一服务地址下留空可沿用。',
         ) +
         '<details><summary>判断与等待设置</summary>' +
-        field('judgmentConfidence', '最低判断置信度（%）', 'number', '低于此值交给大模型复核，默认 95%。') +
+        field('judgmentConfidence', '最低采用阈值（%）', 'number', '低于此值交给大模型复核，默认 95%。') +
         field(
           'judgmentSeconds',
           '快速判断等待上限（秒）',
@@ -117,14 +119,38 @@
         const enabled = input('judgmentProvider').value === 'typesafe'
         const fields = root.querySelector('.typesafe-fields')
         fields.hidden = !enabled
-        fields.querySelectorAll('input, button').forEach((control) => {
+        fields.querySelectorAll('input, select, button').forEach((control) => {
           control.disabled = !enabled
         })
         input('judgmentBaseUrl').required = enabled
         input('judgmentModel').required = enabled
         input('judgmentApiKey').required = enabled && !current?.judgment?.apiKeySet
       }
+      function judgmentAddressMode(convert = false) {
+        const full = input('judgmentUrlMode').value === 'endpoint'
+        if (convert && full && input('judgmentBaseUrl').value.trim() === 'https://api.typesafe.ai/v1')
+          input('judgmentBaseUrl').value = 'https://api.typesafe.ai/v1/systemone'
+        else if (
+          convert &&
+          !full &&
+          input('judgmentBaseUrl').value.trim() === 'https://api.typesafe.ai/v1/systemone'
+        )
+          input('judgmentBaseUrl').value = 'https://api.typesafe.ai/v1'
+        const field = input('judgmentBaseUrl').closest('.field')
+        field.querySelector('label').textContent = full ? '完整请求地址' : '快速判断服务基础地址'
+        field.querySelector('.hint').textContent = full
+          ? '原样发送，不补全路由。例如 https://emrank.tech/v1/decisions。'
+          : '自动补全 /systemone；TypeSafe 默认基础地址是 https://api.typesafe.ai/v1。'
+      }
+      function judgmentFormat() {
+        input('judgmentConfidence').closest('.field').querySelector('.hint').textContent =
+          input('judgmentQuestionType').value === 'noul'
+            ? 'Noul 只检查是/否概率，未达到采用阈值时交给大模型复核。'
+            : 'Choice 同时检查结论概率与置信度，默认阈值 95%。'
+      }
       input('judgmentProvider').addEventListener('change', judgmentMode)
+      input('judgmentUrlMode').addEventListener('change', () => judgmentAddressMode(true))
+      input('judgmentQuestionType').addEventListener('change', judgmentFormat)
       for (const name of [
         'contextWindow',
         'maxOutputTokens',
@@ -180,6 +206,8 @@
         const judgment = config.judgment ?? {}
         input('judgmentProvider').value = judgment.provider ?? 'llm'
         input('judgmentBaseUrl').value = judgment.baseUrl ?? 'https://api.typesafe.ai/v1'
+        input('judgmentUrlMode').value = judgment.urlMode ?? 'base'
+        input('judgmentQuestionType').value = judgment.questionType ?? 'choice'
         input('judgmentModel').value = judgment.model ?? 'jev-latest'
         input('judgmentApiKey').value = ''
         input('judgmentApiKey').placeholder = judgment.apiKeySet
@@ -189,6 +217,8 @@
         input('judgmentSeconds').value = String((judgment.timeoutMs ?? 5000) / 1000)
         input('judgmentRequestsPerMinute').value = String(judgment.requestsPerMinute ?? 60)
         judgmentMode()
+        judgmentAddressMode()
+        judgmentFormat()
         input('searchProvider').value = (config.searchMcpUrl ?? '').includes('mcp.exa.ai')
           ? 'exa'
           : (config.searchMcpUrl ?? '').includes('tavily')
@@ -210,6 +240,8 @@
           judgment: {
             provider: input('judgmentProvider').value,
             baseUrl: input('judgmentBaseUrl').value.trim(),
+            urlMode: input('judgmentUrlMode').value,
+            questionType: input('judgmentQuestionType').value,
             model: input('judgmentModel').value.trim(),
             apiKey: input('judgmentApiKey').value.trim(),
             minimumConfidence: Number(input('judgmentConfidence').value) / 100,
@@ -301,7 +333,9 @@
               (result.elapsedMs / 1000).toFixed(2) +
               ' 秒' +
               (result.choice === 'uncertain' ||
-              result.confidence < Number(input('judgmentConfidence').value) / 100
+              result.probability < Number(input('judgmentConfidence').value) / 100 ||
+              (typeof result.confidence === 'number' &&
+                result.confidence < Number(input('judgmentConfidence').value) / 100)
                 ? ' · 样例判断不确定，学习中会交给大模型复核'
                 : ''),
           )

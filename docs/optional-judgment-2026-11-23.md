@@ -36,3 +36,13 @@
 TypeSafe 协议及异常分支使用模拟接口验证，界面使用本机真实 Chrome 验证。当前没有配置真实 TypeSafe 密钥，未进行该服务的真实连通、教学准确率或性能测试；填入密钥后可在设置页单独检查连接。完整教材保留大模型审核，因此不保证启用后整体更快或更便宜。
 
 使用说明见 [模型设置](model-settings.md)，协议依据为 [TypeSafe API](https://docs.typesafe.ai/api/system-one)。
+
+## 中转接口扩展
+
+补充“基础地址 / 完整请求地址”与“Choice / Noul”选项。完整地址原样发送，保留末尾斜杠和普通路由查询参数，不补全 /systemone。示例配置：urlMode=endpoint，baseUrl=https://emrank.tech/v1/decisions，questionType=noul，model=commandcode/jev-1.14.0。
+
+Noul 保留服务返回的真实是/否概率，不制造置信度字段。中间概率或无效响应回退大模型。请求地址表示方式切换可沿用同一服务的密钥，更换实际服务地址仍需新密钥。
+
+扩展后完整测试为 187 / 187 通过，类型与 JavaScript 语法检查通过，依赖审计 0 个已知漏洞。测试包括实际本机 HTTP 路由发送、完整地址及查询参数保留、命名空间模型名、Noul 采用与回退，以及浏览器中的配置保存。
+
+EmRank 的实际响应结构尚未实测，按用户提供的 TypeSafe 兼容协议接入；没有使用或获取真实中转密钥。完整请求地址不会自动转换非 TypeSafe 响应，设置页连接测试可以确认实际服务是否兼容。

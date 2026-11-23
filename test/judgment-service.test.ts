@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
+import { once } from 'node:events'
 import {
   ChatRuntime,
   ModelBudgetError,
@@ -14,7 +16,13 @@ import { JudgmentService, type JudgmentCheck } from '../src/capabilities/judgmen
 import { ContentValidation, ModelService } from '../src/capabilities/model-service.ts'
 import { DomainError } from '../src/domain/model.ts'
 import { ROOT, setup, jsonReply, scriptedTransport, activity } from './fixtures/tutor.ts'
-import { FAST_JUDGMENT_ENV, judgmentFetch, judgmentReply, type JudgmentRequest } from './fixtures/judgment.ts'
+import {
+  FAST_JUDGMENT_ENV,
+  judgmentFetch,
+  judgmentReply,
+  noulReply,
+  type JudgmentRequest,
+} from './fixtures/judgment.ts'
 
 const checks: JudgmentCheck[] = [
   { id: 'scope', instructions: '内容属于用户声明的目标范围。', failure: '内容越界' },
@@ -114,6 +122,78 @@ it('TypeSafe 使用独立密钥与真实类型化接口，结果保留模型身�
   assert.equal(attempt.provider, 'typesafe')
   assert.deepEqual(attempt.usage, { inputTokens: 120, outputTokens: 12 })
   assert.equal(f.llmCalls, 0)
+})
+
+it('完整中转地址按原路由 POST，支持命名空间模型与 Noul 请求', async (t) => {
+  let captured: { url?: string; authorization?: string; body: JudgmentRequest } | undefined
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/v1/decisions/?api-version=preview') {
+      res.writeHead(404).end()
+      return
+    }
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(Buffer.from(chunk))
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as JudgmentRequest
+    captured = { url: req.url, authorization: req.headers.authorization, body }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(noulReply(body)))
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      }),
+  )
+  const f = fixture(t, {
+    typedFetch: fetch,
+    env: {
+      TUTOR_JUDGMENT_BASE_URL:
+        'http://127.0.0.1:' +
+        (server.address() as { port: number }).port +
+        '/v1/decisions/?api-version=preview',
+      TUTOR_JUDGMENT_URL_MODE: 'endpoint',
+      TUTOR_JUDGMENT_QUESTION_TYPE: 'noul',
+      TUTOR_JUDGMENT_MODEL: 'commandcode/jev-1.14.0',
+    },
+  })
+  const state = { task: '检查商品描述', description: '商品完好，包装略有划痕' }
+  const result = await f.judge.evaluate(state, checks)
+  assert.equal(result.route, 'typesafe')
+  assert.equal(captured!.url, '/v1/decisions/?api-version=preview')
+  assert.equal(captured!.authorization, 'Bearer fast-fixture-key')
+  assert.equal(captured!.body.model, 'commandcode/jev-1.14.0')
+  assert.deepEqual(captured!.body.state, state)
+  assert.equal(captured!.body.questions.scope.type, 'noul')
+  assert.deepEqual(Object.keys(captured!.body.questions.scope.criteria).sort(), ['false', 'true'])
+  assert.equal(result.result!.answers.scope.noul, 0.99)
+  assert.equal(result.result!.answers.scope.confidence, undefined)
+  assert.equal(f.llmCalls, 0)
+})
+
+it('Noul 使用真实概率采用或回退，不伪造模型置信度', async (t) => {
+  for (const [probability, route, choice] of [
+    [0.99, 'typesafe', 'pass'],
+    [0.01, 'typesafe', 'fail'],
+    [0.8, 'llm', 'pass'],
+    [0.5, 'llm', 'uncertain'],
+  ] as const) {
+    const f = fixture(t, {
+      env: { TUTOR_JUDGMENT_QUESTION_TYPE: 'noul' },
+      typedFetch: judgmentFetch(undefined, (request) => noulReply(request, probability)),
+    })
+    const result = await f.judge.evaluate({}, checks)
+    assert.equal(result.route, route)
+    assert.equal(result.result!.answers.scope.choice, choice)
+    assert.equal(result.result!.answers.scope.confidence, undefined)
+    assert.equal(result.result!.answers.scope.noul, probability)
+  }
+  const invalid = fixture(t, {
+    env: { TUTOR_JUDGMENT_QUESTION_TYPE: 'noul' },
+    typedFetch: judgmentFetch(undefined, (request) => noulReply(request, 2)),
+  })
+  assert.equal((await invalid.judge.evaluate({}, checks)).fallback, 'unavailable')
 })
 
 it('低置信度、显式不确定与无效响应回退，不把格式正确当成判断可靠', async (t) => {

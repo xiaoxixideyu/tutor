@@ -39,6 +39,16 @@ export function judgmentFetch(
   }
 }
 
+export function noulReply(request: JudgmentRequest, probability = 0.99) {
+  return {
+    model: 'jev-fixture-1',
+    answers: Object.fromEntries(
+      Object.keys(request.questions).map((id) => [id, { type: 'noul', noul: probability }]),
+    ),
+    usage: { input_tokens: 120, output_tokens: 12 },
+  }
+}
+
 export const FAST_JUDGMENT_ENV = {
   TUTOR_JUDGMENT_PROVIDER: 'typesafe',
   TUTOR_JUDGMENT_BASE_URL: 'https://judge.invalid/v1',

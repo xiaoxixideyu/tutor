@@ -278,12 +278,16 @@ export class TutorSystem {
         { original: '我喜欢先看例子。', preference: '先看例子' },
         [{ id: 'preference', instructions: 'preference 是否得到 original 原话的明确支持？', failure: '' }],
       )
+      const answer = result.answers.preference
       return {
         provider: 'typesafe',
         model: result.model,
         elapsedMs: Date.now() - started,
-        choice: result.answers.preference.choice,
-        confidence: result.answers.preference.confidence,
+        questionType: answer.type,
+        choice: answer.choice,
+        probability: answer.probabilities[answer.choice],
+        ...(answer.confidence !== undefined ? { confidence: answer.confidence } : {}),
+        ...(answer.noul !== undefined ? { noul: answer.noul } : {}),
       }
     } catch (error) {
       if (error instanceof DomainError || error instanceof ModelBudgetError) throw error
