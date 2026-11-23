@@ -25,7 +25,11 @@ export const SKILL: Skill = {
   required: true,
 }
 
-export function activity(prompt = '2+3=?', answer = '5', options: Partial<ActivityContent> = {}): ActivityContent {
+export function activity(
+  prompt = '2+3=?',
+  answer = '5',
+  options: Partial<ActivityContent> = {},
+): ActivityContent {
   return {
     kind: 'assessment',
     title: '独立计算',
@@ -153,7 +157,8 @@ export function scriptedTransport(
           })),
         },
       )
-    if (system.includes('独立核对技能')) return jsonReply({ complete: true, reason: '当前目标范围与技能一致' })
+    if (system.includes('独立核对技能'))
+      return jsonReply({ complete: true, reason: '当前目标范围与技能一致' })
     if (system.includes('推荐今天'))
       return jsonReply({
         courseId: 'alpha',
@@ -162,7 +167,9 @@ export function scriptedTransport(
         reason: '当前目标适合今天的时间',
         minutes: 10,
       })
-    return jsonReply(options.review?.(request) ?? { scope: 'pass', correctness: 'pass', issues: [], arithmetic: [] })
+    return jsonReply(
+      options.review?.(request) ?? { scope: 'pass', correctness: 'pass', issues: [], arithmetic: [] },
+    )
   }
 }
 
@@ -190,6 +197,9 @@ export function systemFixture(t: TestContext, transport: LlmTransport) {
     TUTOR_LLM_REQUESTS_PER_MINUTE: '600',
     TUTOR_MCP_SEARCH_URL: '',
     TUTOR_MCP_SEARCH_TOKEN: '',
+    TUTOR_REVIEW_MODEL: '',
+    TUTOR_JUDGMENT_PROVIDER: 'llm',
+    TUTOR_JUDGMENT_API_KEY: '',
   }
   const options = {
     root: ROOT,

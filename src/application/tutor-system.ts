@@ -25,6 +25,7 @@ import {
 } from '../runtime/chat.ts'
 import { searchSettingsFromEnv } from '../runtime/tools.ts'
 import { normalizeReasoning } from '../core/reasoning.ts'
+import { judgmentEnvironment } from '../core/judgment-config.ts'
 import { ModelService } from '../capabilities/model-service.ts'
 import { TeachingCapabilities } from '../capabilities/teaching.ts'
 import { TutorAgent } from '../agents/tutor.ts'
@@ -46,6 +47,7 @@ export interface TutorSystemOptions {
   env?: NodeJS.ProcessEnv
   today?: () => string
   runtimeFactory?: (options: ChatRuntimeOptions) => ChatRuntime
+  judgmentFetch?: typeof fetch
 }
 
 export interface TutorJob {
@@ -192,6 +194,101 @@ export class TutorSystem {
       '今天的模型调用已达到预算，学习记录已保存',
       429,
     )
+  }
+
+  private usageObserver(
+    env: NodeJS.ProcessEnv,
+    courseId: string,
+    roleFor: (sessionId: string) => string,
+    usage: ModelUsageEntry[] = [],
+  ) {
+    const turnLimit = Number(env.TUTOR_SESSION_COST_LIMIT || 2)
+    domainAssert(Number.isFinite(turnLimit) && turnLimit > 0, 'INVALID_BUDGET', '回合模型预算不合法', 500)
+    return (event: AttemptObservation) => {
+      if (event.type === 'attempt-start') {
+        this.budgetAvailable(env)
+        this.usageLedger.record({
+          id: event.attemptId,
+          at: event.time,
+          model: event.model ?? env.TUTOR_LLM_MODEL ?? 'unknown',
+          role: roleFor(event.sessionId),
+          courseId,
+          day: this.today(),
+          inputTokens: 0,
+          outputTokens: 0,
+          estimatedCost: 0,
+          unknown: true,
+        })
+      }
+      if (event.type !== 'attempt') return
+      const sample = normalizeUsage(event.usage)
+      const rates = ratesForModel(this.costConfig, event.model)
+      const entry: ModelUsageEntry = {
+        id: event.attemptId,
+        at: new Date().toISOString(),
+        model: event.model,
+        role: roleFor(event.sessionId),
+        inputTokens: sample?.inputTokens ?? 0,
+        outputTokens: sample?.outputTokens ?? 0,
+        estimatedCost: sample
+          ? estimateCost(sample, event.provider === 'typesafe' ? { ...rates, output: 0 } : rates)
+          : 0,
+        unknown: !sample,
+      }
+      usage.push(entry)
+      this.usageLedger.record({ ...entry, courseId, day: this.today() })
+      if (usage.reduce((sum, item) => sum + item.estimatedCost, 0) > turnLimit)
+        throw new ModelBudgetError('本回合模型预算已用完，完成的学习结果已保存')
+    }
+  }
+
+  async testJudgment(input: unknown, signal?: AbortSignal) {
+    const config = this.models.draft(input)
+    domainAssert(config.judgment.provider === 'typesafe', 'INVALID_INPUT', '请先选择 TypeSafe 快速辅助判断')
+    const env = {
+      ...readModelEnvironment(this.root, this.options.env),
+      ...judgmentEnvironment(config.judgment),
+    }
+    this.budgetAvailable(env)
+    const options: ChatRuntimeOptions = {
+      model: {
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        model: config.model,
+        thinking: config.thinking,
+        contextWindow: config.contextWindow,
+        maxOutputTokens: config.maxOutputTokens,
+        requestsPerMinute: config.requestsPerMinute,
+        researchDeadlineMs: config.researchDeadlineMs,
+      },
+      sessionsRoot: path.join(this.dataRoot, 'sessions'),
+      workspace: this.root,
+      env,
+      signal,
+      typedFetch: this.options.judgmentFetch,
+      maxModelRequests: 1,
+      observe: this.usageObserver(env, 'configuration', () => 'judge-connection-test'),
+    }
+    const runtime = this.options.runtimeFactory?.(options) ?? new ChatRuntime(options)
+    const model = new ModelService(runtime)
+    const started = Date.now()
+    try {
+      const result = await model.judgments.query(
+        config.judgment,
+        { original: '我喜欢先看例子。', preference: '先看例子' },
+        [{ id: 'preference', instructions: 'preference 是否得到 original 原话的明确支持？', failure: '' }],
+      )
+      return {
+        provider: 'typesafe',
+        model: result.model,
+        elapsedMs: Date.now() - started,
+        choice: result.answers.preference.choice,
+        confidence: result.answers.preference.confidence,
+      }
+    } catch (error) {
+      if (error instanceof DomainError || error instanceof ModelBudgetError) throw error
+      throw new DomainError('JUDGMENT_UNAVAILABLE', model.error(error), 502)
+    }
   }
 
   start(
@@ -537,41 +634,7 @@ export class TutorSystem {
       const roles = new Map<string, string>()
       const usage: ModelUsageEntry[] = []
       const register = (sessionId: string, role: string) => roles.set(sessionId, role)
-      const turnLimit = Number(env.TUTOR_SESSION_COST_LIMIT || 2)
-      const observe = (event: AttemptObservation) => {
-        if (event.type === 'attempt-start') {
-          this.budgetAvailable(env)
-          this.usageLedger.record({
-            id: event.attemptId,
-            at: event.time,
-            model: env.TUTOR_LLM_MODEL ?? 'unknown',
-            role: roles.get(event.sessionId) ?? 'tutor',
-            courseId,
-            day: this.today(),
-            inputTokens: 0,
-            outputTokens: 0,
-            estimatedCost: 0,
-            unknown: true,
-          })
-        }
-        if (event.type !== 'attempt') return
-        const sample = normalizeUsage(event.usage)
-        const entry: ModelUsageEntry = {
-          id: event.attemptId,
-          at: new Date().toISOString(),
-          model: event.model,
-          role: roles.get(event.sessionId) ?? 'tutor',
-          inputTokens: sample?.inputTokens ?? 0,
-          outputTokens: sample?.outputTokens ?? 0,
-          estimatedCost: sample ? estimateCost(sample, ratesForModel(this.costConfig, event.model)) : 0,
-          unknown: !sample,
-        }
-        usage.push(entry)
-        this.usageLedger.record({ ...entry, courseId, day: this.today() })
-        if (usage.reduce((sum, item) => sum + item.estimatedCost, 0) > turnLimit) {
-          throw new ModelBudgetError('本回合模型预算已用完，完成的学习结果已保存')
-        }
-      }
+      const observe = this.usageObserver(env, courseId, (id) => roles.get(id) ?? 'tutor', usage)
       const settings = () => {
         const current = this.models.environment()
         return {
@@ -620,6 +683,7 @@ export class TutorSystem {
         },
         signal: job.controller.signal,
         observe,
+        typedFetch: this.options.judgmentFetch,
         maxModelRequests: Number(env.TUTOR_AGENT_MAX_REQUESTS || 16),
         out: () => {},
         err: () => {},

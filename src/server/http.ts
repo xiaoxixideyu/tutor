@@ -117,7 +117,12 @@ export function createTutorServer(options: TutorServerOptions) {
         }
         if (url.pathname === '/api/model-test' && req.method === 'POST') {
           const input = await body(req)
-          const config = system.models.draft({ ...input, searchMcpUrl: undefined, searchToken: undefined })
+          const config = system.models.draft({
+            ...input,
+            searchMcpUrl: undefined,
+            searchToken: undefined,
+            judgment: undefined,
+          })
           const started = Date.now()
           const result = await openaiTransport(config)(
             { messages: [{ role: 'user', content: '只回复 OK。' }], maxTokens: 1024 },
@@ -135,6 +140,15 @@ export function createTutorServer(options: TutorServerOptions) {
               text: result.text.slice(0, 300),
               elapsedMs: Date.now() - started,
             })
+          return
+        }
+        if (url.pathname === '/api/judgment-test' && req.method === 'POST') {
+          const input = await body(req)
+          const controller = new AbortController()
+          res.once('close', () => {
+            if (!res.writableEnded) controller.abort(new Error('请求已取消'))
+          })
+          json(res, 200, { ok: true, ...(await system.testJudgment(input, controller.signal)) })
           return
         }
         if (url.pathname === '/api/today' && req.method === 'GET') {

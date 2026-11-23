@@ -91,9 +91,9 @@ export function permanentModelError(error: unknown): boolean {
 
 // 验收/评测用观察事件：每个传输尝试的开始、结束与失败，不包含提示词或正文。
 export type AttemptObservation =
-  | { type: 'attempt-start'; sessionId: string; attemptId: string; time: string }
+  | { type: 'attempt-start'; sessionId: string; attemptId: string; time: string; model?: string; provider?: string }
   | { type: 'attempt'; sessionId: string; model: string; attemptId: string; outcome: 'committed' | 'length' | 'error' | 'aborted'
-      elapsedMs: number; firstChunkMs?: number; firstTextMs?: number; usage?: ReportedUsage }
+      elapsedMs: number; firstChunkMs?: number; firstTextMs?: number; usage?: ReportedUsage; provider?: string }
   | { type: 'request-error'; sessionId: string; time: string; failure: LlmFailure }
 
 export interface ChatRuntimeOptions {
@@ -119,6 +119,8 @@ export interface ChatRuntimeOptions {
   signal?: AbortSignal
   observe?: (event: AttemptObservation) => void
   maxModelRequests?: number
+  // 非聊天判断服务的独立传输注入点；生产使用原生 fetch。
+  typedFetch?: typeof fetch
 }
 
 type LlmSuccess = Extract<LlmResult, { finish: 'stop' | 'tool_calls' | 'length' }>
@@ -154,6 +156,74 @@ export class ChatRuntime {
       throw new ModelBudgetError('本回合已达到全部模型会话共用的请求预算，学习进度已保存')
     }
     this.issuedRequests += 1
+  }
+
+  throwIfAborted(): void {
+    this.options.signal?.throwIfAborted()
+  }
+
+  async callTyped<T>(
+    sessionId: string,
+    settings: ModelSettings,
+    provider: string,
+    timeoutMs: number,
+    execute: (
+      signal: AbortSignal,
+      fetchImpl: typeof fetch,
+    ) => Promise<{ value: T; model?: string; usage?: ReportedUsage }>,
+  ): Promise<T> {
+    this.throwIfAborted()
+    const timeout = AbortSignal.timeout(timeoutMs)
+    const signal = this.options.signal ? AbortSignal.any([this.options.signal, timeout]) : timeout
+    await this.limiterNow(settings).acquire(signal, (ms) =>
+      this.options.status?.({
+        phase: 'waiting',
+        message: `判断服务排队中，约 ${Math.ceil(ms / 1000)} 秒后尝试。`,
+      }),
+    )
+    signal.throwIfAborted()
+    this.claimRequest()
+    const attemptId = randomUUID(),
+      started = Date.now()
+    const observe = this.options.observe
+    observe?.({
+      type: 'attempt-start',
+      sessionId,
+      attemptId,
+      model: settings.model,
+      provider,
+      time: new Date(started).toISOString(),
+    })
+    let result: { value: T; model?: string; usage?: ReportedUsage } | undefined
+    try {
+      result = await execute(signal, this.options.typedFetch ?? fetch)
+      signal.throwIfAborted()
+    } catch (error) {
+      const usage = (error as { usage?: ReportedUsage } | null)?.usage ?? result?.usage
+      observe?.({
+        type: 'attempt',
+        sessionId,
+        attemptId,
+        model: result?.model ?? settings.model,
+        provider,
+        outcome: signal.aborted ? 'aborted' : 'error',
+        elapsedMs: Date.now() - started,
+        ...(usage ? { usage } : {}),
+      })
+      this.throwIfAborted()
+      throw error
+    }
+    observe?.({
+      type: 'attempt',
+      sessionId,
+      attemptId,
+      model: result.model ?? settings.model,
+      provider,
+      outcome: 'committed',
+      elapsedMs: Date.now() - started,
+      ...(result.usage ? { usage: result.usage } : {}),
+    })
+    return result.value
   }
 
   // transport 与限速器按 (baseUrl, apiKey, model, thinking, rpm) 缓存；设置变化时整体重建。
@@ -385,7 +455,7 @@ class Chat implements AgentChat {
       let firstChunkMs: number | undefined
       let firstTextMs: number | undefined
       const observe = this.options.observe
-      observe?.({ type: 'attempt-start', sessionId: this.sessionId, attemptId, time: new Date(started).toISOString() })
+      observe?.({ type: 'attempt-start', sessionId: this.sessionId, attemptId, model: settings.model, time: new Date(started).toISOString() })
       const capped: LlmRequest = { ...request,
         maxTokens: outputTokenLimit(settings.contextWindow, Math.min(request.maxTokens ?? outputCeiling, chatCeiling), outputCeiling) }
       let result: LlmResult

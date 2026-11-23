@@ -4,6 +4,8 @@
 
 教学策略由 TutorAgent 决定；程序提供受限能力、内容核对、规则评分、证据记录、预算和可靠恢复。技能、课堂活动、能力证据、记忆状态分别建模，一次练习成绩不会直接成为“已掌握”。
 
+在“模型设置 → 判断模型（可选）”中可以选择判断方式。默认使用大模型，也可指定同一渠道中的其他核验模型；选择 TypeSafe / Jev 后，填写独立的地址、模型与密钥即可启用快速辅助判断，并可单独测试连接。低置信度、超时或服务失败会回退大模型。教学策略、复杂正确性审核和评分反馈仍由大模型承担；关闭后无需额外服务。
+
 ## 开始使用
 
 需要 Node ≥22.19，推荐 Node 24。
@@ -53,7 +55,7 @@ macOS 使用操作系统沙箱限制文件与网络访问；JavaScript 使用 No
 
 ## 设置与数据
 
-模型设置保存在 data/model-config.json；网页保存优先于环境变量，环境变量优先于 .env。教学和内容核验推理档位可分别配置，默认使用轻量推理。可用 TUTOR_AGENT_MODEL / TUTOR_REVIEW_MODEL / TUTOR_GRADER_MODEL 等环境配置指定同一渠道中的不同角色模型。
+模型设置保存在 data/model-config.json；网页保存优先于环境变量，环境变量优先于 .env。教学和内容核验推理档位可分别配置，默认使用轻量推理。可用 TUTOR_AGENT_MODEL / TUTOR_REVIEW_MODEL / TUTOR_GRADER_MODEL 等环境配置指定同一渠道中的不同角色模型。快速辅助判断有独立连接，使用 TUTOR_JUDGMENT_* 设置；判断方式与核验模型调整在下一回合生效。
 
 新学习数据保存在 courses/<id>/state.json，正文、原始证据及量规在内容寻址的 assets/，失败生成任务在 tasks/，未提交输入在 drafts/。模型会话在 data/sessions/，全局用量账在 data/model-usage.json。
 

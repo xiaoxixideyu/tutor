@@ -2,6 +2,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { normalizeReasoning, parseReasoning, type ReasoningLevel } from './reasoning.ts'
+import {
+  judgmentBaseUrl,
+  judgmentEnvironment,
+  judgmentSettingsFromEnvironment,
+  optionalModelName,
+  validateJudgmentSettings,
+  type JudgmentSettings,
+} from './judgment-config.ts'
 
 interface ModelConfig {
   baseUrl: string
@@ -10,6 +18,8 @@ interface ModelConfig {
   thinking: ReasoningLevel
   agentThinking: ReasoningLevel
   reviewThinking: ReasoningLevel
+  reviewModel: string
+  judgment: JudgmentSettings
   contextWindow: number
   maxOutputTokens: number
   researchDeadlineMs: number
@@ -30,32 +40,47 @@ export class ModelConfigError extends Error {}
 export const DEFAULT_MAX_OUTPUT_TOKENS = 384_000
 
 // 与 CLI 共用 .env 的回退规则。只读已有文件，不把网页修改写回 .env。
-export function readModelEnvironment(root: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function readModelEnvironment(
+  root: string,
+  inherited: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const env = { ...inherited }
   const file = path.join(root, '.env')
-  if (fs.existsSync(file)) for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
-    if (match && !(match[1] in env)) env[match[1]] = match[2].replace(/^["']|["']$/g, '')
-  }
+  if (fs.existsSync(file))
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
+      if (match && !(match[1] in env)) env[match[1]] = match[2].replace(/^["']|["']$/g, '')
+    }
   return env
 }
 
 function baseUrl(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > 2048) throw new ModelConfigError('请填写模型服务的基础地址')
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048)
+    throw new ModelConfigError('请填写模型服务的基础地址')
   let url: URL
-  try { url = new URL(value.trim()) } catch { throw new ModelConfigError('服务地址必须是完整的 http:// 或 https:// 地址') }
+  try {
+    url = new URL(value.trim())
+  } catch {
+    throw new ModelConfigError('服务地址必须是完整的 http:// 或 https:// 地址')
+  }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new ModelConfigError('服务地址仅支持 HTTP/HTTPS，不能包含账号、密码、查询参数或片段')
   }
-  if (/\/chat\/completions\/?$/.test(url.pathname)) throw new ModelConfigError('请填写基础地址，不要包含 /chat/completions')
+  if (/\/chat\/completions\/?$/.test(url.pathname))
+    throw new ModelConfigError('请填写基础地址，不要包含 /chat/completions')
   return url.toString().replace(/\/+$/, '')
 }
 
 function optionalSearchUrl(value: unknown): string {
   if (value === undefined || value === null || value === '') return ''
-  if (typeof value !== 'string' || !value.trim() || value.length > 2048) throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址')
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048)
+    throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址')
   let url: URL
-  try { url = new URL(value.trim()) } catch { throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址') }
+  try {
+    url = new URL(value.trim())
+  } catch {
+    throw new ModelConfigError('搜索服务地址必须是完整的 http:// 或 https:// 地址')
+  }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new ModelConfigError('搜索服务地址仅支持 HTTP/HTTPS，不能包含账号、密码、查询参数或片段')
   }
@@ -64,40 +89,93 @@ function optionalSearchUrl(value: unknown): string {
 
 function validate(value: Record<string, unknown>): ModelConfig {
   const url = baseUrl(value.baseUrl)
-  if (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256 || /[\s\x00-\x1f\x7f]/.test(value.model.trim())) {
+  if (
+    typeof value.model !== 'string' ||
+    !value.model.trim() ||
+    value.model.length > 256 ||
+    /[\s\x00-\x1f\x7f]/.test(value.model.trim())
+  ) {
     throw new ModelConfigError('模型名称不能为空，且不能包含空白或控制字符（最长 256 字符）')
   }
-  if (typeof value.apiKey !== 'string' || !value.apiKey.trim() || value.apiKey.length > 8192 || /[\s\x00-\x1f\x7f]/.test(value.apiKey.trim())) {
+  if (
+    typeof value.apiKey !== 'string' ||
+    !value.apiKey.trim() ||
+    value.apiKey.length > 8192 ||
+    /[\s\x00-\x1f\x7f]/.test(value.apiKey.trim())
+  ) {
     throw new ModelConfigError('请填写有效的 API Key')
   }
   let thinking: ReasoningLevel
-  try { thinking = parseReasoning(value.thinking ?? 'default') } catch (error) {
+  try {
+    thinking = parseReasoning(value.thinking ?? 'default')
+  } catch (error) {
     throw new ModelConfigError(error instanceof Error ? error.message : '推理档位不合法')
   }
   const contextWindow = value.contextWindow ?? 262144
   let agentThinking: ReasoningLevel, reviewThinking: ReasoningLevel
-  try { agentThinking = parseReasoning(value.agentThinking ?? 'low'); reviewThinking = parseReasoning(value.reviewThinking ?? 'low') }
-  catch { throw new ModelConfigError('教学或核验推理档位不合法') }
-  if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow < 1024 || contextWindow > 2_000_000) {
+  try {
+    agentThinking = parseReasoning(value.agentThinking ?? 'low')
+    reviewThinking = parseReasoning(value.reviewThinking ?? 'low')
+  } catch {
+    throw new ModelConfigError('教学或核验推理档位不合法')
+  }
+  if (
+    typeof contextWindow !== 'number' ||
+    !Number.isSafeInteger(contextWindow) ||
+    contextWindow < 1024 ||
+    contextWindow > 2_000_000
+  ) {
     throw new ModelConfigError('上下文长度必须是 1024–2000000 之间的整数')
   }
   const maxOutputTokens = value.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
-  if (typeof maxOutputTokens !== 'number' || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 256 || maxOutputTokens > 2_000_000) {
+  if (
+    typeof maxOutputTokens !== 'number' ||
+    !Number.isSafeInteger(maxOutputTokens) ||
+    maxOutputTokens < 256 ||
+    maxOutputTokens > 2_000_000
+  ) {
     throw new ModelConfigError('最大输出 token 必须是 256–2000000 之间的整数')
   }
   const researchDeadlineMs = value.researchDeadlineMs ?? 480_000
-  if (typeof researchDeadlineMs !== 'number' || !Number.isSafeInteger(researchDeadlineMs) || researchDeadlineMs < 60_000 || researchDeadlineMs > 1_800_000) {
+  if (
+    typeof researchDeadlineMs !== 'number' ||
+    !Number.isSafeInteger(researchDeadlineMs) ||
+    researchDeadlineMs < 60_000 ||
+    researchDeadlineMs > 1_800_000
+  ) {
     throw new ModelConfigError('教研回合时限必须是 1–30 分钟（60000–1800000 毫秒）')
   }
   const requestsPerMinute = value.requestsPerMinute ?? 8
-  if (typeof requestsPerMinute !== 'number' || !Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 600) {
+  if (
+    typeof requestsPerMinute !== 'number' ||
+    !Number.isSafeInteger(requestsPerMinute) ||
+    requestsPerMinute < 1 ||
+    requestsPerMinute > 600
+  ) {
     throw new ModelConfigError('每分钟请求数必须是 1–600 之间的整数')
   }
   const searchMcpUrl = optionalSearchUrl(value.searchMcpUrl)
   const searchToken = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
-  if (searchToken.length > 8192 || /[\s\x00-\x1f\x7f]/.test(searchToken)) throw new ModelConfigError('搜索服务 Token 不合法')
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking, agentThinking, reviewThinking, contextWindow, maxOutputTokens, researchDeadlineMs, requestsPerMinute,
-    searchMcpUrl, searchToken }
+  if (searchToken.length > 8192 || /[\s\x00-\x1f\x7f]/.test(searchToken))
+    throw new ModelConfigError('搜索服务 Token 不合法')
+  const reviewModel = optionalModelName(value.reviewModel)
+  const judgment = validateJudgmentSettings(value.judgment)
+  return {
+    baseUrl: url,
+    model: value.model.trim(),
+    apiKey: value.apiKey.trim(),
+    thinking,
+    agentThinking,
+    reviewThinking,
+    reviewModel,
+    judgment,
+    contextWindow,
+    maxOutputTokens,
+    researchDeadlineMs,
+    requestsPerMinute,
+    searchMcpUrl,
+    searchToken,
+  }
 }
 
 export class ModelConfigStore {
@@ -108,17 +186,26 @@ export class ModelConfigStore {
 
   constructor(root: string, options: { file?: string; env?: NodeJS.ProcessEnv } = {}) {
     this.env = readModelEnvironment(root, options.env)
-    this.file = path.resolve(options.file ?? this.env.TUTOR_MODEL_CONFIG_FILE ?? path.join(root, 'data/model-config.json'))
-    this.rateLimitFile = path.resolve(this.env.TUTOR_MODEL_RATE_LIMIT_FILE ?? path.join(root, 'data/model-rate-limits.sqlite'))
+    this.file = path.resolve(
+      options.file ?? this.env.TUTOR_MODEL_CONFIG_FILE ?? path.join(root, 'data/model-config.json'),
+    )
+    this.rateLimitFile = path.resolve(
+      this.env.TUTOR_MODEL_RATE_LIMIT_FILE ?? path.join(root, 'data/model-rate-limits.sqlite'),
+    )
     this.defaults = {
       baseUrl: (this.env.TUTOR_LLM_BASE_URL ?? '').replace(/\/+$/, ''),
-      model: this.env.TUTOR_LLM_MODEL ?? '', apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
+      model: this.env.TUTOR_LLM_MODEL ?? '',
+      apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
       thinking: normalizeReasoning(this.env.TUTOR_LLM_THINKING),
       agentThinking: normalizeReasoning(this.env.TUTOR_AGENT_THINKING ?? 'low'),
       reviewThinking: normalizeReasoning(this.env.TUTOR_REVIEW_THINKING ?? 'low'),
+      reviewModel: optionalModelName(this.env.TUTOR_REVIEW_MODEL),
+      judgment: judgmentSettingsFromEnvironment(this.env),
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
       maxOutputTokens: Number(this.env.TUTOR_LLM_MAX_OUTPUT_TOKENS || DEFAULT_MAX_OUTPUT_TOKENS),
-      researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
+      researchDeadlineMs: Number(
+        this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000,
+      ),
       requestsPerMinute: Number(this.env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
       searchMcpUrl: (this.env.TUTOR_MCP_SEARCH_URL ?? '').replace(/\/+$/, ''),
       searchToken: this.env.TUTOR_MCP_SEARCH_TOKEN ?? '',
@@ -127,21 +214,33 @@ export class ModelConfigStore {
 
   private read(): { config: ModelConfig; source: 'saved' | 'environment'; updatedAt: string | null } {
     let text: string
-    try { text = fs.readFileSync(this.file, 'utf8') } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { config: this.defaults, source: 'environment', updatedAt: null }
+    try {
+      text = fs.readFileSync(this.file, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return { config: this.defaults, source: 'environment', updatedAt: null }
       throw new ModelConfigError('无法读取已保存的模型设置，请检查本机文件权限')
     }
     try {
       const saved = JSON.parse(text) as SavedModelConfig & { searchMcpUrl?: string; searchToken?: string }
-      if (!saved || saved.version !== 1 || typeof saved.updatedAt !== 'string') throw new Error('invalid version')
+      if (!saved || saved.version !== 1 || typeof saved.updatedAt !== 'string')
+        throw new Error('invalid version')
       // 旧版保存文件没有搜索字段；空值视为"未在网页配置"，回填环境变量里的搜索配置，
       // 让网页始终显示实际生效的搜索服务（清空网页字段即回退 .env）。
-      return { config: validate({ ...saved,
-        maxOutputTokens: saved.maxOutputTokens ?? this.defaults.maxOutputTokens,
-        agentThinking: saved.agentThinking ?? this.defaults.agentThinking,
-        reviewThinking: saved.reviewThinking ?? this.defaults.reviewThinking,
-        searchMcpUrl: saved.searchMcpUrl || this.defaults.searchMcpUrl,
-        searchToken: saved.searchToken || this.defaults.searchToken }), source: 'saved', updatedAt: saved.updatedAt }
+      return {
+        config: validate({
+          ...saved,
+          maxOutputTokens: saved.maxOutputTokens ?? this.defaults.maxOutputTokens,
+          agentThinking: saved.agentThinking ?? this.defaults.agentThinking,
+          reviewThinking: saved.reviewThinking ?? this.defaults.reviewThinking,
+          reviewModel: saved.reviewModel ?? this.defaults.reviewModel,
+          judgment: saved.judgment ?? this.defaults.judgment,
+          searchMcpUrl: saved.searchMcpUrl || this.defaults.searchMcpUrl,
+          searchToken: saved.searchToken || this.defaults.searchToken,
+        }),
+        source: 'saved',
+        updatedAt: saved.updatedAt,
+      }
     } catch {
       // JSON/YAML 解析错误可能带原文，不把含密钥的配置片段返回给页面。
       throw new ModelConfigError('已保存的模型设置损坏，未回退到其他渠道；请检查本机配置文件')
@@ -150,36 +249,93 @@ export class ModelConfigStore {
 
   publicConfig() {
     const { config, source, updatedAt } = this.read()
-    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, agentThinking: config.agentThinking, reviewThinking: config.reviewThinking,
-      contextWindow: config.contextWindow, maxOutputTokens: config.maxOutputTokens,
-      researchDeadlineMs: config.researchDeadlineMs, requestsPerMinute: config.requestsPerMinute,
-      apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt,
-      searchMcpUrl: config.searchMcpUrl, searchTokenSet: Boolean(config.searchToken), searchConfigured: Boolean(config.searchMcpUrl && config.searchToken) }
+    return {
+      baseUrl: config.baseUrl,
+      model: config.model,
+      thinking: config.thinking,
+      agentThinking: config.agentThinking,
+      reviewThinking: config.reviewThinking,
+      reviewModel: config.reviewModel,
+      judgment: {
+        provider: config.judgment.provider,
+        baseUrl: config.judgment.baseUrl,
+        model: config.judgment.model,
+        minimumConfidence: config.judgment.minimumConfidence,
+        timeoutMs: config.judgment.timeoutMs,
+        requestsPerMinute: config.judgment.requestsPerMinute,
+        apiKeySet: Boolean(config.judgment.apiKey),
+        configured: Boolean(config.judgment.apiKey),
+      },
+      contextWindow: config.contextWindow,
+      maxOutputTokens: config.maxOutputTokens,
+      researchDeadlineMs: config.researchDeadlineMs,
+      requestsPerMinute: config.requestsPerMinute,
+      apiKeySet: Boolean(config.apiKey),
+      configured: Boolean(config.baseUrl && config.model && config.apiKey),
+      source,
+      updatedAt,
+      searchMcpUrl: config.searchMcpUrl,
+      searchTokenSet: Boolean(config.searchToken),
+      searchConfigured: Boolean(config.searchMcpUrl && config.searchToken),
+    }
   }
 
   // 将网页表单（含留空沿用密钥/搜索 Token 的规则）解析为可用的临时配置；不写文件，供保存与连接测试共用。
   draft(input: unknown): ModelConfig {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ModelConfigError('模型设置必须是一个对象')
+    if (!input || typeof input !== 'object' || Array.isArray(input))
+      throw new ModelConfigError('模型设置必须是一个对象')
     const value = input as Record<string, unknown>
-    if (value.apiKey !== undefined && typeof value.apiKey !== 'string') throw new ModelConfigError('API Key 必须是文本')
+    if (value.apiKey !== undefined && typeof value.apiKey !== 'string')
+      throw new ModelConfigError('API Key 必须是文本')
     const previous = this.read().config
     const nextUrl = baseUrl(value.baseUrl)
     const replacement = typeof value.apiKey === 'string' ? value.apiKey.trim() : ''
     let previousUrl = previous.baseUrl
-    try { if (previousUrl) previousUrl = baseUrl(previousUrl) } catch { /* 旧环境地址可由网页修正 */ }
-    if (!replacement && nextUrl !== previousUrl) throw new ModelConfigError('更换服务地址时，请填写新渠道的 API Key；不会沿用旧渠道的密钥')
+    try {
+      if (previousUrl) previousUrl = baseUrl(previousUrl)
+    } catch {
+      /* 旧环境地址可由网页修正 */
+    }
+    if (!replacement && nextUrl !== previousUrl)
+      throw new ModelConfigError('更换服务地址时，请填写新渠道的 API Key；不会沿用旧渠道的密钥')
     // 搜索服务同样处理换址：留空 Token 只在地址未变时沿用旧令牌。
-    const nextSearchUrl = value.searchMcpUrl === undefined ? previous.searchMcpUrl : optionalSearchUrl(value.searchMcpUrl)
+    const nextSearchUrl =
+      value.searchMcpUrl === undefined ? previous.searchMcpUrl : optionalSearchUrl(value.searchMcpUrl)
     const searchTokenInput = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
     if (!searchTokenInput && nextSearchUrl && nextSearchUrl !== previous.searchMcpUrl) {
       throw new ModelConfigError('更换搜索服务地址时，请填写新服务的 Token；不会沿用旧服务的令牌')
     }
-    const searchToken = searchTokenInput || (nextSearchUrl === previous.searchMcpUrl ? previous.searchToken : '')
-    return validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
-      searchMcpUrl: nextSearchUrl, searchToken,
+    const searchToken =
+      searchTokenInput || (nextSearchUrl === previous.searchMcpUrl ? previous.searchToken : '')
+    if (
+      value.judgment !== undefined &&
+      (!value.judgment || typeof value.judgment !== 'object' || Array.isArray(value.judgment))
+    )
+      throw new ModelConfigError('判断设置必须是一个对象')
+    const judgeInput = value.judgment as Partial<JudgmentSettings> | undefined
+    const judgment = { ...previous.judgment, ...judgeInput }
+    const nextJudgeUrl = judgmentBaseUrl(judgment.baseUrl)
+    const judgeReplacement = typeof judgeInput?.apiKey === 'string' ? judgeInput.apiKey.trim() : ''
+    if (judgeInput?.apiKey !== undefined && typeof judgeInput.apiKey !== 'string')
+      throw new ModelConfigError('快速判断 API Key 必须是文本')
+    if (!judgeReplacement && nextJudgeUrl !== previous.judgment.baseUrl && judgment.provider === 'typesafe')
+      throw new ModelConfigError('更换判断服务地址时，请填写新服务的 API Key；不会沿用旧服务的密钥')
+    judgment.baseUrl = nextJudgeUrl
+    judgment.apiKey =
+      judgeReplacement || (nextJudgeUrl === previous.judgment.baseUrl ? previous.judgment.apiKey : '')
+    validateJudgmentSettings(judgment, true)
+    return validate({
+      ...value,
+      baseUrl: nextUrl,
+      apiKey: replacement || previous.apiKey,
+      reviewModel: value.reviewModel ?? previous.reviewModel,
+      judgment,
+      searchMcpUrl: nextSearchUrl,
+      searchToken,
       maxOutputTokens: value.maxOutputTokens ?? previous.maxOutputTokens,
       researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs,
-      requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute })
+      requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute,
+    })
   }
 
   save(input: unknown) {
@@ -193,7 +349,11 @@ export class ModelConfigStore {
     } catch {
       throw new ModelConfigError('模型设置保存失败，原配置已保留；请检查本机文件权限')
     } finally {
-      try { fs.unlinkSync(temporary) } catch { /* 已原子替换或未创建 */ }
+      try {
+        fs.unlinkSync(temporary)
+      } catch {
+        /* 已原子替换或未创建 */
+      }
     }
     return this.publicConfig()
   }
@@ -201,15 +361,30 @@ export class ModelConfigStore {
   // 每次调用重新读取文件：模型渠道与教研搜索在运行中按回合热更新（见 ChatRuntime.resolveModel / resolveSearch）。
   environment(): NodeJS.ProcessEnv {
     const current = this.read().config
-    if (!current.baseUrl || !current.model || !current.apiKey) throw new ModelConfigError('请先在“模型设置”中填写服务地址、模型名称和 API Key')
+    if (!current.baseUrl || !current.model || !current.apiKey)
+      throw new ModelConfigError('请先在“模型设置”中填写服务地址、模型名称和 API Key')
     const config = validate({ ...current })
-    return { ...this.env, TUTOR_LLM_BASE_URL: config.baseUrl, TUTOR_LLM_MODEL: config.model,
-      TUTOR_LLM_API_KEY: config.apiKey, TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
-      TUTOR_AGENT_THINKING: config.agentThinking, TUTOR_REVIEW_THINKING: config.reviewThinking,
-      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_LLM_MAX_OUTPUT_TOKENS: String(config.maxOutputTokens),
+    validateJudgmentSettings(config.judgment, true)
+    return {
+      ...this.env,
+      TUTOR_LLM_BASE_URL: config.baseUrl,
+      TUTOR_LLM_MODEL: config.model,
+      TUTOR_LLM_API_KEY: config.apiKey,
+      TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
+      TUTOR_AGENT_THINKING: config.agentThinking,
+      TUTOR_REVIEW_THINKING: config.reviewThinking,
+      TUTOR_REVIEW_MODEL: config.reviewModel,
+      ...judgmentEnvironment(config.judgment),
+      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow),
+      TUTOR_LLM_MAX_OUTPUT_TOKENS: String(config.maxOutputTokens),
       TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs),
-      TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute), TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile, TUTOR_MODEL_CONFIG_RESOLVED: '1',
+      TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute),
+      TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile,
+      TUTOR_MODEL_CONFIG_RESOLVED: '1',
       // 网页配置过搜索服务时覆盖环境变量；清空后回退 .env/环境变量的搜索配置。
-      ...(config.searchMcpUrl && config.searchToken ? { TUTOR_MCP_SEARCH_URL: config.searchMcpUrl, TUTOR_MCP_SEARCH_TOKEN: config.searchToken } : {}) }
+      ...(config.searchMcpUrl && config.searchToken
+        ? { TUTOR_MCP_SEARCH_URL: config.searchMcpUrl, TUTOR_MCP_SEARCH_TOKEN: config.searchToken }
+        : {}),
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { evaluateRational } from '../core/rational.ts'
 import { gradeObjective } from '../domain/evidence.ts'
-import { digest, object, text } from '../domain/validation.ts'
+import { digest, object, text, strings } from '../domain/validation.ts'
 import {
   domainAssert,
   DomainError,
@@ -15,8 +15,9 @@ import type { AgentChat, ChatRuntime, CreateChatOptions } from '../runtime/chat.
 import { OutputLimitError } from '../runtime/chat.ts'
 import { normalizeReasoning } from '../core/reasoning.ts'
 import { CourseRepository } from '../application/repository.ts'
+import { JudgmentService, type JudgmentCheck, type JudgmentEvaluation } from './judgment-service.ts'
 
-export const REVIEW_POLICY = 'tutor-evidence-2.1'
+export const REVIEW_POLICY = 'tutor-evidence-2.2'
 
 export interface ModelServiceOptions {
   progress?: (message: string) => void
@@ -38,21 +39,31 @@ export function parseJson(reply: string): unknown {
 
 export class ModelService {
   readonly runtime: ChatRuntime
+  readonly judgments: JudgmentService
   private readonly options: ModelServiceOptions
   constructor(runtime: ChatRuntime, options: ModelServiceOptions = {}) {
     this.runtime = runtime
     this.options = options
+    this.judgments = new JudgmentService(runtime, {
+      progress: options.progress,
+      onCreated: options.onChatCreated,
+    })
   }
 
   error(error: unknown): string {
     let message = error instanceof Error ? error.message : String(error)
-    const secrets = [this.runtime.env.TUTOR_LLM_API_KEY, this.runtime.env.TUTOR_MCP_SEARCH_TOKEN]
+    const secrets = [
+      this.runtime.env.TUTOR_LLM_API_KEY,
+      this.runtime.env.TUTOR_MCP_SEARCH_TOKEN,
+      this.runtime.env.TUTOR_JUDGMENT_API_KEY,
+    ]
     try {
       secrets.push(this.runtime.modelNow().apiKey, this.runtime.searchNow()?.token)
     } catch {
       /* 配置错误使用已知值 */
     }
-    for (const secret of secrets) if (secret && secret.length > 4) message = message.replaceAll(secret, '[已隐藏]')
+    for (const secret of secrets)
+      if (secret && secret.length > 4) message = message.replaceAll(secret, '[已隐藏]')
     return message.slice(0, 2000)
   }
 
@@ -112,7 +123,10 @@ export class ModelService {
             attempt === 0
           ) {
             request =
-              '输出结构不合法：' + error.message + '。请修正并只输出完整 JSON。\n原始任务：' + JSON.stringify(input)
+              '输出结构不合法：' +
+              error.message +
+              '。请修正并只输出完整 JSON。\n原始任务：' +
+              JSON.stringify(input)
             continue
           }
           throw error
@@ -134,6 +148,7 @@ export interface ReviewRecord {
   issues: string[]
   at: string
   verdict?: unknown
+  judgment?: JudgmentEvaluation
 }
 
 const REVIEWER = [
@@ -159,6 +174,48 @@ const CURRICULUM_CONTRACT = [
   '确定越界或错误仍返回 fail，并给出具体依据；不能为了凑验收项增加用户排除的内容。',
 ].join('\n')
 
+function reviewChecks(kind: ReviewRecord['kind'], content: unknown): JudgmentCheck[] {
+  const raw = object(content)
+  if (kind === 'message' && raw.purpose === 'profile_update') {
+    const background = text(raw.background, '自述背景', 4000, true)
+    const preferences = strings(raw.preferences, '偏好', 12)
+    return [
+      {
+        id: 'profile_background',
+        instructions:
+          '候选 background 只能归纳 original 中学员明确自述的信息，' +
+          '不能把推测或未验证能力当成自述。背景为空则满足。待核对的背景：' +
+          background,
+        failure: '自述背景未得到引用的学员原话支持，请删除推断或改为待验证假设。',
+      },
+      ...preferences.map((preference, index) => ({
+        id: 'profile_preference_' + index,
+        instructions: '仅核对这一条偏好是否得到 original 中学员原话的明确支持：' + preference,
+        failure: '偏好缺少原话依据：' + preference + '。请删除推断或改为待验证假设。',
+      })),
+    ]
+  }
+  const checks: JudgmentCheck[] = [
+    {
+      id: 'scope',
+      instructions:
+        '候选内容或技能符合 context.goal 的用户目标、范围及明确排除项。' +
+        '单次活动只需覆盖声明的技能，不要求覆盖整个目标；技能图无需包含题面、代码或测试接口。' +
+        '相关前置的临时诊断允许存在，但不能扩大学习者长期目标。只判断范围，不判断事实正确性。',
+      failure: '候选内容与用户目标或明确排除项不一致，请将内容修订到已约定范围内。',
+    },
+  ]
+  if (kind === 'activity' && ['assessment', 'transfer'].includes(raw.kind as string))
+    checks.push({
+      id: 'independent_question',
+      instructions:
+        '独立测评或迁移活动的 body 没有泄露本次 questions 的具体答案或解法。' +
+        '内部参考 answer 字段本身不会展示给学员，不算泄露；题干必要条件不算提示。',
+      failure: '独立任务正文泄露了本题答案或解法，请保留题干必要条件并删除提前给出的答案。',
+    })
+  return checks
+}
+
 export class ContentValidation {
   private readonly repository: CourseRepository
   private readonly model: ModelService
@@ -182,13 +239,22 @@ export class ContentValidation {
   }
 
   async review(state: CourseState, kind: ReviewRecord['kind'], content: unknown): Promise<ReviewRecord> {
+    const checks = reviewChecks(kind, content)
+    const reviewer = this.model.runtime.modelNow()
     const input = {
       policy: REVIEW_POLICY,
       contract: digest(REVIEWER + CURRICULUM_CONTRACT),
       context: this.context(state),
       kind,
       content,
-      ...(kind === 'message' ? { learningEvidence: state.evidence.slice(-12), judgments: state.judgments } : {}),
+      judgmentPolicy: this.model.judgments.policy(),
+      judgmentContract: digest(checks),
+      reviewerModel: this.model.runtime.env.TUTOR_REVIEW_MODEL || reviewer.model,
+      reviewerChannel: reviewer.baseUrl,
+      reviewerThinking: normalizeReasoning(this.model.runtime.env.TUTOR_REVIEW_THINKING ?? 'low'),
+      ...(kind === 'message'
+        ? { learningEvidence: state.evidence.slice(-12), judgments: state.judgments }
+        : {}),
     }
     const key = digest(input)
     const cached = this.repository.readTask<ReviewRecord>(state.id, key)
@@ -205,39 +271,61 @@ export class ContentValidation {
     }
     this.repository.saveTask(state.id, key, record)
     try {
-      const verdict = await this.model.json(
-        '核对内容',
-        REVIEWER + (kind === 'curriculum' ? '\n' + CURRICULUM_CONTRACT : ''),
-        input,
-        (value) => {
-          const result = object(value, '审查结果')
-          for (const field of ['scope', 'correctness'])
-            domainAssert(
-              ['pass', 'fail', 'uncertain'].includes(result[field] as string),
-              'INVALID_MODEL_OUTPUT',
-              '审查结论缺少独立的范围或正确性判定',
-            )
-          domainAssert(
-            Array.isArray(result.issues) && result.issues.every((item) => typeof item === 'string'),
-            'INVALID_MODEL_OUTPUT',
-            '审查问题列表不合法',
-          )
-          domainAssert(Array.isArray(result.arithmetic), 'INVALID_MODEL_OUTPUT', '审查需返回算式列表')
-          for (const value of result.arithmetic) {
-            const calculation = object(value, '算式')
-            const expression = text(calculation.expression, '算式', 256),
-              declared = text(calculation.result, '结果', 256)
-            domainAssert(
-              evaluateRational(expression) === evaluateRational(declared),
-              'CONTENT_REJECTED',
-              '数值复算与候选结果不一致：' + expression,
-            )
+      const preliminary = await this.model.judgments.evaluate(input, checks)
+      record.judgment = preliminary
+      const failed = checks.filter((check) => preliminary.failedIds?.includes(check.id))
+      const profile = kind === 'message' && object(content).purpose === 'profile_update'
+      const verdict = failed.length
+        ? {
+            scope: 'fail',
+            correctness: 'uncertain',
+            issues: failed.map((check) => check.failure),
+            arithmetic: [],
           }
-          return result
-        },
-      )
+        : preliminary.route === 'typesafe' && profile
+          ? {
+              scope: 'pass',
+              correctness: 'pass',
+              issues: [],
+              arithmetic: [],
+            }
+          : await this.model.json(
+              '核对内容',
+              REVIEWER + (kind === 'curriculum' ? '\n' + CURRICULUM_CONTRACT : ''),
+              input,
+              (value) => {
+                const result = object(value, '审查结果')
+                for (const field of ['scope', 'correctness'])
+                  domainAssert(
+                    ['pass', 'fail', 'uncertain'].includes(result[field] as string),
+                    'INVALID_MODEL_OUTPUT',
+                    '审查结论缺少独立的范围或正确性判定',
+                  )
+                domainAssert(
+                  Array.isArray(result.issues) && result.issues.every((item) => typeof item === 'string'),
+                  'INVALID_MODEL_OUTPUT',
+                  '审查问题列表不合法',
+                )
+                domainAssert(Array.isArray(result.arithmetic), 'INVALID_MODEL_OUTPUT', '审查需返回算式列表')
+                for (const value of result.arithmetic) {
+                  const calculation = object(value, '算式')
+                  const expression = text(calculation.expression, '算式', 256),
+                    declared = text(calculation.result, '结果', 256)
+                  domainAssert(
+                    evaluateRational(expression) === evaluateRational(declared),
+                    'CONTENT_REJECTED',
+                    '数值复算与候选结果不一致：' + expression,
+                  )
+                }
+                return result
+              },
+            )
       record.verdict = verdict
-      if (verdict.scope !== 'pass' || verdict.correctness !== 'pass' || (verdict.issues as string[]).length > 0) {
+      if (
+        verdict.scope !== 'pass' ||
+        verdict.correctness !== 'pass' ||
+        (verdict.issues as string[]).length > 0
+      ) {
         record.status = 'rejected'
         record.issues = (verdict.issues as string[]).length
           ? (verdict.issues as string[])
@@ -251,7 +339,8 @@ export class ContentValidation {
       return record
     } catch (error) {
       if (record.status !== 'rejected') {
-        record.status = error instanceof DomainError && error.code === 'CONTENT_REJECTED' ? 'rejected' : 'error'
+        record.status =
+          error instanceof DomainError && error.code === 'CONTENT_REJECTED' ? 'rejected' : 'error'
         record.issues = [error instanceof Error ? error.message : String(error)]
         this.repository.saveTask(state.id, key, record)
       }
@@ -264,10 +353,15 @@ export class ContentValidation {
   }
 
   async activity(state: CourseState, content: ActivityContent): Promise<void> {
-    const objectives = content.questions.filter((question) => question.type === 'choice' || question.type === 'numeric')
+    const objectives = content.questions.filter(
+      (question) => question.type === 'choice' || question.type === 'numeric',
+    )
     if (objectives.length) {
       const solverKey = digest({ policy: REVIEW_POLICY, kind: 'blind', questions: objectives })
-      const saved = this.repository.readTask<{ answers: { id: string; answer: string }[] }>(state.id, solverKey)
+      const saved = this.repository.readTask<{ answers: { id: string; answer: string }[] }>(
+        state.id,
+        solverKey,
+      )
       const solutions =
         saved ??
         (await this.model.json(
@@ -284,7 +378,11 @@ export class ContentValidation {
             )
             const answers = result.answers.map((item) => {
               const answer = object(item, '独立答案')
-              domainAssert(answer.status === 'solved', 'CONTENT_REJECTED', '题目无法被独立求解，请补齐题干条件')
+              domainAssert(
+                answer.status === 'solved',
+                'CONTENT_REJECTED',
+                '题目无法被独立求解，请补齐题干条件',
+              )
               return { id: text(answer.id, '题号', 96), answer: text(answer.answer, '独立答案', 1000) }
             })
             domainAssert(

@@ -1,11 +1,13 @@
 import { it, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import fs from 'node:fs'
 import { createTutorServer } from '../src/server/http.ts'
-import { TutorSystem } from '../src/application/tutor-system.ts'
+import { TutorSystem, type TutorSystemOptions } from '../src/application/tutor-system.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply } from './fixtures/tutor.ts'
+import { judgmentFetch } from './fixtures/judgment.ts'
 
-async function server(t: TestContext) {
+async function server(t: TestContext, extra: Partial<TutorSystemOptions> = {}) {
   const fixture = systemFixture(
     t,
     scriptedTransport([
@@ -14,7 +16,8 @@ async function server(t: TestContext) {
       toolReply('ask_learner', { question: '需要继续吗？', reason: '等待用户下一步' }),
     ]),
   )
-  const app = createTutorServer(fixture.options)
+  const options = { ...fixture.options, ...extra, env: { ...fixture.options.env, ...extra.env } }
+  const app = createTutorServer(options)
   app.server.listen(0, '127.0.0.1')
   await once(app.server, 'listening')
   const port = (app.server.address() as { port: number }).port
@@ -31,7 +34,7 @@ async function server(t: TestContext) {
     })
     return { status: response.status, value: await response.json() }
   }
-  return { app, base, request, options: fixture.options }
+  return { app, base, request, options }
 }
 
 it('新 API 从空白目标开始，创建、agent 教学、评分和回放形成闭环', async (t) => {
@@ -198,4 +201,76 @@ it('设置接口保留密钥而不回传，新的推理配置能保存', async (
   assert.equal(saved.value.config.reviewThinking, 'high')
   assert.equal(saved.value.config.apiKeySet, true)
   assert.equal(JSON.stringify(saved.value).includes('fixture-key'), false)
+})
+
+it('快速判断连接测试不保存或启用配置，不发送课程数据，并计入每日预算', async (t) => {
+  let calls = 0
+  const { app, request } = await server(t, {
+    env: { TUTOR_DAILY_REQUEST_LIMIT: '1' },
+    judgmentFetch: judgmentFetch((input) => {
+      calls++
+      assert.equal(JSON.stringify(input).includes('私密学习记录'), false)
+    }),
+  })
+  await request('/api/courses', { id: 'alpha', goal: '私密学习记录：掌握整数加法' })
+  const config = (await request('/api/model-config')).value.config
+  const input = {
+    ...config,
+    judgment: { ...config.judgment, provider: 'typesafe', apiKey: 'private-fast-key' },
+  }
+  const tested = await request('/api/judgment-test', input)
+  assert.equal(tested.status, 200)
+  assert.equal(tested.value.provider, 'typesafe')
+  assert.equal(tested.value.model, 'jev-fixture-1')
+  assert.equal(tested.value.choice, 'pass')
+  assert.equal(JSON.stringify(tested.value).includes('private-fast-key'), false)
+  assert.equal(fs.existsSync(app.system.models.file), false)
+  assert.equal((await request('/api/model-config')).value.config.judgment.provider, 'llm')
+  const usage = app.system.usageLedger.read()
+  assert.equal(usage.length, 1)
+  assert.equal(usage[0].role, 'judge-connection-test')
+  assert.equal(usage[0].model, 'jev-fixture-1')
+  assert.equal(usage[0].unknown, false)
+  assert.equal((await request('/api/judgment-test', input)).status, 429)
+  assert.equal(calls, 1)
+})
+
+it('网页选择可以启用快速判断，再关闭时仅使用所选核验大模型', async (t) => {
+  let calls = 0
+  const { app, request } = await server(t, {
+    judgmentFetch: judgmentFetch(() => {
+      calls++
+    }),
+  })
+  const config = (await request('/api/model-config')).value.config
+  const enabled = await request('/api/model-config', {
+    ...config,
+    reviewModel: 'other-review-model',
+    judgment: { ...config.judgment, provider: 'typesafe', apiKey: 'private-fast-key' },
+  })
+  assert.equal(enabled.status, 200)
+  assert.equal(enabled.value.config.judgment.apiKeySet, true)
+  assert.equal(JSON.stringify(enabled.value).includes('private-fast-key'), false)
+  await request('/api/courses', { id: 'alpha', goal: '掌握整数加法' })
+  await request('/api/courses/alpha/turn', { requestId: 'enabled' })
+  await app.system.wait('alpha')
+  assert.equal(app.system.service.view('alpha').tutorError, null)
+  assert.equal(calls, 2)
+  const disabled = await request('/api/model-config', {
+    ...enabled.value.config,
+    judgment: { ...enabled.value.config.judgment, provider: 'llm' },
+  })
+  assert.equal(disabled.status, 200)
+  assert.equal(app.system.models.environment().TUTOR_JUDGMENT_PROVIDER, 'llm')
+  assert.equal(disabled.value.config.judgment.apiKeySet, true)
+  await request('/api/courses', { id: 'beta', goal: '掌握整数加法' })
+  await request('/api/courses/beta/turn', { requestId: 'disabled' })
+  await app.system.wait('beta')
+  assert.equal(app.system.service.view('beta').tutorError, null)
+  assert.equal(calls, 2)
+  assert.ok(
+    app.system.usageLedger
+      .read()
+      .some((entry) => entry.role === '核对内容' && entry.model === 'other-review-model'),
+  )
 })

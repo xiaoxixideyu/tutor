@@ -4,17 +4,26 @@ import { once } from 'node:events'
 import { createTutorServer } from '../src/server/http.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply } from './fixtures/tutor.ts'
 import { browser, hasChrome } from './fixtures/browser.ts'
+import { judgmentFetch } from './fixtures/judgment.ts'
 
 it('网页能创建目标、接受 agent 活动、选择答案并显示真实反馈', { skip: !hasChrome }, async (t) => {
   const content = activity()
   content.kind = 'diagnostic'
-  content.questions[0] = { ...content.questions[0], type: 'choice', answer: 'A', choices: ['5', '6', '7', '8'] }
+  content.questions[0] = {
+    ...content.questions[0],
+    type: 'choice',
+    answer: 'A',
+    choices: ['5', '6', '7', '8'],
+  }
   const fixture = systemFixture(
     t,
     scriptedTransport([
       toolReply('update_curriculum', { skills: [SKILL], reason: '先明确需要检验的能力' }),
       toolReply('present_activity', content),
-      toolReply('ask_learner', { question: '你希望继续还是先回顾一下？', reason: '根据刚才的作答决定下一步' }),
+      toolReply('ask_learner', {
+        question: '你希望继续还是先回顾一下？',
+        reason: '根据刚才的作答决定下一步',
+      }),
     ]),
   )
   const app = createTutorServer(fixture.options)
@@ -74,7 +83,9 @@ it('提交失败恢复控件，刷新与 SSE 重连不复制反馈', { skip: !ha
   await page.evaluate(
     'window.__fetch=window.fetch;window.fetch=(url,options)=>String(url).endsWith("/answer")?Promise.resolve(new Response(JSON.stringify({ok:false,error:{message:"测试临时失败"}}),{status:503,headers:{"content-type":"application/json"}})):window.__fetch(url,options);document.querySelector(".answer-box").value="我的完整解释";document.querySelector(".answer-box").dispatchEvent(new Event("input"));document.querySelector("#answer-form").requestSubmit()',
   )
-  await page.wait('document.querySelector(".question-error") && !document.querySelector(".submit-answer").disabled')
+  await page.wait(
+    'document.querySelector(".question-error") && !document.querySelector(".submit-answer").disabled',
+  )
   assert.equal(await page.evaluate('document.querySelector(".answer-box").value'), '我的完整解释')
   await page.evaluate('window.fetch=window.__fetch')
   await page.evaluate('document.querySelector("#answer-form").requestSubmit()')
@@ -87,7 +98,12 @@ it('提交失败恢复控件，刷新与 SSE 重连不复制反馈', { skip: !ha
 
 it('页面刷新后从服务端恢复未提交的多行草稿', { skip: !hasChrome }, async (t) => {
   const content = activity()
-  content.questions[0] = { ...content.questions[0], type: 'open', prompt: '解释合并过程', answer: '合并得到五个' }
+  content.questions[0] = {
+    ...content.questions[0],
+    type: 'open',
+    prompt: '解释合并过程',
+    answer: '合并得到五个',
+  }
   const fixture = systemFixture(t, scriptedTransport([toolReply('present_activity', content)]))
   fixture.system.service.create({ id: 'alpha', goal: '掌握整数加法' })
   fixture.system.service.updateCurriculum('alpha', { skills: [SKILL], reason: '近期目标' }, 'seed', 0)
@@ -112,5 +128,60 @@ it('页面刷新后从服务端恢复未提交的多行草稿', { skip: !hasChro
   await page.evaluate('sessionStorage.clear()')
   await page.command('Page.reload', {})
   await page.wait('document.querySelector(".answer-box")?.value === "第一行\\n第二行"')
-  assert.equal(app.system.repository.read('alpha').evidence.filter((item) => item.kind === 'answer').length, 0)
+  assert.equal(
+    app.system.repository.read('alpha').evidence.filter((item) => item.kind === 'answer').length,
+    0,
+  )
+})
+
+it('设置页能切换判断方式，连接测试不启用配置，保存后可再次关闭', { skip: !hasChrome }, async (t) => {
+  let calls = 0
+  const fixture = systemFixture(t, scriptedTransport([]))
+  const app = createTutorServer({
+    ...fixture.options,
+    judgmentFetch: judgmentFetch(() => {
+      calls++
+    }),
+  })
+  app.server.listen(0, '127.0.0.1')
+  await once(app.server, 'listening')
+  t.after(async () => {
+    app.server.closeAllConnections()
+    await app.close()
+  })
+  const page = await browser(
+    t,
+    'http://127.0.0.1:' + (app.server.address() as { port: number }).port + '/app.html',
+  )
+  await page.wait('!!document.querySelector("#top-settings")')
+  await page.evaluate('document.querySelector("#top-settings").click()')
+  await page.wait('document.querySelector(".settings-form fieldset")?.disabled === false')
+  assert.equal(await page.evaluate('document.querySelector("[name=judgmentProvider]").value'), 'llm')
+  assert.equal(await page.evaluate('document.querySelector(".typesafe-fields").hidden'), true)
+  await page.evaluate(
+    'document.querySelector(".judgment-settings").open=true;document.querySelector("[name=judgmentProvider]").value="typesafe";document.querySelector("[name=judgmentProvider]").dispatchEvent(new Event("change"))',
+  )
+  assert.equal(await page.evaluate('document.querySelector(".typesafe-fields").hidden'), false)
+  assert.equal(await page.evaluate('document.querySelector("[name=judgmentApiKey]").required'), true)
+  await page.evaluate(
+    'document.querySelector("[name=judgmentApiKey]").value="browser-fast-secret";document.querySelector("[name=reviewModel]").value="review-fixture";document.querySelector("[name=judgmentConfidence]").value="95.5";document.querySelector("[name=judgmentSeconds]").value="1.234";document.querySelector(".settings-judge-test").click()',
+  )
+  await page.wait('document.querySelector(".settings-status").textContent.includes("已连通")')
+  assert.equal(app.system.models.publicConfig().judgment.provider, 'llm')
+  await page.evaluate('document.querySelector(".settings-form").requestSubmit()')
+  await page.wait('document.querySelector(".settings-status").textContent.includes("已保存")')
+  assert.equal(app.system.models.publicConfig().judgment.provider, 'typesafe')
+  assert.equal(app.system.models.publicConfig().judgment.minimumConfidence, 0.955)
+  assert.equal(app.system.models.publicConfig().judgment.timeoutMs, 1234)
+  assert.equal(await page.evaluate('document.querySelector("[name=judgmentApiKey]").value'), '')
+  assert.equal(JSON.stringify(app.system.models.publicConfig()).includes('browser-fast-secret'), false)
+  await page.evaluate(
+    'document.querySelector("[name=judgmentProvider]").value="llm";document.querySelector("[name=judgmentProvider]").dispatchEvent(new Event("change"));document.querySelector(".settings-form").requestSubmit()',
+  )
+  await page.wait(
+    '(async()=>{const result=await fetch("/api/model-config").then(r=>r.json());return result.config.judgment.provider==="llm"})()',
+  )
+  assert.equal(app.system.models.environment().TUTOR_JUDGMENT_PROVIDER, 'llm')
+  assert.equal(await page.evaluate('document.querySelector(".typesafe-fields").hidden'), true)
+  assert.equal(calls, 1)
 })
