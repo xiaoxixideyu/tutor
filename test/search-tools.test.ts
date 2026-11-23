@@ -1,6 +1,8 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
-import { argumentMismatches, classifyToolError, coerceArguments, searchHeaders } from '../src/runtime/tools.ts'
+import http from 'node:http'
+import { once } from 'node:events'
+import { argumentMismatches, classifyToolError, coerceArguments, createResearchTools, searchHeaders } from '../src/runtime/tools.ts'
 
 // 取自 Tavily 代理的实际工具 schema 形状：弱模型常把布尔/数字写成字符串。
 const schema = {
@@ -84,6 +86,27 @@ it('区分参数错误与服务错误：参数错误可重试，服务错误才�
   // 密钥问题重试没有意义，单独归类
   assert.equal(classifyToolError("web_search_exa error (401): Invalid API key. Provide a valid key using 'Authorization: Bearer <key>'"), 'auth')
   assert.equal(classifyToolError('403 Forbidden'), 'auth')
+})
+
+it('MCP 建连超时会快速降级，不会把教研回合拖到 300s', async (t) => {
+  // 接受连接但永不响应，模拟搜索服务卡死。
+  const server = http.createServer((_req, _res) => {})
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => { server.closeAllConnections(); server.close() })
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const notices: string[] = []
+  const tools = createResearchTools(
+    { url: `http://127.0.0.1:${address.port}/mcp`, token: 'fixture-token' },
+    message => notices.push(message),
+    { timeoutMs: 50 },
+  )
+  const started = Date.now()
+  assert.deepEqual(await tools.definitions(), [])
+  assert.ok(Date.now() - started < 2_000, '建连超时应快速返回')
+  assert.match(notices.join('\n'), /连接失败/)
+  await tools.close()
 })
 
 it('Exa 用 x-api-key 认证，其他搜索服务只发 Bearer', () => {

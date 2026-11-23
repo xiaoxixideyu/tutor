@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { COURSE_ID_PATTERN } from './store.ts'
+import { COURSE_ID_PATTERN } from '../domain/validation.ts'
 
 const MALFORMED_LOCK_GRACE_MS = 30_000
 const DEFAULT_STALE_MS = 24 * 60 * 60_000
@@ -22,22 +22,32 @@ export interface CourseLock {
 
 export class CourseBusyError extends Error {
   constructor(courseId: string, detail?: string) {
-    super(`课程 "${courseId}" 正在被另一个进程/流程使用${detail ? `（${detail}）` : ''}；请先结束该流程，避免状态互相覆盖`)
+    super(
+      `课程 "${courseId}" 正在被另一个进程/流程使用${detail ? `（${detail}）` : ''}；请先结束该流程，避免状态互相覆盖`,
+    )
     this.name = 'CourseBusyError'
   }
 }
 
-function lockFile(root: string, courseId: string): string {
-  return path.join(path.resolve(root), '.locks', `${courseId}.lock`)
+function lockFile(root: string, courseId: string, namespace: '.locks' | '.runs'): string {
+  return path.join(path.resolve(root), namespace, `${courseId}.lock`)
 }
 
 function readLock(file: string): LockInfo | undefined {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<LockInfo>
-    if (typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0
-      || typeof value.hostname !== 'string' || !value.hostname
-      || typeof value.startedAt !== 'string' || !value.startedAt
-      || typeof value.nonce !== 'string' || !value.nonce) return undefined
+    if (
+      typeof value.pid !== 'number' ||
+      !Number.isSafeInteger(value.pid) ||
+      value.pid <= 0 ||
+      typeof value.hostname !== 'string' ||
+      !value.hostname ||
+      typeof value.startedAt !== 'string' ||
+      !value.startedAt ||
+      typeof value.nonce !== 'string' ||
+      !value.nonce
+    )
+      return undefined
     return value as LockInfo
   } catch {
     return undefined
@@ -45,7 +55,11 @@ function readLock(file: string): LockInfo | undefined {
 }
 
 function ageMs(file: string): number {
-  try { return Date.now() - fs.statSync(file).mtimeMs } catch { return 0 }
+  try {
+    return Date.now() - fs.statSync(file).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 function stale(info: LockInfo | undefined, file: string, staleMs: number): boolean {
@@ -70,15 +84,27 @@ function release(file: string, nonce: string): void {
     const current = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<LockInfo>
     if (current.nonce !== nonce) return
     fs.unlinkSync(file)
-  } catch { /* 已被回收或从未写入 */ }
+  } catch {
+    /* 已被回收或从未写入 */
+  }
 }
 
-export function acquireCourseLock(root: string, courseId: string, options: { staleMs?: number } = {}): CourseLock {
+function acquireLock(
+  root: string,
+  courseId: string,
+  namespace: '.locks' | '.runs',
+  options: { staleMs?: number } = {},
+): CourseLock {
   if (!COURSE_ID_PATTERN.test(courseId)) throw new Error(`课程 id "${courseId}" 非法`)
-  const file = lockFile(root, courseId)
+  const file = lockFile(root, courseId, namespace)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const nonce = randomUUID()
-  const info: LockInfo = { pid: process.pid, hostname: os.hostname(), startedAt: new Date().toISOString(), nonce }
+  const info: LockInfo = {
+    pid: process.pid,
+    hostname: os.hostname(),
+    startedAt: new Date().toISOString(),
+    nonce,
+  }
   const staleMs = options.staleMs ?? DEFAULT_STALE_MS
   for (let attempt = 0; attempt < 3; attempt++) {
     let created = false
@@ -91,23 +117,60 @@ export function acquireCourseLock(root: string, courseId: string, options: { sta
       fd = undefined
       return { release: () => release(file, nonce) }
     } catch (error) {
-      if (fd !== undefined) try { fs.closeSync(fd) } catch { /* 已关闭 */ }
-      if (created) try { fs.unlinkSync(file) } catch { /* 已删除 */ }
+      if (fd !== undefined)
+        try {
+          fs.closeSync(fd)
+        } catch {
+          /* 已关闭 */
+        }
+      if (created)
+        try {
+          fs.unlinkSync(file)
+        } catch {
+          /* 已删除 */
+        }
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'EEXIST') throw error
       const existing = readLock(file)
       if (!stale(existing, file, staleMs)) {
-        throw new CourseBusyError(courseId, existing
-          ? `pid ${existing.pid}，开始于 ${existing.startedAt}`
-          : '锁文件存在但暂时无法读取')
+        throw new CourseBusyError(
+          courseId,
+          existing ? `pid ${existing.pid}，开始于 ${existing.startedAt}` : '锁文件存在但暂时无法读取',
+        )
       }
-      try { fs.unlinkSync(file) } catch { /* 另一个进程已回收 */ }
+      if (existing) release(file, existing.nonce)
+      else {
+        // 回收前再读一次，避免删除其他执行者刚写完整的锁。
+        if (readLock(file)) continue
+        try {
+          fs.unlinkSync(file)
+        } catch {
+          /* 另一个进程已回收 */
+        }
+      }
     }
   }
   throw new CourseBusyError(courseId)
 }
 
+export function acquireCourseLock(
+  root: string,
+  courseId: string,
+  options: { staleMs?: number } = {},
+): CourseLock {
+  return acquireLock(root, courseId, '.locks', options)
+}
+
+// 运行互斥独立于短写锁：模型等待期间仍可查询、保存草稿和提交当前执行者的状态。
+export function acquireCourseRunLock(root: string, courseId: string): CourseLock {
+  return acquireLock(root, courseId, '.runs')
+}
+
 export function withCourseLock<T>(root: string, courseId: string, work: () => T): T {
   const lock = acquireCourseLock(root, courseId)
-  try { return work() } finally { lock.release() }
+  try {
+    return work()
+  } finally {
+    lock.release()
+  }
 }

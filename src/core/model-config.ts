@@ -8,7 +8,10 @@ interface ModelConfig {
   model: string
   apiKey: string
   thinking: ReasoningLevel
+  agentThinking: ReasoningLevel
+  reviewThinking: ReasoningLevel
   contextWindow: number
+  maxOutputTokens: number
   researchDeadlineMs: number
   requestsPerMinute: number
   // 教研搜索（可选）：MCP over HTTP 地址与访问令牌。留空表示未在网页配置，回退 .env/环境变量。
@@ -22,6 +25,9 @@ interface SavedModelConfig extends ModelConfig {
 }
 
 export class ModelConfigError extends Error {}
+
+// DeepSeek V4 的单次输出上限；默认不再退回 8192，实际请求仍受上下文窗口与输入预留约束。
+export const DEFAULT_MAX_OUTPUT_TOKENS = 384_000
 
 // 与 CLI 共用 .env 的回退规则。只读已有文件，不把网页修改写回 .env。
 export function readModelEnvironment(root: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -69,8 +75,15 @@ function validate(value: Record<string, unknown>): ModelConfig {
     throw new ModelConfigError(error instanceof Error ? error.message : '推理档位不合法')
   }
   const contextWindow = value.contextWindow ?? 262144
+  let agentThinking: ReasoningLevel, reviewThinking: ReasoningLevel
+  try { agentThinking = parseReasoning(value.agentThinking ?? 'low'); reviewThinking = parseReasoning(value.reviewThinking ?? 'low') }
+  catch { throw new ModelConfigError('教学或核验推理档位不合法') }
   if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow < 1024 || contextWindow > 2_000_000) {
     throw new ModelConfigError('上下文长度必须是 1024–2000000 之间的整数')
+  }
+  const maxOutputTokens = value.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+  if (typeof maxOutputTokens !== 'number' || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 256 || maxOutputTokens > 2_000_000) {
+    throw new ModelConfigError('最大输出 token 必须是 256–2000000 之间的整数')
   }
   const researchDeadlineMs = value.researchDeadlineMs ?? 480_000
   if (typeof researchDeadlineMs !== 'number' || !Number.isSafeInteger(researchDeadlineMs) || researchDeadlineMs < 60_000 || researchDeadlineMs > 1_800_000) {
@@ -83,7 +96,7 @@ function validate(value: Record<string, unknown>): ModelConfig {
   const searchMcpUrl = optionalSearchUrl(value.searchMcpUrl)
   const searchToken = typeof value.searchToken === 'string' ? value.searchToken.trim() : ''
   if (searchToken.length > 8192 || /[\s\x00-\x1f\x7f]/.test(searchToken)) throw new ModelConfigError('搜索服务 Token 不合法')
-  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking, contextWindow, researchDeadlineMs, requestsPerMinute,
+  return { baseUrl: url, model: value.model.trim(), apiKey: value.apiKey.trim(), thinking, agentThinking, reviewThinking, contextWindow, maxOutputTokens, researchDeadlineMs, requestsPerMinute,
     searchMcpUrl, searchToken }
 }
 
@@ -101,7 +114,10 @@ export class ModelConfigStore {
       baseUrl: (this.env.TUTOR_LLM_BASE_URL ?? '').replace(/\/+$/, ''),
       model: this.env.TUTOR_LLM_MODEL ?? '', apiKey: this.env.TUTOR_LLM_API_KEY ?? '',
       thinking: normalizeReasoning(this.env.TUTOR_LLM_THINKING),
+      agentThinking: normalizeReasoning(this.env.TUTOR_AGENT_THINKING ?? 'low'),
+      reviewThinking: normalizeReasoning(this.env.TUTOR_REVIEW_THINKING ?? 'low'),
       contextWindow: Number(this.env.TUTOR_LLM_CONTEXT_WINDOW || 262144),
+      maxOutputTokens: Number(this.env.TUTOR_LLM_MAX_OUTPUT_TOKENS || DEFAULT_MAX_OUTPUT_TOKENS),
       researchDeadlineMs: Number(this.env.TUTOR_RESEARCH_DEADLINE_MS || this.env.TUTOR_LLM_DEADLINE_MS || 480_000),
       requestsPerMinute: Number(this.env.TUTOR_LLM_REQUESTS_PER_MINUTE || 8),
       searchMcpUrl: (this.env.TUTOR_MCP_SEARCH_URL ?? '').replace(/\/+$/, ''),
@@ -121,6 +137,9 @@ export class ModelConfigStore {
       // 旧版保存文件没有搜索字段；空值视为"未在网页配置"，回填环境变量里的搜索配置，
       // 让网页始终显示实际生效的搜索服务（清空网页字段即回退 .env）。
       return { config: validate({ ...saved,
+        maxOutputTokens: saved.maxOutputTokens ?? this.defaults.maxOutputTokens,
+        agentThinking: saved.agentThinking ?? this.defaults.agentThinking,
+        reviewThinking: saved.reviewThinking ?? this.defaults.reviewThinking,
         searchMcpUrl: saved.searchMcpUrl || this.defaults.searchMcpUrl,
         searchToken: saved.searchToken || this.defaults.searchToken }), source: 'saved', updatedAt: saved.updatedAt }
     } catch {
@@ -131,7 +150,9 @@ export class ModelConfigStore {
 
   publicConfig() {
     const { config, source, updatedAt } = this.read()
-    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, contextWindow: config.contextWindow, researchDeadlineMs: config.researchDeadlineMs, requestsPerMinute: config.requestsPerMinute,
+    return { baseUrl: config.baseUrl, model: config.model, thinking: config.thinking, agentThinking: config.agentThinking, reviewThinking: config.reviewThinking,
+      contextWindow: config.contextWindow, maxOutputTokens: config.maxOutputTokens,
+      researchDeadlineMs: config.researchDeadlineMs, requestsPerMinute: config.requestsPerMinute,
       apiKeySet: Boolean(config.apiKey), configured: Boolean(config.baseUrl && config.model && config.apiKey), source, updatedAt,
       searchMcpUrl: config.searchMcpUrl, searchTokenSet: Boolean(config.searchToken), searchConfigured: Boolean(config.searchMcpUrl && config.searchToken) }
   }
@@ -156,6 +177,7 @@ export class ModelConfigStore {
     const searchToken = searchTokenInput || (nextSearchUrl === previous.searchMcpUrl ? previous.searchToken : '')
     return validate({ ...value, baseUrl: nextUrl, apiKey: replacement || previous.apiKey,
       searchMcpUrl: nextSearchUrl, searchToken,
+      maxOutputTokens: value.maxOutputTokens ?? previous.maxOutputTokens,
       researchDeadlineMs: value.researchDeadlineMs ?? previous.researchDeadlineMs,
       requestsPerMinute: value.requestsPerMinute ?? previous.requestsPerMinute })
   }
@@ -183,7 +205,9 @@ export class ModelConfigStore {
     const config = validate({ ...current })
     return { ...this.env, TUTOR_LLM_BASE_URL: config.baseUrl, TUTOR_LLM_MODEL: config.model,
       TUTOR_LLM_API_KEY: config.apiKey, TUTOR_LLM_THINKING: config.thinking === 'default' ? '' : config.thinking,
-      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs),
+      TUTOR_AGENT_THINKING: config.agentThinking, TUTOR_REVIEW_THINKING: config.reviewThinking,
+      TUTOR_LLM_CONTEXT_WINDOW: String(config.contextWindow), TUTOR_LLM_MAX_OUTPUT_TOKENS: String(config.maxOutputTokens),
+      TUTOR_RESEARCH_DEADLINE_MS: String(config.researchDeadlineMs),
       TUTOR_LLM_REQUESTS_PER_MINUTE: String(config.requestsPerMinute), TUTOR_MODEL_RATE_LIMIT_FILE: this.rateLimitFile, TUTOR_MODEL_CONFIG_RESOLVED: '1',
       // 网页配置过搜索服务时覆盖环境变量；清空后回退 .env/环境变量的搜索配置。
       ...(config.searchMcpUrl && config.searchToken ? { TUTOR_MCP_SEARCH_URL: config.searchMcpUrl, TUTOR_MCP_SEARCH_TOKEN: config.searchToken } : {}) }

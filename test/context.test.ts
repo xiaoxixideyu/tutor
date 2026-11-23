@@ -1,7 +1,7 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ApiMessage } from '../src/runtime/llm.ts'
-import { ContextWindowError, estimateTokens, fitHistory, normalizeContextWindow, outputTokenLimit } from '../src/runtime/context.ts'
+import { ContextWindowError, estimateMessageTokens, estimateTokens, fitHistory, normalizeContextWindow, outputTokenLimit } from '../src/runtime/context.ts'
 
 const user = (content: string): ApiMessage => ({ role: 'user', content })
 const assistant = (content: string): ApiMessage => ({ role: 'assistant', content })
@@ -13,13 +13,24 @@ it('token 估算对中文和英文都偏保守', () => {
   assert.equal(estimateTokens(''), 0)
 })
 
-it('输出上限随上下文窗口收紧', () => {
+it('reasoning_content 也算上下文预算，不能只按正文长度漏算', () => {
+  const plain = estimateMessageTokens({ role: 'assistant', content: '短回答' })
+  const withReasoning = estimateMessageTokens({ role: 'assistant', content: '短回答', reasoning_content: '思'.repeat(1000) })
+  assert.ok(withReasoning >= plain + 1000)
+})
+
+it('输出上限随上下文窗口收紧，并允许按模型设置提高上限', () => {
   assert.equal(outputTokenLimit(262144, 8192), 8192)
-  assert.equal(outputTokenLimit(8192, 8192), 2457)
-  assert.equal(outputTokenLimit(4096, 8192), 1228)
-  assert.equal(outputTokenLimit(2048, 8192), 614)
+  assert.equal(outputTokenLimit(8192, 8192), 3584)
+  assert.equal(outputTokenLimit(4096, 8192), 1536)
+  assert.equal(outputTokenLimit(2048, 8192), 512)
   assert.equal(outputTokenLimit(1024, 8192), 256)
   assert.equal(outputTokenLimit(Number.NaN, 8192), 8192)
+  // 大窗口不再被 8192 硬限制：DeepSeek V4 的 384000 可以真正下发。
+  assert.equal(outputTokenLimit(1_000_000, 384_000, 384_000), 384_000)
+  assert.equal(outputTokenLimit(262144, 384_000, 384_000), 253_440)
+  // ceiling 仍能阻止单次请求超过模型设置。
+  assert.equal(outputTokenLimit(1_000_000, 384_000, 8192), 8192)
   assert.equal(normalizeContextWindow(512), 262144)
   assert.equal(normalizeContextWindow(4096), 4096)
 })

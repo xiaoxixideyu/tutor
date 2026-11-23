@@ -1,393 +1,353 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CourseStore, COURSE_ID_PATTERN } from '../core/store.ts'
-import { localDate } from '../core/dates.ts'
-import { handleRpcRequest, RPC_ERRORS, type RpcRequest } from '../core/rpc.ts'
-import type { KnowledgeMap } from '../core/schema.ts'
-import { ModelConfigStore } from '../core/model-config.ts'
-import { FlowExit, createLineQueue, type FlowIO, type LineQueue } from '../flows/io.ts'
-import { modelSettingsFromEnv, runFlowInProcess } from '../flows/run.ts'
+import { TutorSystem, type TutorSystemOptions } from '../application/tutor-system.ts'
+import { DomainError } from '../domain/model.ts'
+import { integer, object, text } from '../domain/validation.ts'
 import { openaiTransport } from '../runtime/llm.ts'
-import { searchSettingsFromEnv } from '../runtime/tools.ts'
+import type { LearningIntent } from '../domain/model.ts'
 
-export const FLOW_PROTOCOL_VERSION = 1
-const RUNNERS = new Set(['new', 'assess', 'plan', 'research', 'learn', 'exam', 'practice-gen', 'practice', 'audit-content'])
-const STOP_LINES: Record<string, string> = { learn: '/exit', exam: '/exit', practice: 'q' }
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' }
-
-// 旧版单页（/index.html、/lesson.html…）已合并进单壳 /app.html。
-// 旧链接按原语义重定向到对应 hash 路由，避免书签、文档和外部链接直接 404。
-function legacyRedirect(url: URL): string | undefined {
-  const path = url.pathname
-  const course = url.searchParams.get('course')
-  const node = url.searchParams.get('node')
-  const milestone = url.searchParams.get('milestone')
-  const resume = url.searchParams.get('resume')
-  const hash = (route: string) => `/app.html#${route}`
-  switch (path) {
-    case '/index.html':
-      return hash(course ? `/course/${encodeURIComponent(course)}` : '/')
-    case '/lesson.html':
-      return course ? hash(`/course/${encodeURIComponent(course)}/learn`) : hash('/')
-    case '/exam.html':
-      return course
-        ? hash(`/course/${encodeURIComponent(course)}/exam${milestone ? `/${encodeURIComponent(milestone)}` : ''}`)
-        : hash('/')
-    case '/practice.html':
-      return course
-        ? hash(`/course/${encodeURIComponent(course)}/practice${node ? `/${encodeURIComponent(node)}` : ''}`)
-        : hash('/')
-    case '/review.html':
-      return course ? hash(`/course/${encodeURIComponent(course)}/review`) : hash('/')
-    case '/wizard.html':
-      return course && resume
-        ? hash(`/course/${encodeURIComponent(course)}/${encodeURIComponent(resume)}${node ? `/${encodeURIComponent(node)}` : ''}`)
-        : hash('/')
-    case '/settings.html':
-      return hash('/settings')
-    default:
-      return undefined
-  }
-}
-
-export interface FlowStart {
-  kind: string
+export type TutorServerOptions = TutorSystemOptions
+interface StreamClient {
+  res: ServerResponse
   courseId: string
-  milestoneId: string
-  nodeId: string
-  reset?: boolean
-  discard?: boolean
+  cursor: number
+  revision: number
+}
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
 }
 
-interface Flow extends FlowStart {
-  flowId: string
-  status: 'running' | 'stopping' | 'completed' | 'failed'
-  code?: number
-  buffer: string[]
-  bytes: number
-  clients: Set<ServerResponse>
-  guard?: ReturnType<typeof setTimeout>
-  queue: LineQueue
-  controller: AbortController
-  task: Promise<void>
-}
-
-export type FlowRunner = (input: FlowStart, io: FlowIO, env: NodeJS.ProcessEnv) => Promise<number>
-
-export interface TutorServerOptions {
-  root: string
-  coursesRoot?: string
-  today?: () => string
-  stopTimeoutMs?: number
-  modelConfigFile?: string
-  modelEnvironment?: NodeJS.ProcessEnv
-  // 注入确定性流程，测试真实 HTTP/SSE 而不调用模型。
-  runFlow?: FlowRunner
-}
-
-function json(res: ServerResponse, status: number, body: unknown): void {
+function json(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(body))
+  res.end(JSON.stringify(value))
 }
 
-// 本地同源校验：Host 必须是本机地址，跨站 Origin/Sec-Fetch-Site 一律拒绝。
-// 静态页面本身不敏感，但 RPC/流程能读写课程与学习状态，所有入口都必须过这道门。
-function localRequest(req: IncomingMessage): boolean {
+function local(req: IncomingMessage): boolean {
   try {
-    const target = new URL(`http://${req.headers.host ?? ''}`)
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(target.hostname) || target.username || target.password) return false
-    if (req.headers.origin && req.headers.origin !== target.origin) return false
-    return req.headers['sec-fetch-site'] !== 'cross-site'
-  } catch { return false }
-}
-
-function requireLocal(req: IncomingMessage, res: ServerResponse): boolean {
-  if (localRequest(req)) return true
-  json(res, 403, { ok: false, error: '仅允许从本机同源页面访问' })
-  return false
-}
-
-function requireJson(req: IncomingMessage, res: ServerResponse): boolean {
-  if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() === 'application/json') return true
-  json(res, 415, { ok: false, error: '请求必须使用 application/json' })
-  return false
-}
-
-async function body(req: IncomingMessage): Promise<unknown> {
-  let text = ''
-  for await (const chunk of req) {
-    text += chunk.toString()
-    if (text.length > 1_000_000) throw new Error('请求体过大')
+    const origin = new URL('http://' + (req.headers.host ?? ''))
+    return (
+      ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname) &&
+      !origin.username &&
+      !origin.password &&
+      (!req.headers.origin || req.headers.origin === origin.origin) &&
+      req.headers['sec-fetch-site'] !== 'cross-site'
+    )
+  } catch {
+    return false
   }
-  return JSON.parse(text)
 }
 
-function snapshot(flow: Flow) {
-  return { flowId: flow.flowId, kind: flow.kind, courseId: flow.courseId,
-    milestoneId: flow.milestoneId, nodeId: flow.nodeId, status: flow.status, ...(flow.code !== undefined ? { code: flow.code } : {}) }
+async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')
+    throw new DomainError('CONTENT_TYPE', '请使用 JSON 请求', 415)
+  const chunks: Buffer[] = []
+  let bytes = 0
+  for await (const chunk of req) {
+    bytes += chunk.length
+    if (bytes > 200000) throw new DomainError('BODY_TOO_LARGE', '请求内容过长', 413)
+    chunks.push(Buffer.from(chunk))
+  }
+  try {
+    return object(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+  } catch (error) {
+    if (error instanceof DomainError) throw error
+    throw new DomainError('INVALID_JSON', '请求不是有效 JSON')
+  }
 }
 
 export function createTutorServer(options: TutorServerOptions) {
-  const root = path.resolve(options.root)
-  const staticDir = path.join(root, 'static')
-  const store = new CourseStore(options.coursesRoot ?? path.join(root, 'courses'))
-  const today = options.today ?? (() => localDate())
-  const models = new ModelConfigStore(root, { file: options.modelConfigFile, env: options.modelEnvironment })
-  const flows = new Map<string, Flow>()
-  // 每门课程同时最多一个流程（课程状态互斥）；不同课程的流程彼此独立、可并行。
-  const running = new Map<string, Flow>()
-  const runFlow: FlowRunner = options.runFlow ?? ((input, io, env) => runFlowInProcess(
-    { kind: input.kind, courseId: input.courseId, ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}), ...(input.nodeId ? { nodeId: input.nodeId } : {}),
-      ...(input.reset ? { reset: true } : {}), ...(input.discard ? { discard: true } : {}) },
-    io,
-    // 模型与搜索设置均按回合热更新：进行中的流程读取最新保存的配置（practice 零模型，不接渠道）。
-    {
-      root,
-      // 流程必须读写与宿主同一份课程状态，并使用同一份"今天"。
-      env: { ...env, TUTOR_COURSES_ROOT: store.root },
-      today,
-      ...(input.kind === 'practice' ? {} : {
-        resolveModel: () => modelSettingsFromEnv(models.environment()),
-        resolveSearch: () => { try { return searchSettingsFromEnv(models.environment()) } catch { return undefined } },
-      }),
-    }))
-
-  function broadcast(flow: Flow, event: Record<string, unknown>): void {
-    const payload = `data: ${JSON.stringify({ ...snapshot(flow), ...event })}\n\n`
-    flow.buffer.push(payload)
-    flow.bytes += Buffer.byteLength(payload)
-    // 每个流程最多保留 400 块 / 1 MiB，已退出流程也可重连查看结果。
-    while (flow.buffer.length > 400 || (flow.bytes > 1_048_576 && flow.buffer.length > 1)) {
-      flow.bytes -= Buffer.byteLength(flow.buffer.shift()!)
-    }
-    for (const client of flow.clients) if (!client.writableEnded) client.write(payload)
+  const system = new TutorSystem(options)
+  const staticRoot = path.join(path.resolve(options.root), 'static')
+  const clients = new Set<StreamClient>()
+  const send = (res: ServerResponse, value: unknown) => {
+    if (!res.writableEnded) res.write('data: ' + JSON.stringify(value) + '\n\n')
   }
-
-  function finish(flow: Flow, code: number): void {
-    if (flow.code !== undefined) return
-    if (flow.guard) clearTimeout(flow.guard)
-    flow.code = code
-    flow.status = code === 0 ? 'completed' : 'failed'
-    if (running.get(flow.courseId) === flow) running.delete(flow.courseId)
-    broadcast(flow, { type: 'exit', code })
+  const snapshot = (courseId: string) => ({
+    type: 'snapshot',
+    course: system.service.view(courseId),
+    job: system.activeJobs().find((job) => job.courseId === courseId) ?? null,
+  })
+  const publish = (client: StreamClient, operation?: { phase: string; running: boolean }) => {
+    for (const event of system.events(client.courseId, client.cursor)) {
+      send(client.res, event)
+      client.cursor = event.seq
+    }
+    if (operation) send(client.res, { type: 'operation', data: operation })
+    const current = snapshot(client.courseId)
+    client.revision = current.course.revision
+    send(client.res, current)
   }
-
-  const activeSnapshots = () => [...running.values()].map(snapshot)
-
-  function start(input: FlowStart) {
-    if (!RUNNERS.has(input.kind)) return { ok: false, error: `未知流程 "${input.kind}"` }
-    if (!COURSE_ID_PATTERN.test(input.courseId)) return { ok: false, error: `课程名 "${input.courseId}" 非法` }
-    if (input.reset && input.kind !== 'assess') return { ok: false, error: 'reset 仅用于清理摸底进度' }
-    if (input.discard && input.kind !== 'exam') return { ok: false, error: 'discard 仅用于放弃考试断点' }
-    if (input.milestoneId && (input.kind !== 'exam' || !COURSE_ID_PATTERN.test(input.milestoneId))) return { ok: false, error: '里程碑参数非法' }
-    if (input.nodeId && (!['practice', 'practice-gen', 'research'].includes(input.kind) || !/^[a-z0-9][a-z0-9-]*$/.test(input.nodeId))) {
-      return { ok: false, error: '知识点参数非法' }
-    }
-    const current = running.get(input.courseId)
-    if (current) {
-      if (current.status === 'running' && current.kind === input.kind && current.courseId === input.courseId && current.milestoneId === input.milestoneId && current.nodeId === input.nodeId) {
-        return { ok: true, resumed: true, ...snapshot(current) }
-      }
-      return { ok: false, error: `课程「${input.courseId}」已有进行中的流程（${current.kind}），先结束它再开始新的` }
-    }
-    if (input.kind !== 'new' && !store.exists(input.courseId)) return { ok: false, error: `课程 "${input.courseId}" 不存在——先用 new 访谈建档` }
-    if (input.nodeId && (!store.has(input.courseId, 'knowledge-map') || !(store.read(input.courseId, 'knowledge-map') as KnowledgeMap).nodes.some((node) => node.id === input.nodeId))) {
-      return { ok: false, error: '所选知识点不在本课程知识地图中' }
-    }
-    // 每次启动流程冻结模型配置快照（模型渠道由 resolveModel 每回合热更新）；practice 零模型，不要求已配置模型。
-    // reset/discard 只清理断点，同样不应因为模型配置缺失而无法执行。
-    const zeroModel = input.kind === 'practice' || (input.kind === 'assess' && input.reset === true) || (input.kind === 'exam' && input.discard === true)
-    const env = zeroModel
-      ? { ...(options.modelEnvironment ?? process.env) }
-      : { ...models.environment(), ...(input.kind === 'research' ? { TUTOR_RESEARCH_PROGRESS: '1' } : {}) }
-    const queue = createLineQueue()
-    const controller = new AbortController()
-    const flow: Flow = { ...input, flowId: randomUUID(), status: 'running', buffer: [], bytes: 0, clients: new Set(), queue, controller,
-      task: Promise.resolve() }
-    const io: FlowIO = {
-      out: text => { if (flow.code === undefined) broadcast(flow, { type: 'out', text }) },
-      err: text => { if (flow.code === undefined) broadcast(flow, { type: 'err', text }) },
-      readLine: () => queue.read(),
-      closeInput: () => queue.close(),
-      signal: controller.signal,
-    }
-    // 保留最近 8 个流程的内存回放；只淘汰已结束的流程，不能动在跑的（并行课程时可能同时多个）。
-    while (flows.size > 8) {
-      const finished = [...flows.values()].find(candidate => candidate.code !== undefined)
-      if (!finished) break
-      for (const client of finished.clients) client.end()
-      flows.delete(finished.flowId)
-    }
-    flows.set(flow.flowId, flow)
-    running.set(flow.courseId, flow)
-    flow.task = (async () => {
-      let code: number
-      try {
-        code = await runFlow(input, io, { ...env, TUTOR_COURSES_ROOT: store.root })
-      } catch (error) {
-        if (error instanceof FlowExit) code = error.code
-        else {
-          broadcast(flow, { type: 'err', text: `流程启动失败：${error instanceof Error ? error.message : String(error)}\n` })
-          code = -1
+  const unsubscribe = system.subscribe((courseId, operation) => {
+    for (const client of clients)
+      if (client.courseId === courseId && !client.res.writableEnded) {
+        try {
+          publish(client, operation)
+        } catch {
+          client.res.end()
+          clients.delete(client)
         }
       }
-      finish(flow, code)
-    })()
-    return { ok: true, started: true, ...snapshot(flow) }
-  }
-
+  })
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     try {
-      if (url.pathname === '/api/model-test') {
-        if (!requireLocal(req, res)) return
-        if (req.method !== 'POST') { json(res, 405, { ok: false, error: '不支持此操作' }); return }
-        if (!requireJson(req, res)) return
-        let input
-        try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型测试请求必须是有效的 JSON' }); return }
-        if (!input || typeof input !== 'object' || Array.isArray(input)) {
-          json(res, 400, { ok: false, error: '模型设置必须是一个对象' }); return
-        }
-        let config
-        try {
-          // 模型测试只验证模型字段；搜索服务的地址/Token 变更不应阻塞这次连通性检查。
-          config = models.draft({ ...(input as Record<string, unknown>), searchMcpUrl: undefined, searchToken: undefined })
-        } catch (error) {
-          json(res, 400, { ok: false, error: error instanceof Error ? error.message : '模型设置不合法' }); return
-        }
-        const started = Date.now()
-        try {
-          // 直接复用生产传输层：测到的是实际会下发的 URL、鉴权、推理档位与响应解析。
-          const transport = openaiTransport({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, thinking: config.thinking })
-          const result = await transport({ messages: [{ role: 'user', content: '这是一次连通性测试。只回复 OK。' }], maxTokens: 512 },
-            AbortSignal.timeout(90_000), () => {})
-          const elapsedMs = Date.now() - started
-          if (result.finish === 'error') {
-            json(res, 200, { ok: false, error: result.error.message, code: result.error.code, status: result.error.status ?? null, elapsedMs }); return
-          }
-          json(res, 200, { ok: true, model: config.model, level: config.thinking, finish: result.finish,
-            text: result.text.trim().slice(0, 500), usage: result.usage ?? null, elapsedMs }); return
-        } catch (error) {
-          json(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error), elapsedMs: Date.now() - started }); return
-        }
-      }
-      if (url.pathname === '/api/model-config') {
-        if (!requireLocal(req, res)) return
-        if (req.method === 'GET') {
-          json(res, 200, { ok: true, config: models.publicConfig(), flows: activeSnapshots() }); return
-        }
-        if (req.method === 'POST') {
-          if (!requireJson(req, res)) return
-          let input
-          try { input = await body(req) } catch { json(res, 400, { ok: false, error: '模型设置请求必须是有效的 JSON' }); return }
-          const config = models.save(input)
-          json(res, 200, { ok: true, config, flows: activeSnapshots() }); return
-        }
-        json(res, 405, { ok: false, error: '不支持此操作' }); return
-      }
-      if (req.method === 'POST' && url.pathname === '/rpc') {
-        if (!requireLocal(req, res)) return
-        if (!requireJson(req, res)) return
-        let request
-        try { request = await body(req) } catch {
-          json(res, 200, { jsonrpc: '2.0', id: null, error: RPC_ERRORS.parse }); return
-        }
-        // 流程持有课程快照，同一课程的网页复习不能同时回写（其他课程的流程不受影响）。
-        const rpc = request as RpcRequest | null
-        const runningForCourse = typeof rpc?.params?.id === 'string' ? running.get(rpc.params.id) : undefined
-        if (runningForCourse && ['submitReview', 'applyReview'].includes(rpc?.method ?? '')) {
-          json(res, 200, { jsonrpc: '2.0', id: rpc?.id ?? null, error: { code: -32602, message: '本课程有进行中的流程，请结束后提交复习' } }); return
-        }
-        json(res, 200, handleRpcRequest(store, request as RpcRequest, today)); return
-      }
-      if (req.method === 'GET' && url.pathname === '/flow/state') {
-        if (!requireLocal(req, res)) return
-        const requested = flows.get(url.searchParams.get('flowId') ?? '')
-        json(res, 200, { protocolVersion: FLOW_PROTOCOL_VERSION, flows: activeSnapshots(), flow: requested ? snapshot(requested) : null }); return
-      }
-      if (req.method === 'GET' && url.pathname === '/flow/stream') {
-        if (!requireLocal(req, res)) return
-        const flow = flows.get(url.searchParams.get('flowId') ?? '')
-        if (!flow) { json(res, 404, { ok: false, error: '流程不存在或回放已过期，请刷新页面' }); return }
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-        res.write(`data: ${JSON.stringify({ type: 'hello', ...snapshot(flow) })}\n\n`)
-        for (const event of flow.buffer) res.write(event)
-        flow.clients.add(res)
-        req.on('close', () => flow.clients.delete(res))
-        return
-      }
-      if (req.method === 'POST' && url.pathname.startsWith('/flow/')) {
-        if (!requireLocal(req, res)) return
-        if (!requireJson(req, res)) return
-        const value = await body(req)
-        if (!value || typeof value !== 'object' || Array.isArray(value)) { json(res, 400, { ok: false, error: '请求体必须是对象' }); return }
-        const input = value as Record<string, unknown>
-        if (url.pathname === '/flow/start') {
-          const result = start({ kind: String(input.kind ?? ''), courseId: String(input.courseId ?? ''), milestoneId: String(input.milestoneId ?? ''),
-            nodeId: String(input.nodeId ?? ''), reset: input.reset === true, discard: input.discard === true })
-          json(res, result.ok ? 200 : 409, result); return
-        }
-        if (url.pathname !== '/flow/input' && url.pathname !== '/flow/stop') { json(res, 404, { ok: false, error: '未知操作' }); return }
-        // 按 flowId 定位流程：并行课程下每个页面只操作自己的流程，过期页面拿不到别人的流程。
-        const flow = flows.get(typeof input.flowId === 'string' ? input.flowId : '')
-        if (!flow || flow.code !== undefined) { json(res, 409, { ok: false, error: '流程已结束或已切换，请刷新页面后继续' }); return }
-        if (url.pathname === '/flow/input') {
-          if (flow.status !== 'running' || flow.queue.closed) { json(res, 409, { ok: false, error: '流程正在结束' }); return }
-          // 一条输入 = 一次读取。可以含换行（网页的多行输入框按一条消息送达），但长度有上限。
-          if (typeof input.line !== 'string' || input.line.length > 20_000) {
-            json(res, 400, { ok: false, error: '输入无效或过长（上限 20000 字符）' }); return
-          }
-          flow.queue.push(input.line)
-        } else if (flow.status !== 'stopping') {
-          flow.status = 'stopping'
-          broadcast(flow, { type: 'state' })
-          const line = STOP_LINES[flow.kind]
-          if (line !== undefined) flow.queue.push(line)
-          else flow.queue.close()
-          flow.guard = setTimeout(() => {
-            // 流程未在时限内响应停止：中止在途请求并释放活动槽位。
-            flow.queue.close()
-            flow.controller.abort(new Error('流程停止超时'))
-            finish(flow, -1)
-          }, options.stopTimeoutMs ?? 8000)
-        }
-        json(res, 200, { ok: true, ...snapshot(flow) }); return
-      }
-      if (req.method === 'GET') {
-        // 旧版单页 UI 已下线：把旧地址重定向到单壳的对应路由，书签与文档链接不会失效。
-        const legacy = legacyRedirect(url)
-        if (legacy) {
-          res.writeHead(302, { location: legacy })
-          res.end()
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      if (url.pathname.startsWith('/api/')) {
+        if (!local(req)) {
+          json(res, 403, { ok: false, error: { code: 'LOCAL_ONLY', message: '仅允许本机同源访问' } })
           return
         }
-        const relative = url.pathname === '/' ? 'app.html' : url.pathname.replace(/^\/+/, '')
-        const file = path.resolve(staticDir, relative)
-        if (!file.startsWith(staticDir + path.sep)) { res.writeHead(403).end(); return }
-        if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end('404'); return }
-        res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' })
-        res.end(fs.readFileSync(file)); return
+        if (url.pathname === '/api/health' && req.method === 'GET') {
+          json(res, 200, { ok: true, version: 2, courses: system.repository.list().length })
+          return
+        }
+        if (url.pathname === '/api/model-config') {
+          if (req.method === 'GET') {
+            json(res, 200, { ok: true, config: system.models.publicConfig(), flows: system.activeJobs() })
+            return
+          }
+          if (req.method === 'POST') {
+            const config = system.models.save(await body(req))
+            json(res, 200, { ok: true, config, flows: system.activeJobs() })
+            return
+          }
+        }
+        if (url.pathname === '/api/model-test' && req.method === 'POST') {
+          const input = await body(req)
+          const config = system.models.draft({ ...input, searchMcpUrl: undefined, searchToken: undefined })
+          const started = Date.now()
+          const result = await openaiTransport(config)(
+            { messages: [{ role: 'user', content: '只回复 OK。' }], maxTokens: 1024 },
+            AbortSignal.timeout(90000),
+            () => {},
+          )
+          if (result.finish === 'error')
+            json(res, 200, { ok: false, error: result.error.message, elapsedMs: Date.now() - started })
+          else
+            json(res, 200, {
+              ok: true,
+              model: config.model,
+              level: config.thinking,
+              finish: result.finish,
+              text: result.text.slice(0, 300),
+              elapsedMs: Date.now() - started,
+            })
+          return
+        }
+        if (url.pathname === '/api/today' && req.method === 'GET') {
+          json(res, 200, { ok: true, ...system.readToday() })
+          return
+        }
+        if (url.pathname === '/api/today/recommend' && req.method === 'POST') {
+          const input = await body(req)
+          const controller = new AbortController()
+          res.once('close', () => {
+            if (!res.writableEnded) controller.abort(new Error('请求已取消'))
+          })
+          json(res, 200, {
+            ok: true,
+            ...(await system.recommendToday(
+              integer(input.availableMinutes, '可用分钟', 5, 600, 20),
+              controller.signal,
+            )),
+          })
+          return
+        }
+        if (url.pathname === '/api/courses') {
+          if (req.method === 'GET') {
+            json(res, 200, { ok: true, courses: system.service.list(), jobs: system.activeJobs() })
+            return
+          }
+          if (req.method === 'POST') {
+            const created = system.service.create(await body(req))
+            json(res, 201, { ok: true, course: system.service.view(created.id) })
+            return
+          }
+        }
+        const match = url.pathname.match(/^\/api\/courses\/([a-z0-9-]+)(?:\/(.*))?$/)
+        if (match) {
+          const courseId = match[1],
+            action = match[2] ?? ''
+          if (req.method === 'GET' && action === '') {
+            json(res, 200, {
+              ok: true,
+              course: system.service.view(courseId),
+              events: system.events(courseId, -1).slice(-150),
+              job: system.activeJobs().find((job) => job.courseId === courseId) ?? null,
+            })
+            return
+          }
+          if (req.method === 'GET' && action === 'events') {
+            const after = Number(url.searchParams.get('after') ?? -1)
+            integer(after, '事件位置', -1, Number.MAX_SAFE_INTEGER)
+            json(res, 200, { ok: true, events: system.events(courseId, after) })
+            return
+          }
+          if (req.method === 'GET' && action === 'stream') {
+            const after = Number(url.searchParams.get('after') ?? -1)
+            integer(after, '事件位置', -1, Number.MAX_SAFE_INTEGER)
+            const state = system.repository.read(courseId)
+            res.writeHead(200, {
+              'content-type': 'text/event-stream',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+              'x-accel-buffering': 'no',
+            })
+            const client = { res, courseId, cursor: after, revision: state.revision }
+            if (after >= 0 && state.events[0] && after < state.events[0].seq - 1)
+              send(res, { type: 'history_gap' })
+            publish(client)
+            clients.add(client)
+            const polling = setInterval(() => {
+              if (res.writableEnded) return
+              try {
+                const latest = system.repository.read(courseId)
+                if (latest.revision !== client.revision || latest.nextEventSeq - 1 > client.cursor)
+                  publish(client)
+              } catch {
+                res.end()
+                clients.delete(client)
+              }
+            }, 1000)
+            const heartbeat = setInterval(() => {
+              if (!res.writableEnded) res.write(': alive\n\n')
+            }, 15000)
+            req.on('close', () => {
+              clearInterval(heartbeat)
+              clearInterval(polling)
+              clients.delete(client)
+            })
+            return
+          }
+          if (req.method === 'DELETE' && action === '') {
+            await body(req)
+            await system.remove(courseId)
+            json(res, 200, { ok: true })
+            return
+          }
+          if (req.method === 'POST') {
+            const input = await body(req)
+            const requestId = text(input.requestId, '请求标识', 220)
+            const expectedRevision =
+              input.expectedRevision === undefined
+                ? undefined
+                : integer(input.expectedRevision, '状态版本', 0, Number.MAX_SAFE_INTEGER)
+            if (action === 'turn') {
+              const result = system.start(courseId, {
+                requestId,
+                message: typeof input.message === 'string' ? input.message : '',
+                intent: input.intent as LearningIntent | undefined,
+                expectedRevision,
+                activeMs: typeof input.activeMs === 'number' ? input.activeMs : 0,
+              })
+              json(res, 202, { ok: true, ...result })
+              return
+            }
+            if (action === 'answer') {
+              const result = system.answer(courseId, {
+                requestId,
+                activityId: text(input.activityId, '活动标识', 100),
+                questionId: text(input.questionId, '题号', 96),
+                contentHash: text(input.contentHash, '内容版本', 64),
+                answer: text(input.answer, '作答', 50000),
+                expectedRevision,
+                activeMs: typeof input.activeMs === 'number' ? input.activeMs : 0,
+              })
+              json(res, 202, { ok: true, ...result })
+              return
+            }
+            if (action === 'draft') {
+              const draft = system.service.saveDraft(courseId, {
+                activityId: text(input.activityId, '活动标识', 100),
+                questionId: text(input.questionId, '题号', 96),
+                answer: text(input.answer, '草稿', 50000, true),
+                draftVersion:
+                  input.draftVersion === undefined
+                    ? undefined
+                    : integer(input.draftVersion, '草稿版本', 0, Number.MAX_SAFE_INTEGER),
+              })
+              json(res, 200, { ok: true, draft })
+              return
+            }
+            if (action === 'pause') {
+              system.pause(courseId, requestId)
+              json(res, 200, { ok: true, ...snapshot(courseId) })
+              return
+            }
+            if (action === 'resume') {
+              json(res, 202, { ok: true, ...system.resume(courseId, requestId) })
+              return
+            }
+            if (action === 'goal') {
+              if (typeof input.accept !== 'boolean')
+                throw new DomainError('INVALID_INPUT', '需选择是否接受建议')
+              if (expectedRevision === undefined) throw new DomainError('INVALID_INPUT', '需提供当前状态版本')
+              system.resolveGoal(
+                courseId,
+                text(input.proposalId, '建议标识', 100),
+                input.accept,
+                requestId,
+                expectedRevision,
+              )
+              json(res, 200, { ok: true, course: system.service.view(courseId) })
+              return
+            }
+          }
+        }
+        json(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '接口不存在' } })
+        return
       }
-      res.writeHead(405).end()
+      if (req.method !== 'GET') {
+        res.writeHead(405).end()
+        return
+      }
+      const requested =
+        url.pathname === '/' ? 'app.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '')
+      const file = path.resolve(staticRoot, requested)
+      if (!file.startsWith(staticRoot + path.sep)) {
+        res.writeHead(403).end()
+        return
+      }
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        res.writeHead(404).end('404')
+        return
+      }
+      if (!fs.realpathSync(file).startsWith(staticRoot + path.sep)) {
+        res.writeHead(403).end()
+        return
+      }
+      res.writeHead(200, {
+        'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
+        'cache-control': 'no-store',
+      })
+      res.end(fs.readFileSync(file))
     } catch (error) {
-      json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      if (res.headersSent) {
+        res.end()
+        return
+      }
+      json(res, error instanceof DomainError ? error.status : 400, {
+        ok: false,
+        error: {
+          code: error instanceof DomainError ? error.code : 'REQUEST_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      })
     }
   })
-
   return {
     server,
-    close(): Promise<void> {
-      for (const flow of flows.values()) {
-        if (flow.guard) clearTimeout(flow.guard)
-        for (const client of flow.clients) client.end()
-        if (flow.code === undefined) {
-          flow.queue.close()
-          flow.controller.abort(new Error('服务关闭'))
-        }
-      }
-      return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    system,
+    async close() {
+      unsubscribe()
+      for (const client of clients) client.res.end()
+      await system.close()
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      )
     },
   }
 }

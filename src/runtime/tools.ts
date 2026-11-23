@@ -21,6 +21,9 @@ export const WEB_FETCH_TOOL: ApiToolDef = {
 const FETCH_BYTES_LIMIT = 2_000_000
 const FETCH_TEXT_LIMIT = 200_000
 const FETCH_TIMEOUT_MS = 20_000
+// MCP 建连/列工具也必须有时限：否则搜索服务卡住时，教研回合会一直停在
+// advertisedTools()，最终被看门狗误报成“模型 300s 无进展”。
+const MCP_REQUEST_TIMEOUT_MS = 30_000
 
 const ENTITIES: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ldquo: '“', rdquo: '”', hellip: '…', mdash: '—', ndash: '–',
@@ -205,7 +208,16 @@ export async function webFetch(url: string, signal: AbortSignal, fetchImpl: type
       return { text: `抓取失败：HTTP ${response.status}`, isError: true }
     }
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+    // PDF 是二进制格式，按文本读进来既无法核对正文，也会把大量无意义字节塞进上下文，
+    // 拖慢后续模型回合。直接拒绝并退还抓取预算，让模型换静态 HTML 来源。
+    if (contentType.includes('application/pdf')) {
+      await response.body?.cancel().catch(() => {})
+      return { text: 'PDF 不支持：无法核对正文。请换一个可直接读取的 HTML 页面（本次抓取预算已退还）。', isError: true, failure: 'argument' }
+    }
     const buffer = await readBodyLimited(response, FETCH_BYTES_LIMIT)
+    if (buffer.subarray(0, 5).toString('latin1') === '%PDF-') {
+      return { text: 'PDF 不支持：无法核对正文。请换一个可直接读取的 HTML 页面（本次抓取预算已退还）。', isError: true, failure: 'argument' }
+    }
     const raw = buffer.toString('utf8')
     const text = contentType.includes('html') ? htmlToText(raw) : raw
     const trimmed = text.slice(0, FETCH_TEXT_LIMIT)
@@ -223,6 +235,11 @@ export interface ResearchTools {
   definitions(): Promise<ApiToolDef[]>
   call(name: string, argsJson: string, signal: AbortSignal): Promise<ToolResult>
   close(): Promise<void>
+}
+
+export interface ResearchToolsOptions {
+  // 便于测试注入更短的建连时限；生产默认 30s。
+  timeoutMs?: number
 }
 
 export interface SearchSettings {
@@ -248,9 +265,11 @@ export function searchSettingsFromEnv(env: NodeJS.ProcessEnv): SearchSettings | 
 
 // searchix / Tavily Hikari 等搜索服务：MCP over HTTP，延迟连接；
 // 连接失败时不暴露搜索工具（web_fetch 仍可用），不使整个流程失败。
-export function createResearchTools(settings: SearchSettings, onNotice: (message: string) => void = () => {}): ResearchTools {
+export function createResearchTools(settings: SearchSettings, onNotice: (message: string) => void = () => {},
+  options: ResearchToolsOptions = {}): ResearchTools {
   const url = settings.url
   const token = settings.token
+  const timeoutMs = options.timeoutMs ?? MCP_REQUEST_TIMEOUT_MS
   let client: Client | undefined
   let definitions: ApiToolDef[] | undefined
   let schemas: Map<string, JsonSchema> | undefined
@@ -260,13 +279,14 @@ export function createResearchTools(settings: SearchSettings, onNotice: (message
   const connect = async (): Promise<void> => {
     if (client || failed || !url || !token) { if (!url || !token) failed = true; return }
     connecting ??= (async () => {
+      let next: Client | undefined
       try {
         const transport = new StreamableHTTPClientTransport(new URL(url), {
           requestInit: { headers: searchHeaders(url, token) },
         })
-        const next = new Client({ name: 'tutor', version: '0.1.0' })
-        await next.connect(transport)
-        const listed = await next.listTools()
+        next = new Client({ name: 'tutor', version: '0.1.0' })
+        await next.connect(transport, { timeout: timeoutMs })
+        const listed = await next.listTools(undefined, { timeout: timeoutMs })
         client = next
         schemas = new Map(listed.tools.map(tool => [tool.name, tool.inputSchema as JsonSchema]))
         definitions = listed.tools.map(tool => ({
@@ -276,6 +296,8 @@ export function createResearchTools(settings: SearchSettings, onNotice: (message
         }))
       } catch (error) {
         failed = true
+        // 超时后可能仍留有底层连接；主动关闭，避免进程被悬挂的 socket 拖住。
+        await next?.close().catch(() => {})
         onNotice(`搜索服务连接失败（${error instanceof Error ? error.message : String(error)}）；本次仅使用正文抓取。`)
       }
     })()

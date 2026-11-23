@@ -22,3 +22,7 @@ courses/
 # 系统文件
 .DS_Store
 *.log
+
+# 本地协作助手记录
+.workbuddy/
+audits/

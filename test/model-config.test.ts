@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ModelConfigStore } from '../src/core/model-config.ts'
+import { DEFAULT_MAX_OUTPUT_TOKENS, ModelConfigStore } from '../src/core/model-config.ts'
 
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-model-config-'))
@@ -20,10 +20,12 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   const before = store.publicConfig()
   assert.equal(before.source, 'environment')
   assert.equal(before.apiKeySet, true)
+  assert.equal(before.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS)
   assert.equal(before.requestsPerMinute, 8)
   assert.ok(!JSON.stringify(before).includes('environment-secret'))
-  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768, researchDeadlineMs: 600000, requestsPerMinute: 6 })
+  const config = store.save({ baseUrl: 'https://second.invalid/v1/', model: 'next-model', apiKey: 'replacement-secret', contextWindow: 32768, maxOutputTokens: 384000, researchDeadlineMs: 600000, requestsPerMinute: 6 })
   assert.equal(config.source, 'saved')
+  assert.equal(config.maxOutputTokens, 384000)
   assert.equal(config.baseUrl, 'https://second.invalid/v1')
   assert.ok(!JSON.stringify(config).includes('replacement-secret'))
   assert.equal(fs.readFileSync(envFile, 'utf8'), original)
@@ -34,6 +36,7 @@ it('网页配置优先于启动环境，重建后仍有效；.env 不改动且�
   assert.equal(launch.TUTOR_LLM_API_KEY, 'replacement-secret')
   assert.equal(launch.TUTOR_LLM_THINKING, '')
   assert.equal(launch.TUTOR_LLM_CONTEXT_WINDOW, '32768')
+  assert.equal(launch.TUTOR_LLM_MAX_OUTPUT_TOKENS, '384000')
   assert.equal(launch.TUTOR_RESEARCH_DEADLINE_MS, '600000')
   assert.equal(launch.TUTOR_MODEL_CONFIG_RESOLVED, '1')
   assert.equal(launch.TUTOR_LLM_REQUESTS_PER_MINUTE, '6')
@@ -63,6 +66,7 @@ it('不合法的渠道、字段或推理设置不覆盖已保存配置', (t) => 
     { baseUrl: 'https://first.invalid/v1?api_key=hidden' }, { baseUrl: 'https://first.invalid/v1/chat/completions' },
     { model: 'model\nother: value' }, { model: 'bad\0model' }, { apiKey: 123 }, { apiKey: 'bad\nkey' }, { apiKey: 'bad\0key' },
     { thinking: 'unknown' }, { thinking: ['max'] }, { thinking: 'ultra' }, { contextWindow: 0 }, { contextWindow: 1.5 },
+    { maxOutputTokens: 0 }, { maxOutputTokens: 255 }, { maxOutputTokens: 1.5 }, { maxOutputTokens: 2_000_001 },
     { researchDeadlineMs: 0 }, { researchDeadlineMs: 1_800_001 }, { researchDeadlineMs: '600000' },
     { requestsPerMinute: 0 }, { requestsPerMinute: 601 }, { requestsPerMinute: 1.5 }, { requestsPerMinute: '8' },
   ]) assert.throws(() => store.save({ ...valid, ...invalid }))
@@ -96,6 +100,17 @@ it('旧版已保存设置默认 8 次，独立 DSH_HOME 仍共用渠道队列', 
   assert.equal(first.environment().TUTOR_MODEL_RATE_LIMIT_FILE, second.environment().TUTOR_MODEL_RATE_LIMIT_FILE)
   const custom = new ModelConfigStore(root, { env: { TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'shared.sqlite') } })
   assert.equal(custom.environment().TUTOR_MODEL_RATE_LIMIT_FILE, path.join(root, 'shared.sqlite'))
+})
+
+it('旧版已保存设置缺少最大输出时使用模型上限默认值', (t) => {
+  const { root, store } = fixture(t)
+  store.save({ baseUrl: 'https://first.invalid/v1', model: 'deepseek-fixture' })
+  const saved = JSON.parse(fs.readFileSync(store.file, 'utf8'))
+  delete saved.maxOutputTokens
+  fs.writeFileSync(store.file, JSON.stringify(saved))
+  const reopened = new ModelConfigStore(root, { env: {} })
+  assert.equal(reopened.publicConfig().maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+  assert.equal(reopened.environment().TUTOR_LLM_MAX_OUTPUT_TOKENS, String(DEFAULT_MAX_OUTPUT_TOKENS))
 })
 
 it('配置文件损坏时不泄漏片段，也不静默回退到别的渠道', (t) => {

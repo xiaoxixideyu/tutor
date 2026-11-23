@@ -6,19 +6,24 @@
 //  - whenIdleWithin：固定上限。用于 bootstrap 这类“一次性、无工具调用”的等待。
 //  - whenIdleOrStalled：停滞看门狗。用于会跑很久的 agentic 回合（如联网教研一批要多次搜索+抓取，
 //    整轮好几分钟很正常）——只要 progress() 还在前进就一直等，连续 stallMs 完全不动才判死。
-//    调用方喂的 progress 是「会话事件序号 + 流式块计数」：工具调用/结果、单条消息生成完毕会让事件序号前进，
-//    而单条消息「流式吐字」期间靠流式块计数前进。这样”长但活跃”（含一次性大生成的持续吐字）不被误杀，
-//    deadlineMs 另外限制总时长，持续输出也不能无限等待。
+//    调用方喂的 progress 是「会话事件序号 + 流式块计数 + 工具活动计数」：工具调用/结果、单条消息生成完毕会让事件序号前进，
+//    单条消息「流式吐字」期间靠流式块计数前进，MCP 建连/搜索/抓取等工具活动也会单独记进展。
+//    这样”长但活跃”（含一次性大生成的持续吐字）不被误杀，deadlineMs 另外限制总时长，持续输出也不能无限等待。
 // 纯函数，便于单测。
 
 const DEFAULT_TIMEOUT_MS = 300_000
 
 export class TurnTimeoutError extends Error {
+  // deadline=true 表示整轮执行总时限到点（重试只会再次触顶）；false 表示停滞看门狗判定。
+  readonly deadline: boolean
+  readonly timeoutMs: number
   constructor(ms: number, deadline = false) {
     super(deadline
       ? `模型回合达到 ${Math.round(ms / 1000)}s 执行总时限（不含渠道等待）；未发布未完成内容。请缩小任务或调整该调用的时限。`
       : `模型回合超时（${Math.round(ms / 1000)}s 无进展）；未发布未完成内容。可用 TUTOR_LLM_TIMEOUT_MS 调整（毫秒）。`)
     this.name = 'TurnTimeoutError'
+    this.deadline = deadline
+    this.timeoutMs = ms
   }
 }
 

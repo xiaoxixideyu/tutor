@@ -6,6 +6,8 @@ const MESSAGE_OVERHEAD_TOKENS = 4
 const DEFAULT_CONTEXT_WINDOW = 262144
 const PROMPT_SAFETY_TOKENS = 512
 const MIN_OUTPUT_TOKENS = 256
+const MIN_INPUT_RESERVE_TOKENS = 1024
+const MAX_INPUT_RESERVE_TOKENS = 8192
 
 export class ContextWindowError extends Error {
   constructor(message: string) {
@@ -31,13 +33,20 @@ export function estimateTokens(text: string): number {
 export function estimateMessageTokens(message: ApiMessage): number {
   const content = message.content ?? ''
   const toolCalls = message.tool_calls ? JSON.stringify(message.tool_calls) : ''
-  return estimateTokens(content) + estimateTokens(toolCalls) + MESSAGE_OVERHEAD_TOKENS
+  // DeepSeek 思考模式把 reasoning_content 随历史回传；它同样占上下文预算，不能漏算。
+  const reasoning = message.reasoning_content ?? ''
+  return estimateTokens(content) + estimateTokens(toolCalls) + estimateTokens(reasoning) + MESSAGE_OVERHEAD_TOKENS
 }
 
-export function outputTokenLimit(contextWindow: number, requested = 8192): number {
+// requested 是本次请求希望的最大输出；ceiling 是模型设置里的最大输出上限（不同模型差异很大，
+// 例如 DeepSeek V4 可达 384000）。小窗口至少给输入留一半，大窗口至少留 8192，
+// 避免把上下文全部让给输出后系统提示词放不下。
+export function outputTokenLimit(contextWindow: number, requested = 8192, ceiling = 8192): number {
   const window = normalizeContextWindow(contextWindow)
   const wanted = Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : 8192
-  return Math.max(MIN_OUTPUT_TOKENS, Math.min(wanted, 8192, Math.floor(window * 0.3), window - 1024))
+  const cap = Number.isFinite(ceiling) && ceiling > 0 ? Math.floor(ceiling) : 8192
+  const inputReserve = Math.max(MIN_INPUT_RESERVE_TOKENS, Math.min(MAX_INPUT_RESERVE_TOKENS, Math.floor(window / 2)))
+  return Math.max(MIN_OUTPUT_TOKENS, Math.min(wanted, cap, window - inputReserve - PROMPT_SAFETY_TOKENS))
 }
 
 export interface FittedHistory {

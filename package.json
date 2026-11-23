@@ -1,6 +1,6 @@
 {
   "name": "tutor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "个性化教学 agent：从需求澄清、教研、摸底、规划，到讲授、检验、复习，全程因材施教",
@@ -9,18 +9,13 @@
   },
   "scripts": {
     "agent": "node scripts/agent.mjs",
-    "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit",
-    "eval:grading": "node scripts/eval-grading.mjs",
-    "eval:content": "node scripts/eval-content.mjs",
-    "eval:content:all": "node scripts/eval-content-suite.mjs",
     "serve": "node scripts/agent.mjs serve",
-    "trial": "node scripts/trial.mjs"
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc --noEmit && node scripts/check-syntax.mjs",
+    "eval:agent": "node scripts/eval-agent.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.2",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "tldts": "7.4.18",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "yaml": "2.9.1"
   },
   "devDependencies": {

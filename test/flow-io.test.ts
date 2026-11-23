@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createLineQueue, MAX_QUEUED_LINES } from '../src/flows/io.ts'
+import { createLineQueue, MAX_QUEUED_LINES } from '../src/runtime/io.ts'
 
 test('行输入队列按顺序取出排队行', async () => {
   const queue = createLineQueue()

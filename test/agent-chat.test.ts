@@ -9,7 +9,7 @@ import { normalizeUsage, type ReportedUsage } from '../src/core/cost.ts'
 import type { LlmRequest, LlmResult, LlmTransport } from '../src/runtime/llm.ts'
 
 const MODEL: ModelSettings = { baseUrl: 'https://fixture.invalid/v1', apiKey: 'fixture-key', model: 'fixture-model',
-  thinking: 'default', contextWindow: 262144, requestsPerMinute: 8, researchDeadlineMs: 480_000 }
+  thinking: 'default', contextWindow: 262144, maxOutputTokens: 8192, requestsPerMinute: 8, researchDeadlineMs: 480_000 }
 
 function runtimeWith(transport: LlmTransport, sessionsRoot: string): ChatRuntime {
   return new ChatRuntime({ model: MODEL, sessionsRoot, workspace: sessionsRoot, env: { ...process.env, TUTOR_MODEL_RATE_LIMIT_FILE: path.join(sessionsRoot, 'limits.sqlite') },
@@ -21,6 +21,18 @@ class DisabledLimiter {
   async acquire(): Promise<void> {}
   async cooldown(_signal: AbortSignal, retryAfterMs = 0): Promise<number> { return Math.max(61_000, retryAfterMs) }
 }
+
+it('委托工具的核验时间不挤占主模型生成时限，工具返回后可继续生成', async t => {
+  const directory = tmp(t)
+  const first: LlmResult = { finish: 'tool_calls', text: '', toolCalls: [{ id: 'delegate', type: 'function',
+    function: { name: 'wait_for_content', arguments: '{}' } }] }
+  const runtime = runtimeWith(queueTransport([first, { finish: 'stop', text: '完成' }]), directory)
+  const chat = await runtime.createChat({ deadlineMs: 100, toolset: {
+    definitions: async () => [{ name: 'wait_for_content', parameters: { type: 'object' } }],
+    call: async () => { await new Promise(resolve => setTimeout(resolve, 300)); return { text: '已取得核验结果', isError: false } },
+  } })
+  assert.equal(await chat!.ask('准备下一步'), '完成')
+})
 
 function tmp(t: { after(cb: () => void): void }): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tutor-chat-'))
@@ -116,6 +128,31 @@ it('空正文属于失败回合，仅重试一次并保留两次用量，且不�
   }
 })
 
+it('工具调用会把 reasoning_content 带入下一轮请求', async (t) => {
+  const root = tmp(t)
+  const requests: LlmRequest[] = []
+  const toolCall: LlmResult = { finish: 'tool_calls', text: '', reasoningContent: '先调用搜索。',
+    toolCalls: [{ id: 'call-1', type: 'function', function: { name: 'web_fetch', arguments: '{}' } }] }
+  const chat = (await runtimeWith(queueTransport([toolCall, stop(undefined, '完成')], request => requests.push(request)), root).createChat())!
+  assert.equal(await chat.ask('请求'), '完成')
+  assert.equal(requests.length, 2)
+  const assistant = requests[1].messages.find(message => message.role === 'assistant' && message.tool_calls)
+  assert.equal(assistant?.reasoning_content, '先调用搜索。')
+})
+
+it('普通回复的 reasoning_content 会持久化并在下一轮回传', async (t) => {
+  const root = tmp(t)
+  const requests: LlmRequest[] = []
+  const chat = (await runtimeWith(queueTransport([
+    { finish: 'stop', text: '第一轮回答', reasoningContent: '第一轮思考' },
+    stop(undefined, '第二轮回答'),
+  ], request => requests.push(request)), root).createChat())!
+  assert.equal(await chat.ask('第一问'), '第一轮回答')
+  assert.equal(await chat.ask('第二问'), '第二轮回答')
+  const assistant = requests[1].messages.find(message => message.role === 'assistant' && message.content === '第一轮回答')
+  assert.equal(assistant?.reasoning_content, '第一轮思考')
+})
+
 it('审查截断不重复原请求，404 等永久错误不重试，失败用量仍可读', async (t) => {
   const root = tmp(t)
   const lengthChat = (await runtimeWith(queueTransport([length({ inputTokens: 10, outputTokens: 4096 })]), root).createChat({ retryOnLength: false }))!
@@ -186,7 +223,22 @@ it('小上下文窗口会裁剪历史并限制输出 token', async (t) => {
   assert.equal(captured.messages[0].role, 'system')
   assert.match(String(captured.messages[0].content), /上下文预算/)
   assert.deepEqual(captured.messages.filter((message) => message.role === 'user').map((message) => message.content), ['最新问题'])
-  assert.ok(captured.maxTokens !== undefined && captured.maxTokens <= 1228)
+  assert.equal(captured.maxTokens, 1536)
+})
+
+it('按模型设置的最大输出申请 token，不再固定为 8192', async (t) => {
+  const root = tmp(t)
+  let captured: LlmRequest | undefined
+  const runtime = new ChatRuntime({
+    model: { ...MODEL, contextWindow: 1_000_000, maxOutputTokens: 384_000 }, sessionsRoot: root, workspace: root,
+    env: { ...process.env, TUTOR_MODEL_RATE_LIMIT_FILE: path.join(root, 'limits.sqlite') },
+    transport: async (request) => { captured = request; return stop(undefined, '回复') },
+    rateLimiter: new DisabledLimiter() as never,
+  })
+  const chat = (await runtime.createChat())!
+  assert.equal(await chat.ask('写一段长回答'), '回复')
+  assert.ok(captured)
+  assert.equal(captured.maxTokens, 384_000)
 })
 
 it('模型设置热更新：下一回合用新渠道，渠道按设置缓存且会话与用量连续', async (t) => {  const root = tmp(t)

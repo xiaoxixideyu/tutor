@@ -8,6 +8,9 @@ export interface ApiMessage {
   content: string | null
   tool_calls?: ApiToolCall[]
   tool_call_id?: string
+  // DeepSeek 思考模式要求把上一轮 assistant 的 reasoning_content 原样回传；
+  // 旧会话没有这个字段时，请求层会补空串，不能省略。
+  reasoning_content?: string
 }
 
 export interface ApiToolCall {
@@ -36,7 +39,7 @@ export interface LlmFailure {
 }
 
 export type LlmResult =
-  | { finish: 'stop' | 'tool_calls' | 'length'; text: string; toolCalls?: ApiToolCall[]; usage?: ReportedUsage }
+  | { finish: 'stop' | 'tool_calls' | 'length'; text: string; toolCalls?: ApiToolCall[]; usage?: ReportedUsage; reasoningContent?: string }
   | { finish: 'error'; error: LlmFailure; usage?: ReportedUsage }
 
 // onChunk 在每个流式帧到达时调用；参数为 true 表示正文文本增量（用于首字延迟诊断）。
@@ -124,7 +127,8 @@ interface StreamDelta {
 }
 
 interface StreamChunk {
-  choices?: { delta?: StreamDelta; finish_reason?: string | null; message?: { content?: string | null; tool_calls?: ApiToolCall[] } }[]
+  choices?: { delta?: StreamDelta; finish_reason?: string | null;
+    message?: { content?: string | null; tool_calls?: ApiToolCall[]; reasoning_content?: string | null; reasoning?: string | null } }[]
   usage?: unknown
   error?: { message?: string; code?: string | number; type?: string }
 }
@@ -151,10 +155,24 @@ export function thinkingRequestParams(model: string, level: ReasoningLevel): Rec
   return { reasoning_effort: level }
 }
 
+// DeepSeek 思考模式要求历史里的每个 assistant 消息都带 reasoning_content；
+// 旧会话（或由其他模型创建的会话）没有这个字段时补空串。只在思考模式注入，
+// 关闭思考时保持原样，避免把非标准字段发给不认识的渠道。
+export function normalizeApiMessages(messages: ApiMessage[], model: string, thinking: ReasoningLevel): ApiMessage[] {
+  if (thinking === 'off' || !/deepseek/i.test(model)) return messages
+  let changed = false
+  const normalized = messages.map((message) => {
+    if (message.role !== 'assistant' || typeof message.reasoning_content === 'string') return message
+    changed = true
+    return { ...message, reasoning_content: '' }
+  })
+  return changed ? normalized : messages
+}
+
 function buildRequestBody(options: LlmTransportOptions, request: LlmRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: options.model,
-    messages: request.messages,
+    messages: normalizeApiMessages(request.messages, options.model, options.thinking),
     stream: true,
     stream_options: { include_usage: true },
   }
@@ -171,13 +189,17 @@ function parseCompletionBody(text: string): LlmResult | null {
   if (chunk.error) return { finish: 'error', error: { code: 'PI_AI_ERROR', message: chunk.error.message ?? '网关返回错误' } }
   const choice = chunk.choices?.[0]
   if (!choice) return null
-  const message = choice.message ?? { content: choice.delta?.content }
+  const message = choice.message ?? { content: choice.delta?.content,
+    reasoning_content: choice.delta?.reasoning_content, reasoning: choice.delta?.reasoning }
   const finishReason = choice.finish_reason ?? null
   const toolCalls = message.tool_calls?.length ? message.tool_calls : undefined
   const usage = mapOpenAiUsage(chunk.usage)
-  if (finishReason === 'length') return { finish: 'length', text: message.content ?? '', ...(usage ? { usage } : {}) }
-  if (toolCalls) return { finish: 'tool_calls', text: message.content ?? '', toolCalls, ...(usage ? { usage } : {}) }
-  return { finish: 'stop', text: message.content ?? '', ...(usage ? { usage } : {}) }
+  const reasoningContent = typeof message.reasoning_content === 'string' ? message.reasoning_content
+    : typeof message.reasoning === 'string' ? message.reasoning : undefined
+  const reasoning = reasoningContent ? { reasoningContent } : {}
+  if (finishReason === 'length') return { finish: 'length', text: message.content ?? '', ...(usage ? { usage } : {}), ...reasoning }
+  if (toolCalls) return { finish: 'tool_calls', text: message.content ?? '', toolCalls, ...(usage ? { usage } : {}), ...reasoning }
+  return { finish: 'stop', text: message.content ?? '', ...(usage ? { usage } : {}), ...reasoning }
 }
 
 export function openaiTransport(options: LlmTransportOptions): LlmTransport {
@@ -209,8 +231,10 @@ export function openaiTransport(options: LlmTransportOptions): LlmTransport {
     if (!response.body) return { finish: 'error', error: { code: 'TRANSPORT', message: '网关响应没有正文流' } }
 
     let text = ''
+    let reasoningContent = ''
     let usage: ReportedUsage | undefined
     let finishReason: string | null = null
+    let sawDone = false
     let failure: LlmFailure | undefined
     const toolCalls: ApiToolCall[] = []
     const decoder = new TextDecoder()
@@ -220,7 +244,8 @@ export function openaiTransport(options: LlmTransportOptions): LlmTransport {
       const trimmed = line.trim()
       if (!trimmed.startsWith('data:')) return
       const payload = trimmed.slice('data:'.length).trim()
-      if (payload === '' || payload === '[DONE]') return
+      if (payload === '[DONE]') { sawDone = true; return }
+      if (payload === '') return
       let chunk: StreamChunk
       try { chunk = JSON.parse(payload) as StreamChunk } catch { return }
       if (chunk.error) {
@@ -237,7 +262,13 @@ export function openaiTransport(options: LlmTransportOptions): LlmTransport {
       if (typeof delta.content === 'string' && delta.content !== '') {
         text += delta.content
         onChunk(true)
-      } else if (typeof delta.reasoning_content === 'string' || typeof delta.reasoning === 'string') {
+      }
+      // reasoning_content 与正文可能出现在同一帧；不能写成 else if，否则会丢掉思考内容。
+      // 它不是展示正文，但下一轮请求必须原样带回（DeepSeek 思考模式的硬要求）。
+      const reasoningDelta = typeof delta.reasoning_content === 'string' ? delta.reasoning_content
+        : typeof delta.reasoning === 'string' ? delta.reasoning : ''
+      if (reasoningDelta !== '') {
+        reasoningContent += reasoningDelta
         onChunk(false)
       }
       for (const call of delta.tool_calls ?? []) {
@@ -268,17 +299,27 @@ export function openaiTransport(options: LlmTransportOptions): LlmTransport {
       return { finish: 'error', error: classifyTransportFailure(error) }
     }
     if (failure) return { finish: 'error', error: failure }
+    // 正常 SSE 应以 finish_reason 收尾；连 [DONE] 都没有，说明网关/中转在生成完成前断流。
+    // 不能按 stop 接受半截正文，否则会把截断内容当成完整结果发布。
+    // 兼容只发 [DONE] 而不发 finish_reason 的中转：有明确结束标记时仍按完整回复处理。
+    if (finishReason === null && !sawDone) {
+      return { finish: 'error', error: {
+        code: 'TRANSPORT',
+        message: '模型流在 finish_reason 或 [DONE] 之前结束，响应可能被截断',
+      }, ...(usage ? { usage } : {}) }
+    }
     if (finishReason === 'content_filter') return { finish: 'error', error: { code: 'PI_AI_ERROR', message: '网关按内容策略拦截了本次回复（content_filter）' } }
     const completeCalls = toolCalls.filter(call => call.id !== '' || call.function.name !== '')
-    if (finishReason === 'length') return { finish: 'length', text, ...(usage ? { usage } : {}) }
+    const reasoning = reasoningContent ? { reasoningContent } : {}
+    if (finishReason === 'length') return { finish: 'length', text, ...(usage ? { usage } : {}), ...reasoning }
     if (finishReason === 'tool_calls' || finishReason === 'function_call' || completeCalls.length > 0) {
       // 网关声明 tool_calls 却没有给出任何有效调用时不能继续循环：
       // 上层会把它当成"模型要求调用工具"，导致空转直到超时。
       if (completeCalls.length === 0) {
         return { finish: 'error', error: { code: 'PI_AI_ERROR', message: '模型返回 tool_calls 但没有可执行的工具调用' }, ...(usage ? { usage } : {}) }
       }
-      return { finish: 'tool_calls', text, toolCalls: completeCalls, ...(usage ? { usage } : {}) }
+      return { finish: 'tool_calls', text, toolCalls: completeCalls, ...(usage ? { usage } : {}), ...reasoning }
     }
-    return { finish: 'stop', text, ...(usage ? { usage } : {}) }
+    return { finish: 'stop', text, ...(usage ? { usage } : {}), ...reasoning }
   }
 }

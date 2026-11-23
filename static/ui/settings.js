@@ -1,259 +1,208 @@
-// 模型设置表单：独立设置页与单壳抽屉共用同一份逻辑。
-(function () {
-  const S = (window.TutorSettings = window.TutorSettings || {})
-
-  const FIELDS = `
-    <div class="field">
-      <label for="baseUrl">服务地址（Base URL）</label>
-      <input id="baseUrl" type="url" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" required maxlength="2048">
-      <p class="hint">填写渠道提供的基础地址，通常以 /v1 结尾，不包含 /chat/completions。</p>
-    </div>
-    <div class="field">
-      <label for="model">模型名称</label>
-      <input id="model" placeholder="渠道提供的完整模型 ID" autocomplete="off" spellcheck="false" required maxlength="256">
-      <p class="hint">名称必须与该渠道支持的模型 ID 一致。</p>
-    </div>
-    <div class="field">
-      <label for="apiKey">API Key <span id="keyState" class="key-state" hidden>已配置</span></label>
-      <input id="apiKey" type="password" placeholder="填写该渠道的 API Key" autocomplete="new-password" spellcheck="false" maxlength="8192">
-      <p id="keyHint" class="hint">密钥保存在本机，保存后不会回显到页面。</p>
-    </div>
-    <div class="field">
-      <label for="searchProvider">搜索服务</label>
-      <select id="searchProvider">
-        <option value="exa">Exa</option>
-        <option value="tavily">Tavily Hikari</option>
-        <option value="custom">自定义 MCP</option>
-      </select>
-      <p class="hint">选择后自动填入该服务的 MCP 地址；地址仍可手动修改。保存后在下一回合生效。</p>
-    </div>
-    <div class="field">
-      <label for="searchMcpUrl">教研搜索 MCP 地址（可选）</label>
-      <input id="searchMcpUrl" type="url" placeholder="https://mcp.exa.ai/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
-      <p class="hint">联网教研的搜索服务（MCP over HTTP）。Exa 填 https://mcp.exa.ai/mcp；Tavily Hikari 填 https://&lt;host&gt;/mcp；留空沿用 .env 的 TUTOR_MCP_SEARCH_URL。</p>
-    </div>
-    <div class="field">
-      <label for="searchToken">搜索服务 Token <span id="searchKeyState" class="key-state" hidden>已配置</span></label>
-      <input id="searchToken" type="password" placeholder="填写该搜索服务的 Token" autocomplete="new-password" spellcheck="false" maxlength="8192">
-      <p id="searchKeyHint" class="hint">Exa 填 API Key（按 x-api-key 发送），Tavily Hikari 填 th- 开头令牌；密钥保存在本机，保存后不会回显。</p>
-    </div>
-    <details>
-      <summary>高级设置</summary>
-      <div class="field">
-        <label for="thinking">推理档位</label>
-        <select id="thinking">
-          <option value="default">跟随服务默认</option>
-          <option value="off">关闭推理</option>
-          <option value="minimal">最低</option>
-          <option value="low">低</option>
-          <option value="medium">中</option>
-          <option value="high">高</option>
-          <option value="max">最高</option>
-        </select>
-        <p class="hint">按模型族映射：DeepSeek 为 low/high/max，MiniMax 为 minimal/low/medium（默认对齐 low）；其他模型按 OpenAI 兼容的 reasoning_effort 传所选档位。不支持推理参数的模型请选择“跟随服务默认”，保存前可用下方“测试模型”确认。</p>
-      </div>
-      <div class="field">
-        <label for="contextWindow">上下文长度（token）</label>
-        <input id="contextWindow" type="number" min="1024" max="2000000" step="1" value="262144" required>
-        <p class="hint">按渠道说明填写，用于限制单次请求可容纳的上下文。</p>
-      </div>
-      <div class="field">
-        <label for="requestsPerMinute">每分钟请求数</label>
-        <input id="requestsPerMinute" type="number" min="1" max="600" step="1" value="8" required>
-        <p class="hint">按渠道配额填写，默认 8 次。教学、教研和审查共用额度；额度不足时会排队等待。</p>
-      </div>
-      <div class="field">
-        <label for="researchMinutes">教研执行时限（分钟）</label>
-        <input id="researchMinutes" type="number" min="1" max="30" step="1" value="8" required>
-        <p class="hint">约束实际模型请求、搜索和抓取；额度排队与恢复等待另计，单回合最多等待 30 分钟。独立内容审查另计时，达到上限保留已保存进度。</p>
-      </div>
-    </details>`
-
-  // 搜索服务的地址与令牌提示：选择器只负责填地址，保存的仍是 URL + Token。
-  const SEARCH_PROVIDERS = {
-    exa: { url: 'https://mcp.exa.ai/mcp', token: '填写 Exa API Key（按 x-api-key 发送）',
-      hint: 'Exa 使用 https://mcp.exa.ai/mcp 与 API Key；默认提供 web_search_exa / web_fetch_exa 两个工具。' },
-    tavily: { url: '', token: '填写 Tavily Hikari 的 th- 开头令牌',
-      hint: 'Tavily Hikari 填 https://<host>/mcp 与 th- 开头的令牌。' },
-    custom: { url: '', token: '填写该搜索服务的 Token',
-      hint: '任意兼容 MCP over HTTP 的搜索服务；工具名需包含 search / fetch / extract 片段才会被教研预算放行。' },
+;(function () {
+  const levels = [
+    ['default', '渠道默认'],
+    ['off', '关闭'],
+    ['minimal', '极低'],
+    ['low', '轻量'],
+    ['medium', '适中'],
+    ['high', '深入'],
+    ['max', '最高'],
+  ]
+  const esc = (value) => window.TutorDom.esc(value)
+  function field(name, label, type = 'text', hint = '') {
+    return (
+      '<div class="field"><label for="cfg-' +
+      name +
+      '">' +
+      label +
+      '</label><input id="cfg-' +
+      name +
+      '" name="' +
+      name +
+      '" type="' +
+      type +
+      '" autocomplete="' +
+      (type === 'password' ? 'new-password' : 'off') +
+      '"><p class="hint">' +
+      hint +
+      '</p></div>'
+    )
   }
-
-  function providerOf(url) {
-    try {
-      const host = new URL(url).hostname.toLowerCase()
-      if (/(^|\.)exa\.ai$/.test(host)) return 'exa'
-      if (/tavily/.test(host)) return 'tavily'
-    } catch { /* 未配置或输入中 */ }
-    return 'custom'
+  function reasoning(name, label, hint) {
+    return (
+      '<div class="field"><label for="cfg-' +
+      name +
+      '">' +
+      label +
+      '</label><select id="cfg-' +
+      name +
+      '" name="' +
+      name +
+      '">' +
+      levels.map(([value, title]) => '<option value="' + value + '">' + title + '</option>').join('') +
+      '</select><p class="hint">' +
+      hint +
+      '</p></div>'
+    )
   }
-
-  // 挂载设置表单到任意容器；返回 { reload, destroy }。
-  S.mount = function (root, options = {}) {
-    const onSaved = options.onSaved ?? (() => {})
-    root.innerHTML = `
-      <form class="settings-form">
-        <fieldset class="settings-fields" disabled>
-          ${FIELDS}
-          <div class="actions"><button type="button" class="settings-test">测试模型</button><button type="submit" class="settings-save">保存设置</button><span class="saved settings-saved"></span></div>
-          <p class="hint">测试模型不会保存设置，但会按当前表单向渠道发送一次最小真实请求。</p>
-        </fieldset>
-        <div class="settings-message" role="status" aria-live="polite"></div>
-      </form>`
-
-    const $ = (id) => root.querySelector(`#${id}`)
-    const fields = root.querySelector('.settings-fields')
-    const message = root.querySelector('.settings-message')
-    const saved = root.querySelector('.settings-saved')
-    let current = null
-
-    function show(text, error = false) {
-      message.textContent = text
-      message.className = `settings-message ${error ? 'error' : 'success'}`
-    }
-
-    function updateKeyHint() {
-      if (!current) return
-      let nextUrl = $('baseUrl').value.trim().replace(/\/+$/, '')
-      try { nextUrl = new URL(nextUrl).toString().replace(/\/+$/, '') } catch { /* 输入中，保存时校验 */ }
-      let previousUrl = current.baseUrl
-      try { previousUrl = new URL(previousUrl).toString().replace(/\/+$/, '') } catch { /* 尚未配置 */ }
-      const changed = nextUrl !== previousUrl
-      $('apiKey').required = changed || !current.apiKeySet
-      $('keyState').hidden = changed || !current.apiKeySet
-      $('apiKey').placeholder = changed ? '填写新渠道的 API Key' : current.apiKeySet ? '留空继续使用已配置的密钥' : '填写该渠道的 API Key'
-      $('keyHint').textContent = changed
-        ? '服务地址已修改，请填写新渠道的 API Key。'
-        : current.apiKeySet ? '已配置密钥；留空继续使用，输入新值可更换。已保存的密钥不会回显。' : '密钥保存在本机，保存后不会回显到页面。'
-    }
-
-    function updateSearchHint() {
-      if (!current) return
-      const provider = SEARCH_PROVIDERS[$('searchProvider').value] ?? SEARCH_PROVIDERS.custom
-      let nextUrl = $('searchMcpUrl').value.trim().replace(/\/+$/, '')
-      try { nextUrl = new URL(nextUrl).toString().replace(/\/+$/, '') } catch { /* 输入中，保存时校验 */ }
-      let previousUrl = current.searchMcpUrl
-      try { previousUrl = new URL(previousUrl).toString().replace(/\/+$/, '') } catch { /* 尚未配置 */ }
-      const changed = nextUrl !== previousUrl
-      $('searchKeyState').hidden = changed || !current.searchTokenSet
-      $('searchToken').placeholder = changed ? '填写新搜索服务的 Token'
-        : current.searchTokenSet ? '留空继续使用已配置的 Token' : provider.token
-      $('searchKeyHint').textContent = changed
-        ? '搜索服务地址已修改，请填写新服务的 Token；留空表示不修改搜索配置。'
-        : current.searchTokenSet ? '已配置搜索 Token；留空继续使用，输入新值可更换。保存后在下一回合生效。'
-          : `${provider.hint}密钥保存在本机，保存后不会回显。`
-    }
-
-    function populate(config) {
-      current = config
-      $('baseUrl').value = config.baseUrl
-      $('model').value = config.model
-      $('thinking').value = config.thinking
-      $('contextWindow').value = config.contextWindow
-      $('requestsPerMinute').value = config.requestsPerMinute ?? 8
-      $('researchMinutes').value = (config.researchDeadlineMs ?? 480000) / 60000
-      $('apiKey').value = ''
-      $('apiKey').placeholder = config.apiKeySet ? '留空继续使用已配置的密钥' : '填写该渠道的 API Key'
-      $('keyState').hidden = !config.apiKeySet
-      $('searchMcpUrl').value = config.searchMcpUrl ?? ''
-      $('searchProvider').value = providerOf(config.searchMcpUrl ?? '')
-      $('searchToken').value = ''
-      $('searchToken').placeholder = config.searchTokenSet ? '留空继续使用已配置的 Token' : '填写该搜索服务的 Token（如 th-…）'
-      $('searchKeyState').hidden = !config.searchTokenSet
-      saved.textContent = config.updatedAt ? `上次保存：${new Date(config.updatedAt).toLocaleString()}` : config.configured ? '已读取当前服务配置' : '请先配置模型服务'
-      updateKeyHint()
-      updateSearchHint()
-    }
-
-    async function request(init) {
-      const response = await fetch('/api/model-config', { ...init, signal: AbortSignal.timeout(10000) })
-      if (response.status === 404) throw new Error('后台版本尚不支持网页设置，请重启 tutor 服务后刷新页面')
-      let result
-      try { result = await response.json() } catch { throw new Error('无法读取后台响应，请重启 tutor 服务后刷新页面') }
-      if (!response.ok || result.ok !== true) throw new Error(result.error || '模型设置请求失败')
-      return result
-    }
-
-    async function reload() {
-      try {
-        const result = await request()
-        populate(result.config)
-        fields.disabled = false
+  window.TutorSettings = {
+    mount(root, options = {}) {
+      root.innerHTML =
+        '<form class="settings-form"><fieldset>' +
+        field('baseUrl', '服务地址', 'url', '填写渠道基础地址，例如 https://api.example.com/v1。') +
+        field('model', '模型名称', 'text', '使用渠道提供的模型名称。') +
+        field('apiKey', 'API Key', 'password', '密钥保存在本机，留空可沿用当前渠道的密钥。') +
+        reasoning('agentThinking', '教学推理', '轻量适合日常问答；深入推理可能需要更长等待。') +
+        reasoning('reviewThinking', '内容核验推理', '用于独立解题、内容核对和主观题评阅。') +
+        '<details><summary>连接与请求设置</summary>' +
+        reasoning('thinking', '连接测试推理', '用于模型连通测试。') +
+        field('contextWindow', '上下文长度', 'number') +
+        field('maxOutputTokens', '最大输出上限', 'number', '具体教学任务会按需要进一步收紧输出。') +
+        field('requestsPerMinute', '每分钟请求数', 'number') +
+        field('researchMinutes', '单次联网处理时限（分钟）', 'number') +
+        '</details>' +
+        '<details><summary>联网资料搜索</summary><div class="field"><label for="cfg-searchProvider">搜索服务</label><select id="cfg-searchProvider" name="searchProvider"><option value="exa">Exa</option><option value="tavily">Tavily Hikari</option><option value="custom">自定义 MCP</option></select></div>' +
+        field('searchMcpUrl', '搜索服务地址', 'url', 'Exa 使用 https://mcp.exa.ai/mcp；也可填写兼容 MCP 服务。') +
+        field('searchToken', '搜索服务密钥', 'password', '留空沿用已有密钥；更换地址需要新密钥。') +
+        '</details>' +
+        '<p class="settings-saved"></p><div class="settings-buttons"><button type="submit" class="primary settings-save">保存设置</button><button type="button" class="secondary settings-test">测试连接</button></div></fieldset><div class="settings-status" role="status"></div></form>'
+      const form = root.querySelector('form'),
+        fieldset = root.querySelector('fieldset'),
+        status = root.querySelector('.settings-status')
+      const input = (name) => root.querySelector('[name="' + name + '"]')
+      let current = null,
+        destroyed = false
+      function show(message, error = false) {
+        status.textContent = message
+        status.classList.toggle('error', error)
+      }
+      for (const name of ['contextWindow', 'maxOutputTokens', 'requestsPerMinute', 'researchMinutes'])
+        input(name).step = '1'
+      input('baseUrl').required = true
+      input('model').required = true
+      input('contextWindow').min = '1024'
+      input('contextWindow').max = '2000000'
+      input('maxOutputTokens').min = '256'
+      input('maxOutputTokens').max = '2000000'
+      input('requestsPerMinute').min = '1'
+      input('requestsPerMinute').max = '600'
+      input('researchMinutes').min = '1'
+      input('researchMinutes').max = '30'
+      input('searchProvider').addEventListener('change', () => {
+        if (input('searchProvider').value === 'exa') input('searchMcpUrl').value = 'https://mcp.exa.ai/mcp'
+      })
+      function populate(config) {
+        current = config
+        for (const name of [
+          'baseUrl',
+          'model',
+          'thinking',
+          'agentThinking',
+          'reviewThinking',
+          'contextWindow',
+          'maxOutputTokens',
+          'requestsPerMinute',
+          'searchMcpUrl',
+        ]) {
+          input(name).value = config[name] ?? (name === 'agentThinking' || name === 'reviewThinking' ? 'low' : '')
+        }
+        input('researchMinutes').value = String((config.researchDeadlineMs ?? 240000) / 60000)
+        input('apiKey').value = ''
+        input('apiKey').placeholder = config.apiKeySet ? '已配置，留空继续使用' : '填写 API Key'
+        input('searchToken').value = ''
+        input('searchToken').placeholder = config.searchTokenSet ? '已配置，留空继续使用' : '填写搜索密钥'
+        input('searchProvider').value = (config.searchMcpUrl ?? '').includes('mcp.exa.ai')
+          ? 'exa'
+          : (config.searchMcpUrl ?? '').includes('tavily')
+            ? 'tavily'
+            : 'custom'
+        root.querySelector('.settings-saved').textContent = config.configured
+          ? '已读取当前连接设置'
+          : '先配置模型，再开始学习。'
+      }
+      function payload() {
+        return {
+          baseUrl: input('baseUrl').value.trim(),
+          model: input('model').value.trim(),
+          apiKey: input('apiKey').value.trim(),
+          thinking: input('thinking').value,
+          agentThinking: input('agentThinking').value,
+          reviewThinking: input('reviewThinking').value,
+          contextWindow: Number(input('contextWindow').value),
+          maxOutputTokens: Number(input('maxOutputTokens').value),
+          requestsPerMinute: Number(input('requestsPerMinute').value),
+          researchDeadlineMs: Number(input('researchMinutes').value) * 60000,
+          searchMcpUrl: input('searchMcpUrl').value.trim(),
+          searchToken: input('searchToken').value.trim(),
+        }
+      }
+      async function request(url, body) {
+        const response = await fetch(url, {
+          method: body ? 'POST' : 'GET',
+          headers: body ? { 'content-type': 'application/json' } : {},
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(url.endsWith('model-test') ? 120000 : 10000),
+        })
+        const result = await response.json()
+        if (!response.ok || result.ok === false) throw new Error(result.error?.message ?? result.error ?? '请求失败')
         return result
-      } catch (error) {
-        show(error.message, true)
-        throw error
       }
-    }
-
-    function formConfig() {
+      async function reload() {
+        fieldset.disabled = true
+        try {
+          const result = await request('/api/model-config')
+          if (!destroyed) populate(result.config)
+          return result
+        } catch (error) {
+          if (!destroyed) show(error.message, true)
+          throw error
+        } finally {
+          if (!destroyed) fieldset.disabled = false
+        }
+      }
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        fieldset.disabled = true
+        show('正在保存…')
+        try {
+          const result = await request('/api/model-config', payload())
+          populate(result.config)
+          show('已保存，下一回合使用新的设置。')
+          options.onSaved?.(result)
+        } catch (error) {
+          show(error.message, true)
+        } finally {
+          fieldset.disabled = false
+        }
+      })
+      root.querySelector('.settings-test').addEventListener('click', async () => {
+        fieldset.disabled = true
+        show('正在测试连接…')
+        try {
+          const result = await request('/api/model-test', payload())
+          show(
+            '连接成功 · ' +
+              result.model +
+              ' · ' +
+              Math.round(result.elapsedMs / 1000) +
+              ' 秒' +
+              (result.text ? ' · ' + result.text : ''),
+          )
+        } catch (error) {
+          show(error.message, true)
+        } finally {
+          fieldset.disabled = false
+        }
+      })
+      const ready = reload().catch(() => {})
       return {
-        baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
-        thinking: $('thinking').value, contextWindow: Number($('contextWindow').value), requestsPerMinute: Number($('requestsPerMinute').value),
-        researchDeadlineMs: Number($('researchMinutes').value) * 60000,
-        searchMcpUrl: $('searchMcpUrl').value.trim(), searchToken: $('searchToken').value.trim(),
+        ready,
+        reload,
+        destroy() {
+          destroyed = true
+          root.innerHTML = ''
+        },
       }
-    }
-
-    $('baseUrl').addEventListener('input', updateKeyHint)
-    $('searchMcpUrl').addEventListener('input', updateSearchHint)
-    $('searchProvider').addEventListener('change', () => {
-      const provider = SEARCH_PROVIDERS[$('searchProvider').value]
-      // 只自动填地址；Token 必须由用户填写，换服务时服务端也会要求重填。
-      if (provider?.url) $('searchMcpUrl').value = provider.url
-      updateSearchHint()
-    })
-    root.querySelector('.settings-form').addEventListener('submit', async (event) => {
-      event.preventDefault()
-      const config = formConfig()
-      fields.disabled = true
-      root.querySelector('.settings-save').textContent = '保存中…'
-      try {
-        const result = await request({
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config),
-        })
-        populate(result.config)
-        show(result.flows?.length
-          ? `已保存。进行中的 ${result.flows.length} 个流程将在下一回合使用新配置；本回合已发出的请求不受影响。`
-          : '已保存。新开始的教学流程将使用此配置，无需重启服务。')
-        onSaved(result)
-      } catch (error) {
-        show(error.message, true)
-      } finally {
-        fields.disabled = false
-        root.querySelector('.settings-save').textContent = '保存设置'
-      }
-    })
-
-    root.querySelector('.settings-test').addEventListener('click', async () => {
-      const button = root.querySelector('.settings-test')
-      const save = root.querySelector('.settings-save')
-      if (button.disabled) return
-      button.disabled = true
-      save.disabled = true
-      button.textContent = '测试中…'
-      show('正在向当前表单中的渠道发送一次最小请求…')
-      try {
-        const response = await fetch('/api/model-test', {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(formConfig()),
-          signal: AbortSignal.timeout(120000),
-        })
-        if (response.status === 404) throw new Error('后台版本尚不支持模型测试，请重启 tutor 服务后刷新页面')
-        let result
-        try { result = await response.json() } catch { throw new Error('无法读取测试响应，请重启 tutor 服务后刷新页面') }
-        if (!response.ok || result.ok !== true) throw new Error(result.error || '模型测试失败')
-        const reply = result.text ? `，回复：${String(result.text).slice(0, 120)}` : result.finish === 'length' ? '，返回被输出上限截断' : ''
-        show(`连接成功：${result.model} · ${result.level} · ${result.elapsedMs}ms${reply}`)
-      } catch (error) {
-        show(`测试失败：${error.name === 'TimeoutError' ? '等待超过 120 秒' : error.message}`, true)
-      } finally {
-        button.disabled = false
-        save.disabled = false
-        button.textContent = '测试模型'
-      }
-    })
-
-    const ready = reload().catch(() => {})
-    return { ready, reload, destroy() { root.innerHTML = '' } }
+    },
   }
 })()

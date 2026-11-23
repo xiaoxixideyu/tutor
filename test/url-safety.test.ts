@@ -43,6 +43,25 @@ it('响应体超过上限时中止读取', async () => {
   assert.equal(body.toString('utf8'), 'ok')
 })
 
+it('webFetch 拒绝 PDF，避免把二进制当正文塞进教研上下文', async () => {
+  const fakeFetch = (async () => new Response('%PDF-1.4\nbinary', {
+    status: 200, headers: { 'content-type': 'application/pdf' },
+  })) as typeof fetch
+  const result = await webFetch('https://93.184.216.34/source.pdf', new AbortController().signal, fakeFetch)
+  assert.equal(result.isError, true)
+  assert.equal(result.failure, 'argument')
+  assert.match(result.text, /PDF 不支持/)
+})
+
+it('webFetch 用文件头识别伪装成 octet-stream 的 PDF', async () => {
+  const fakeFetch = (async () => new Response('%PDF-1.7\nbinary', {
+    status: 200, headers: { 'content-type': 'application/octet-stream' },
+  })) as typeof fetch
+  const result = await webFetch('https://93.184.216.34/source', new AbortController().signal, fakeFetch)
+  assert.equal(result.isError, true)
+  assert.match(result.text, /PDF 不支持/)
+})
+
 it('webFetch 在发起连接前拒绝本机地址', async () => {
   let hits = 0
   const server = http.createServer((_req, res) => { hits += 1; res.end('secret') })

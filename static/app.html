@@ -1,67 +1,45 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tutor 导师 · 工作区</title>
-<link rel="stylesheet" href="/ui/chat.css">
-<link rel="stylesheet" href="/ui/home.css">
-<link rel="stylesheet" href="/ui/wizard.css">
-<link rel="stylesheet" href="/ui/practice.css">
-<link rel="stylesheet" href="/ui/review.css">
-<link rel="stylesheet" href="/ui/app.css">
-<link rel="stylesheet" href="/ui/settings.css">
-<link rel="stylesheet" href="/research-progress.css">
-</head>
-<body class="app-body">
-<aside class="app-rail">
-  <div class="rail-head">
-    <div class="rail-title">tutor 导师</div>
-    <a href="#/new" class="rail-action">＋ 开设新课程</a>
-  </div>
-  <div class="rail-section">
-    <div class="rail-label">课程</div>
-    <div id="rail-courses" class="rail-list"></div>
-  </div>
-  <div class="rail-section">
-    <div class="rail-label">进行中</div>
-    <div id="rail-flows" class="rail-list"></div>
-  </div>
-  <div class="rail-foot">
-    <button class="rail-action rail-button" id="openSettingsRail" type="button">模型设置</button>
-    <span class="rail-hint">⌘K 命令面板</span>
-  </div>
-</aside>
-<main class="app-main">
-  <header class="app-topbar">
-    <div class="topbar-title" id="app-title">工作区</div>
-    <div class="topbar-status" id="app-status"></div>
-    <button class="topbar-link" id="openSettings" type="button">模型设置</button>
-  </header>
-  <div class="app-canvas" id="app-canvas"></div>
-</main>
-<div class="drawer-backdrop" id="drawerBackdrop"></div>
-<aside class="drawer" id="settingsDrawer" aria-label="模型设置" aria-hidden="true">
-  <div class="drawer-head">
-    <h2>模型设置</h2>
-    <button class="drawer-close" id="closeSettings" type="button">关闭</button>
-  </div>
-  <div class="drawer-body" id="settingsBody"></div>
-</aside>
-<script src="/md.js"></script>
-<script src="/research-progress.js"></script>
-<script src="/flow-client.js"></script>
-<script src="/ui/dom.js"></script>
-<script src="/ui/rpc.js"></script>
-<script src="/ui/chat.js"></script>
-<script src="/ui/views/home.js"></script>
-<script src="/ui/views/learn.js"></script>
-<script src="/ui/views/exam.js"></script>
-<script src="/ui/views/practice.js"></script>
-<script src="/ui/views/review.js"></script>
-<script src="/ui/views/wizard.js"></script>
-<script src="/ui/settings.js"></script>
-<script src="/ui/palette.js"></script>
-<script src="/ui/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#173c33" />
+    <title>tutor · 你的学习导师</title>
+    <link rel="stylesheet" href="/ui/app.css" />
+  </head>
+  <body>
+    <aside class="rail" id="rail">
+      <a href="#/" class="brand"
+        ><span class="brand-mark">t</span><span>tutor<small>你的学习导师</small></span></a
+      >
+      <nav class="main-nav">
+        <a href="#/" data-nav="today">今天</a><a href="#/courses" data-nav="courses">我的课程</a>
+      </nav>
+      <button id="new-course" class="new-course">＋ 开始一个学习目标</button>
+      <div class="rail-caption">正在学习</div>
+      <div id="course-nav" class="course-nav"></div>
+      <div class="rail-bottom"><button id="open-settings">模型设置</button><span>目标 · 实践 · 真正学会</span></div>
+    </aside>
+    <main class="workspace">
+      <header class="topbar">
+        <button id="toggle-rail" class="mobile-menu" aria-label="打开课程列表">☰</button>
+        <div id="page-title">今天</div>
+        <div class="topbar-right"><span id="connection-state"></span><button id="top-settings">设置</button></div>
+      </header>
+      <div id="app-canvas" class="canvas" aria-live="polite"></div>
+    </main>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <aside id="settings-drawer" class="drawer" hidden aria-label="模型设置">
+      <div class="drawer-head">
+        <h2>模型设置</h2>
+        <button id="close-settings" aria-label="关闭设置">✕</button>
+      </div>
+      <div id="settings-body"></div>
+    </aside>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script src="/md.js"></script>
+    <script src="/ui/dom.js"></script>
+    <script src="/ui/settings.js"></script>
+    <script src="/ui/app.js"></script>
+  </body>
 </html>

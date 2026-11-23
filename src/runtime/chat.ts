@@ -12,6 +12,7 @@ import { openaiTransport, type ApiMessage, type ApiToolCall, type ApiToolDef, ty
 import { MCP_SEARCH_PREFIX, WEB_FETCH_TOOL, createResearchTools, searchSettingsFromEnv, webFetch, type ResearchTools, type SearchSettings, type ToolResult } from './tools.ts'
 import type { ResearchStatusSink } from './status.ts'
 import type { ReasoningLevel } from '../core/reasoning.ts'
+import type { RuntimeToolset, RuntimeToolResult } from './agent-tools.ts'
 
 export interface ModelSettings {
   baseUrl: string
@@ -19,6 +20,7 @@ export interface ModelSettings {
   model: string
   thinking: ReasoningLevel
   contextWindow: number
+  maxOutputTokens: number
   requestsPerMinute: number
   researchDeadlineMs: number
 }
@@ -30,10 +32,15 @@ export interface CreateChatOptions {
   deadlineMs?: number
   maxWaitMs?: number
   maxTokens?: number
+  // 单次会话的推理档位覆盖：课程结构/题库等结构化生成不需要全局最高档，避免长时间推理。
+  thinking?: ReasoningLevel
+  model?: string
   // 撞上输出上限后是否用同一提示重试：默认否（同样的提示会同样被截断，只是白烧一份预算）；
   // 流程层的"紧凑重试"会换提示重来，比原样重试更有效。
   retryOnLength?: boolean
   onProgress?: (message: string) => void
+  toolset?: RuntimeToolset
+  maxToolSteps?: number
 }
 
 export interface AgentChat {
@@ -62,6 +69,10 @@ export class ModelRequestError extends Error {
     if (extras.status !== undefined) this.status = extras.status
     if (extras.providerRetryAfterMs !== undefined) this.providerRetryAfterMs = extras.providerRetryAfterMs
   }
+}
+
+export class ModelBudgetError extends Error {
+  constructor(message: string) { super(message); this.name = 'ModelBudgetError' }
 }
 
 export function permanentModelError(error: unknown): boolean {
@@ -125,6 +136,7 @@ export class ChatRuntime {
   private readonly startupModel: ModelSettings
   private cachedChannel?: { key: string; transport: LlmTransport; limiter: ModelRateLimiter }
   readonly env: NodeJS.ProcessEnv
+  private issuedRequests = 0
 
   constructor(options: ChatRuntimeOptions) {
     this.options = options
@@ -135,6 +147,13 @@ export class ChatRuntime {
   // 当前渠道设置：resolveModel 由宿主注入（网页宿主每次读取最新保存的配置）。
   modelNow(): ModelSettings {
     return this.options.resolveModel?.() ?? this.startupModel
+  }
+
+  claimRequest(): void {
+    if (this.options.maxModelRequests !== undefined && this.issuedRequests >= this.options.maxModelRequests) {
+      throw new ModelBudgetError('本回合已达到全部模型会话共用的请求预算，学习进度已保存')
+    }
+    this.issuedRequests += 1
   }
 
   // transport 与限速器按 (baseUrl, apiKey, model, thinking, rpm) 缓存；设置变化时整体重建。
@@ -185,10 +204,18 @@ class Chat implements AgentChat {
   private readonly deadline: number
   private readonly maxWaitMs: number
   private readonly waiting = new ModelWaitClock()
+  private readonly delegated = new ModelWaitClock()
   private readonly research?: ResearchBudget
   private toolsCache?: { key: string; tools: ResearchTools }
   private readonly fetchImpl: typeof fetch
   private streamTicks = 0
+  // 当前这一次模型请求是否已经收到过任何流式帧（正文、推理或工具调用都算）。
+  // 不能用整个 ask() 的 streamTicks 判断：教研回合会先搜索/抓取，再带着工具结果发下一次请求；
+  // 前一次请求的流式块会让累计值一直大于回合起点，导致“最后一次请求 300s 没吐首字节”被误判成
+  // “已经吐过内容、不能重试”，整个知识点仍会作废。每次 requestModel 发请求前重置。
+  private requestStarted = false
+  // 工具/MCP 建连和抓取本身也是“有进展”。工具执行可能连续几分钟，不能只靠模型流式块判断存活。
+  private toolTicks = 0
   private turn = 0
   private requestFailure: ModelRecoveryError | ModelRequestQueueError | undefined
   private recoveryStep = ''
@@ -197,6 +224,7 @@ class Chat implements AgentChat {
   private total: UsageSample = { inputTokens: 0, outputTokens: 0 }
   private settled: Promise<void> = Promise.resolve()
   private modelRequests = 0
+  private businessSteps = 0
 
   constructor(runtime: ChatRuntime, options: ChatRuntimeOptions, log: SessionLog, chatOptions: CreateChatOptions) {
     this.runtime = runtime
@@ -214,11 +242,18 @@ class Chat implements AgentChat {
       const sample = normalizeUsage(data?.usage ?? data?.message?.usage)
       if (sample) this.total = addUsage(this.total, sample)
     }
+    this.turn = this.log.events.filter(event => event.type === 'user/message').length
   }
 
   // 当前模型名（事件记录与内部成本台账用）：跟随热更新。
   get model(): string {
-    return this.runtime.modelNow().model
+    return this.settingsNow().model
+  }
+
+  private settingsNow(): ModelSettings {
+    const base = this.runtime.modelNow()
+    return { ...base, ...(this.chatOptions.thinking ? { thinking: this.chatOptions.thinking } : {}),
+      ...(this.chatOptions.model ? { model: this.chatOptions.model } : {}) }
   }
 
   private progress(message: string): void {
@@ -228,18 +263,25 @@ class Chat implements AgentChat {
     else this.options.err?.(text)
   }
 
+  // 工具调用本身也可能耗时（MCP 建连、搜索、抓取）；开始和结束各记一次进展。
+  private async withToolProgress<T>(work: () => Promise<T>): Promise<T> {
+    this.toolTicks += 1
+    try { return await work() } finally { this.toolTicks += 1 }
+  }
+
   private systemPrompt(): string {
     if (this.chatOptions.isolatedSystemPrompt) return this.chatOptions.isolatedSystemPrompt
     return this.options.persona ?? ''
   }
 
-  private apiMessages(): ApiMessage[] {
+  private apiMessages(tools: ApiToolDef[] = []): ApiMessage[] {
     const sections = [this.systemPrompt()]
     if (this.research) sections.push(this.research.instruction())
     const systemContent = sections.filter(section => section !== '').join('\n\n')
-    const settings = this.runtime.modelNow()
-    const maxOutput = outputTokenLimit(settings.contextWindow, this.chatOptions.maxTokens ?? 8192)
-    const promptBudget = Math.max(256, normalizeContextWindow(settings.contextWindow) - maxOutput - 512)
+    const settings = this.settingsNow()
+    const configuredOutput = settings.maxOutputTokens ?? 8192
+    const maxOutput = outputTokenLimit(settings.contextWindow, this.chatOptions.maxTokens ?? configuredOutput, configuredOutput)
+    const promptBudget = Math.max(256, normalizeContextWindow(settings.contextWindow) - maxOutput - 512 - estimateTokens(JSON.stringify(tools)))
     const fitted = fitHistory(estimateTokens(systemContent), this.log.messages, promptBudget)
     const content = fitted.omitted > 0
       ? `${systemContent}\n\n（较早的 ${fitted.omitted} 条对话已按上下文预算省略；请依据保留的课程计划与最近对话继续。）`
@@ -275,14 +317,17 @@ class Chat implements AgentChat {
   }
 
   private async advertisedTools(requestKey: string): Promise<ApiToolDef[]> {
+    if (this.chatOptions.toolset) return this.withToolProgress(() => this.chatOptions.toolset!.definitions())
     if (!this.research) return []
     const tools = this.researchToolsNow()
-    const definitions = tools ? [WEB_FETCH_TOOL, ...(await tools.definitions())] : [WEB_FETCH_TOOL]
+    const definitions = tools ? [WEB_FETCH_TOOL, ...(await this.withToolProgress(() => tools.definitions()))] : [WEB_FETCH_TOOL]
     return definitions.filter(tool => this.research!.available(tool.name, !this.research!.hasRequest(requestKey)))
   }
 
-  private async executeTool(call: ApiToolCall, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
+  private async executeTool(call: ApiToolCall, signal: AbortSignal, invocationId = call.id): Promise<RuntimeToolResult> {
     const name = call.function.name
+    if (this.chatOptions.toolset) return this.delegated.wait(() => this.withToolProgress(() =>
+      this.chatOptions.toolset!.call(name, call.function.arguments, signal, invocationId)))
     const allowed = name === 'web_fetch' || name.startsWith(MCP_SEARCH_PREFIX)
     if (!allowed || !this.research) {
       return { text: '教学内容必须通过 runner 审查后发布，禁止模型调用此工具', isError: true }
@@ -293,11 +338,11 @@ class Chat implements AgentChat {
     if (name === 'web_fetch') {
       let url = ''
       try { url = String((JSON.parse(call.function.arguments || '{}') as { url?: unknown }).url ?? '') } catch { /* 参数非法按空 URL 处理 */ }
-      result = await webFetch(url, signal, this.fetchImpl)
+      result = await this.withToolProgress(() => webFetch(url, signal, this.fetchImpl))
     } else {
       const tools = this.researchToolsNow()
       if (!tools) return { text: '搜索服务未配置或暂不可用，请使用 web_fetch 或依据已有资料收束。', isError: true }
-      result = await tools.call(name, call.function.arguments, signal)
+      result = await this.withToolProgress(() => tools.call(name, call.function.arguments, signal))
     }
     const blocks = this.research.result(name, [{ type: 'text', text: result.text }], result.isError, result.failure)
     return { text: blocks.map(block => block.text).join('\n'), isError: result.isError }
@@ -307,9 +352,11 @@ class Chat implements AgentChat {
     for (;;) {
       if (this.requestFailure) throw this.requestFailure
       // 每次尝试前读取当前渠道设置：网页保存新配置后，进行中的流程从下一次尝试起生效。
-      const settings = this.runtime.modelNow()
+      const settings = this.settingsNow()
       const transport = this.runtime.transportNow(settings)
       const limiter = this.runtime.limiterNow(settings)
+      const outputCeiling = settings.maxOutputTokens ?? 8192
+      const chatCeiling = this.chatOptions.maxTokens ?? outputCeiling
       this.research?.checkRequest(requestKey)
       try {
         await this.waiting.wait(async () => limiter.acquire(signal, (ms, detail) => {
@@ -327,6 +374,7 @@ class Chat implements AgentChat {
       }
       signal.throwIfAborted()
       this.research?.startRequest(requestKey)
+      this.runtime.claimRequest()
       this.options.status?.({ phase: 'request', message: requestKey === this.recoveryStep ? '等待结束，正在重新请求模型。' : '正在请求模型，等待回复。' })
       this.modelRequests += 1
       if (this.options.maxModelRequests !== undefined && this.modelRequests > this.options.maxModelRequests) {
@@ -339,10 +387,13 @@ class Chat implements AgentChat {
       const observe = this.options.observe
       observe?.({ type: 'attempt-start', sessionId: this.sessionId, attemptId, time: new Date(started).toISOString() })
       const capped: LlmRequest = { ...request,
-        maxTokens: outputTokenLimit(settings.contextWindow, Math.min(request.maxTokens ?? 8192, this.chatOptions.maxTokens ?? 8192)) }
+        maxTokens: outputTokenLimit(settings.contextWindow, Math.min(request.maxTokens ?? outputCeiling, chatCeiling), outputCeiling) }
       let result: LlmResult
+      // 每次真正发出模型请求前重置“本次请求已开始”的标记；上一次工具调用/前一轮流式输出不算本次请求的进展。
+      this.requestStarted = false
       try {
         result = await transport(capped, signal, (isText) => {
+          this.requestStarted = true
           this.streamTicks++
           if (firstChunkMs === undefined) firstChunkMs = Date.now() - started
           if (isText && firstTextMs === undefined) firstTextMs = Date.now() - started
@@ -403,7 +454,7 @@ class Chat implements AgentChat {
         step += 1
         const requestKey = `${turnKey}:${step}`
         const tools = await this.advertisedTools(requestKey)
-        const request: LlmRequest = { messages: this.apiMessages(), ...(tools.length > 0 ? { tools } : {}) }
+        const request: LlmRequest = { messages: this.apiMessages(tools), ...(tools.length > 0 ? { tools } : {}) }
         const result = await this.requestModel(requestKey, request, signal)
         if (result.usage) this.account(result.usage)
         if (result.finish === 'length') {
@@ -419,6 +470,7 @@ class Chat implements AgentChat {
             return { text, error: 'PI_AI_ERROR: 模型返回空的工具调用' }
           }
           const assistant: ApiMessage = { role: 'assistant', content: result.text || null,
+            ...(result.reasoningContent ? { reasoning_content: result.reasoningContent } : {}),
             tool_calls: calls.map(call => ({ id: call.id || `call-${calls.indexOf(call)}`, type: 'function' as const,
               function: { name: call.function.name, arguments: call.function.arguments } })) }
           this.log.messages.push(assistant)
@@ -428,12 +480,28 @@ class Chat implements AgentChat {
           } else if (result.text) {
             this.log.appendEvent('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: result.text }] } })
           }
+          let yielded = false
           for (const [index, call] of calls.entries()) {
             const toolCallId = assistant.tool_calls![index].id
-            const output = await this.executeTool(call, signal)
+            let output: RuntimeToolResult
+            if (yielded) output = { text: '本回合已交回学员，本次后续调用没有执行', isError: true }
+            else {
+              if (this.chatOptions.toolset && this.businessSteps >= (this.chatOptions.maxToolSteps ?? 4)) {
+                output = { text: '本回合的业务工具预算已用完，本次调用没有执行', isError: true }
+                yielded = true
+              } else {
+                this.businessSteps += 1
+                output = await this.executeTool(call, signal, turnKey + ':' + toolCallId)
+                yielded = output.yield === true
+              }
+            }
             this.log.messages.push({ role: 'tool', tool_call_id: toolCallId, content: output.text })
           }
           this.log.persistMessages()
+          if (yielded) {
+            this.log.appendEvent('turn/end', { reason: { kind: 'awaiting-user' } })
+            return { text: result.text || '已交回学员' }
+          }
           continue
         }
         // finish === 'stop'
@@ -442,7 +510,8 @@ class Chat implements AgentChat {
           this.log.appendEvent('turn/end', { reason: { kind: 'completed' } })
           return { text, error: 'empty' }
         }
-        this.log.messages.push({ role: 'assistant', content: result.text })
+        this.log.messages.push({ role: 'assistant', content: result.text,
+          ...(result.reasoningContent ? { reasoning_content: result.reasoningContent } : {}) })
         this.log.persistMessages()
         this.log.appendEvent('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: result.text }] }, ...(result.usage ? { usage: result.usage } : {}) })
         this.log.appendEvent('turn/end', { reason: { kind: 'completed' } })
@@ -452,6 +521,7 @@ class Chat implements AgentChat {
       // 恢复耗尽/队列故障/预算错误：保留原始类型，由 ask() 原样抛出。
       if (this.requestFailure) throw error
       if (this.research?.failure) throw error
+      if (error instanceof ModelBudgetError) throw error
       // 上下文预算错误是确定性的，重试只会重复同一份超限请求。
       if (error instanceof ContextWindowError) throw error
       if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
@@ -469,9 +539,9 @@ class Chat implements AgentChat {
     const task = this.converse(turnKey, controller.signal)
     this.settled = task.then(() => {}, () => {})
     try {
-      await whenIdleOrStalled(() => task.then(() => {}), () => this.log.events.length + this.streamTicks,
+      await whenIdleOrStalled(() => task.then(() => {}), () => this.log.events.length + this.streamTicks + this.toolTicks,
         turnTimeoutMs(this.runtime.env), 1000, this.deadline,
-        { milliseconds: this.waiting.waitingMs, limitMs: this.maxWaitMs })
+        { milliseconds: () => this.waiting.waitingMs() + this.delegated.waitingMs(), limitMs: this.maxWaitMs })
     } catch (error) {
       // 看门狗超时（或等待超限）：先中止在途请求并等它收敛，禁止在未收敛的会话上叠加重试。
       controller.abort(error)
@@ -483,6 +553,7 @@ class Chat implements AgentChat {
 
   async ask(prompt: string): Promise<string> {
     this.turnUsage = { inputTokens: 0, outputTokens: 0 }
+    this.businessSteps = 0
     this.turn += 1
     // 用户消息每回合只落盘一次：重试复用同一段历史，不能在会话里追加第二份相同提问。
     this.appendUser(prompt)
@@ -508,12 +579,23 @@ class Chat implements AgentChat {
         return result.text
       } catch (error) {
         lastError = error
+        if (error instanceof ModelBudgetError) throw error
         if (this.requestFailure) throw this.requestFailure
         if (this.research?.failure) throw this.research.failure
         if (error instanceof TurnTimeoutError || error instanceof ModelWaitTimeoutError) {
           controller.abort(error)
           try { await whenIdleWithin(() => this.settled, 5000) } catch { /* 已收敛或超时 */ }
-          throw error
+          // 首字节之前的停滞与"流到一半卡住"性质不同：前者请求可能根本没开始产出
+          // （网关排队、上游未调度），重来一次代价很小；后者已吐出半截内容，重试只会重新烧一遍。
+          // 这里必须看“当前这次请求”有没有收到过流式帧，而不是整个 ask() 的累计值：
+          // 教研回合会先搜索/抓取，再带工具结果发下一次请求；前一次请求的流式块不能替下一次请求作证。
+          // 执行总时限到点（deadline）也不能重试，否则只是再撞一次同一堵墙。
+          const neverStarted = error instanceof TurnTimeoutError && !error.deadline
+            && !this.requestStarted && !external?.aborted && attempt === 0
+          if (!neverStarted) throw error
+          this.options.err?.(`tutor: 模型在 ${Math.round((error as TurnTimeoutError).timeoutMs / 1000)}s 内没有开始响应（未收到任何流式数据），按渠道延迟重试一次…\n`)
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+          continue
         }
         if ((error instanceof Error && error.name === 'AbortError') || error instanceof ContextWindowError || permanentModelError(error)
           || (error instanceof OutputLimitError && this.chatOptions.retryOnLength === false)) throw error
@@ -562,5 +644,6 @@ class Chat implements AgentChat {
     this.toolsCache = undefined
     try { await cache?.tools.close() } catch { /* 连接已断开 */ }
     try { await this.options.researchTools?.close() } catch { /* 测试替身 */ }
+    try { await this.chatOptions.toolset?.close?.() } catch { /* 工具已关闭 */ }
   }
 }

@@ -1,99 +1,75 @@
-# tutor（导师）
+# tutor · 你的学习导师
 
-一个个性化教学 agent：从需求澄清、教研、摸底、规划，到讲授、检验、复习，全程因材施教。
+一个根据目标、作答和反馈持续选择教学策略的 agent。学员表达目标后，导师按情况选择解释、诊断、练习、独立任务、复习和阶段验收，课程结构逐步形成。
 
-- **设计文档**：[docs/design.md](docs/design.md)
-- **技术形态**：单进程 Node 应用（内置模型运行时 + 会话日志），无外部 agent 基座；教研的搜索/抓取走 MCP
-- **设计参考**：Reasonix 的缓存优先循环、工具调用修复、成本控制；当前已实现按课组织上下文和成本估算，完整自定义循环与分级调度仍待实现
-- **模型接入**：OpenAI 兼容接口（base_url + api_key + model），不绑定单一供应商
-- **交互形态**：命令行 + 本地网页，单用户，可管理多门课程；同一门课程同时运行一个教学流程，不同课程可并行（每条流程按课程独立恢复与回放）
-- **网页形态**：只有一个单壳工作区 `/app.html`——左栏课程与进行中流程、顶部一条状态、中间画布按哈希路由渲染视图（看板/课堂/大考/实践/复习/向导），底部常驻输入区；模型设置是右侧抽屉（`#/settings`），⌘K / Ctrl+K 打开命令面板，输入框支持 Enter 发送、Shift+Enter 换行。旧版单页（`/index.html`、`/lesson.html`…）已下线，按原语义 302 重定向到对应 hash 路由，视图控制器只有一份（`static/ui/views/*`）
+教学策略由 TutorAgent 决定；程序提供受限能力、内容核对、规则评分、证据记录、预算和可靠恢复。技能、课堂活动、能力证据、记忆状态分别建模，一次练习成绩不会直接成为“已掌握”。
 
-## 状态
+## 开始使用
 
-当前支持多课程管理、访谈与可选教研、摸底、教学计划、讲授、小测、实践、里程碑考试、间隔复习和课堂审计，并有看板／向导／课堂／复习／大考／实践与模型设置网页。Go 切片与公平骰子概率两门各两节微课已完成真实模型驱动的工程闭环，**可以开始有人陪同的小规模真人试学**。
+需要 Node ≥22.19，推荐 Node 24。
 
-本轮修复（2026-10-21）：完成最后一个小测后计划指针不再写成 `current: null`（此前会让 `learn/exam/practice` 全部报"计划与知识地图不一致"）；旧版无 `scope` 的计划按完整地图恢复范围；大考主观题暂停只保存草稿、恢复后可继续输入；默认实践入口跟随计划指针；实践任务生成改为每节点独立会话；备课/档案/题库/实践的非空与自洽校验补齐；损坏的课堂断点自动归档后按新课开始；学员观察记录畸形数据不再阻塞课堂；IPv6 回环/站点本地地址纳入抓取拦截；流程统一使用宿主注入的"今天"。当前 423 项自动测试及类型检查通过。
-
-最新更新（2026-10-09）：修复长课程联网教研反复超时与返工，改为逐点保存、硬性搜索预算、复用未变化内容的审查，并补齐资料审查的课程上下文。课程详情可查看进度、单点补查；模型渠道和教研时限可在网页保存，新流程自动采用。摸底按作答进度准备当前知识点，首题不再等待整门课程出题。当前 393 项自动测试及类型检查通过；截至上海时间 17:38，39 节长课已续跑保存 4 个知识点、9 条资料。真实渠道仍有搜索容量错误和较长等待，整课尚未验收，见 [教研修复实测](docs/research-recovery-2026-10-09.md) 与 [模型设置](docs/model-settings.md)。
-
-试学就绪验收（2026-10-09 上海时间，日志日期为 UTC 2026-10-08）：当时 245 项自动测试及类型检查通过；完成内容错误回归、失败断点恢复、实践负例、考试暂停与成绩刷新、正常复习与答错后的补救。两门课现有内容均审查通过，原错误、失败、费用和受控数据迁移完整保留。详细结果、证据及限制见 [工程验收报告](docs/readiness-2026-10-08.md)。
-
-真人学习效果尚未验证。模型仍有间歇服务错误和较长等待，实践也没有操作系统级文件与网络沙箱，当前适用于本机单用户试学。按 [真人试学手册](docs/human-trial.md) 为每位参加者启动空白独立目录：
-
-```sh
-npm run trial -- --learner p01
-```
-
-以下为此前阶段的历史记录，保留当时的结果与未决问题，当前结论以上述最新报告为准：
-
-- [基础回归](docs/regression.md)：状态汇总、网页流程隔离、HTTP/SSE 集成测试与 Node 24 CI。
-- [判分基线](docs/evaluation-2026-10-08.md)：12 个固定作答重复三轮，36 次符合预定区间；[运行方法](docs/evaluation.md)。
-- [稳定性记录](docs/stabilization-2026-10-08.md)：补救范围、按节点实践与来源核实，当时为 187 项测试。
-- [首轮微课验收](docs/course-acceptance-2026-10-08.md)：当时内容质量未通过，发现超纲和错误资料；[验收方法](docs/course-acceptance.md)。
-- [内容准入记录](docs/content-quality-2026-10-08.md)：加入题目盲解、反例检查、范围审查与有界修复；[准入及旧数据说明](docs/content-quality.md)。
-
-真人教学效果与正常使用的成本基线仍需试学积累。
-
-架构（2026-10-15 单进程重构）：核心规则位于 `src/core/`（纯逻辑，含 JSON-RPC 方法表）；`src/runtime/` 是内置模型运行时（OpenAI 兼容传输、工具循环、可靠性护栏、会话日志）；`src/flows/` 是各教学流程的纯函数编排；`src/server/` 提供可独立测试的 HTTP/SSE 宿主，网页与每条教学流程都在同一个进程内运行。课程当前状态存 YAML，对话留在会话日志（`data/sessions/`）；暂未实现从日志完整重建课程状态。
-
-说明：复习答错会把已 mastered 的知识点降级，下次 `learn` 时计划指针会指回该节点（补救课）——这是设计行为，不是进度丢失。
-
-记忆调度（2026-10-16）：每个知识点记录 `last_touched_at`（实测锚点）/ `stability`（稳定性，天）/ `lapses`（遗忘次数）；`R(t)=0.9^(t/S)` 按目标保留率 90% 反推复习间隔，隔得越久成功回忆加成越大、答错则衰减并次日重试。`learn` 会对到期或低保留的前置先做一次规则判分的回忆热身（零模型成本），并把"距上次实测 X 天、预计保留 ≈N%"注入备课与讲授上下文。旧课程数据无锚点时按原 1/3/7/14 阶梯迁移，不推测保留率。
-
-学员观察（2026-10-16，零模型规则）：小测与复习的错答按节点记入 `learner-notes.json`（错因档案，下次备课 prompt 引用）；小测前自评把握，偏差 ≥15 点写入校准记录；课堂中"没听懂/太快"与"懂了"信号自动留痕，一并注入备课。小测末尾固定一道已掌握节点的旧知识回访（交错练习；失败按复习对待，可能回退计划指针）；前置明显生疏时开课前给出软门提醒，可输入 `c` 越权继续（随后仍会热身）。学习事件追加到 `mastery-events.jsonl`，课程详情页展示近 30 天活动柱与每节点成绩轨迹（旧课程从启用后开始积累）。
-
-## 环境要求
-
-- **Node ≥ 22.19**（源码直接运行 TypeScript，依赖原生类型剥离与 `zlib` zstd；CI 与建议版本为 24 LTS）
-- 日期默认使用本机时区；需要固定时区时设置 `TUTOR_TIMEZONE`（IANA 名称，如 `Asia/Shanghai`），CLI、网页与复习共用同一日历日
-- 运行时依赖：`yaml`、`tldts`、`@deepseek-ai/schemastery`（配置校验）、`@modelcontextprotocol/sdk`（联网教研的搜索 MCP）
-
-## 快速开始
-
-```sh
+~~~sh
 npm install
-npm run serve                   # http://127.0.0.1:8788，尚未配置模型也能启动
-```
+npm run serve
+~~~
 
-打开网页右上方的“模型设置”，填写服务地址、API Key 和模型名称，保存后即可开设新课程。保存后立即生效：进行中的流程在下一回合使用新配置，此后开始的流程直接使用。后续也可在页面切换渠道；已有配置会自动带入，密钥留空可沿用。命令行用户可继续使用 `.env`（从 `.env.example` 复制）：网页保存的配置优先于环境变量，环境变量优先于 `.env`。
+打开 http://127.0.0.1:8788，在“模型设置”填写 OpenAI 兼容服务地址、模型名称和 API Key，然后创建一个学习目标。
 
-其他命令：
+新目标只需一句话；每日可用时间、目标日期和已有基础可以补充。导师会从一个适合当前基础的步骤开始。课堂支持选择、数值、开放作答和代码任务，以及提示、换讲法、暂停与恢复。
 
-```sh
-npm test                        # 核心规则 + HTTP/SSE 集成测试（无需模型）
-npm run eval:grading            # 校验固定判分样本；加 -- --live 才调用模型，见 docs/evaluation.md
-npm run eval:content            # 校验冻结的内容错例与正确对照；真实回归见 docs/content-quality.md
-npm run agent -- list           # 课程列表（零模型，含到期复习徽章）
-npm run agent -- status golang  # 进度看板（知识点掌握状态/里程碑/复习到期）
-npm run agent -- new golang     # 需求澄清访谈（交互）→ courses/golang/profile.yaml
-npm run agent -- assess golang  # 摸底测评（自适应题库，可中断续测）→ learner-profile + mastery
-npm run agent -- assess golang --reset # 清理未完成的摸底断点（原文件归档；不动掌握度/计划）
-npm run agent -- plan golang    # 生成/更新教学计划（跳过已掌握、依赖排序）→ plan.yaml
-npm run agent -- learn golang   # 开始/继续本节课（前置新鲜度软门→备课→回忆热身→对话式讲授；/quiz 小测→自评校准→旧知识回访→更新掌握度与指针；中断后重跑自动续学）
-npm run agent -- review golang  # 复习到期知识点（FSRS-lite 记忆调度：稳定性随答对增长、逾期后成功回忆加成；答错衰减并次日重试）
-npm run agent -- review --all   # 跨课程到期汇总复习（多课程）
-npm run agent -- practice-gen golang # 生成实践任务（每知识点 1 个动手任务 + 规则化测试，需模型）
-npm run agent -- practice golang     # 实践任务：在 courses/<id>/sandbox/ 写代码 → 回车跑测试（零模型规则判分；通过则掌握度保底 0.8）
-npm run agent -- practice-gen golang --node channels # 只为指定知识点生成任务，支持已掌握节点
-npm run agent -- practice golang --node channels     # 明确选择本次要巩固的知识点
-npm run agent -- exam golang [m1]    # 里程碑大考（自动选下一个可考里程碑）：客观题规则判分+主观题模型判分，通过=里程碑达成，不过=指针回退补救
-npm run agent -- exam golang --discard # 放弃未完成的考试断点（原文件归档；不动成绩与掌握度）
-npm run agent -- research golang # 联网教研：MCP 搜索+交叉验证 → 带来源知识地图（逐点保存、可中断续研）
-npm run agent -- research golang --node channels # 单独教研或补查一个知识点
-npm run agent -- audit [会话id]  # 课堂忠实度抽查（零模型）：计划覆盖率/引用纪律/超纲/成本 → audits/<会话>.json
-npm run agent -- audit-content golang # 审查旧课程内容并保存准入；需模型，不改变学习状态
-npm run agent -- "..."          # 一次性 agent 任务
-```
+## 命令行
 
-- 网页入口：`/` 或 `/app.html`（同一个单壳工作区；`#/settings` 打开设置抽屉，⌘K 命令面板，`#/course/<id>/learn|exam|practice|review|plan` 等路由）
-- 网页模型设置：[使用说明](docs/model-settings.md)；保存在本机 `data/model-config.json`，后续网页和 CLI 模型流程共用；服务仅本机访问，端口可设 `TUTOR_SERVER_PORT`
-- 人格提示词：`config/persona/*.md`（各流程系统提示词，直接读取）
-- 成本估算单价：`config/cost.yaml`（按网关实际计费修改；仅用于内部估算与评测，不向学员展示单回合或累计开销）
-- 联网教研（二期，可选）：搜索服务可填在网页"模型设置 → 教研搜索"，支持 Exa（`https://mcp.exa.ai/mcp` + API Key）与 Tavily Hikari（`https://<host>/mcp` + `th-` 令牌）或自定义 MCP，保存后下一回合生效；也可继续用 `.env` 的 `TUTOR_MCP_SEARCH_URL` / `TUTOR_MCP_SEARCH_TOKEN`（网页保存的值优先）；讲授使用 [资料:n] 引用，内容在展示前独立审查，`/check` 查看准入记录与引用编号
-- 会话日志：`data/sessions/<工作目录编码>/session-<uuid>/`（多帧 zstd JSONL `session.v3.jsonl.zstd` + `messages.jsonl`，勿手改；可用 `TUTOR_SESSIONS_ROOT` 更换根目录）。工作目录编码带工作区摘要，旧编码目录的历史会话仍可续讲
-- 实践执行：目前在本机子进程运行，提供超时、输出限制、任务目录内的 HOME/TMP/缓存和停止时进程组回收；课程/审查/笔记文件权限收紧为仅当前用户可读写，但仍没有操作系统级文件与网络隔离
+~~~sh
+npm run agent -- new "我会 Java，想掌握 Go 的并发"
+npm run agent -- list
+npm run agent -- learn <课程标识>
+npm run agent -- status <课程标识>
+npm run agent -- today --plan
+npm run agent -- review <课程标识>
+npm run agent -- practice <课程标识>
+npm run agent -- assess <课程标识>
+npm run agent -- exam <课程标识>
+npm run agent -- research <课程标识>
+npm run agent -- repair <课程标识>
+~~~
 
-## 相关仓库
+这些命令表达用户意图，具体教学行动由导师选择。交互中 /hint 请求提示、/say 发送反馈、/continue 恢复、/pause 暂停。代码和开放题可多行输入，单独一行 . 提交；未提交草稿也会保存。
 
-- [learn_agent](https://github.com/xiaoxixideyu/learn_agent) — agent 学习笔记、课程与概念沉淀
+## 学习证据与恢复
+
+- 原始题目、答案、评分标准、提示记录、题目曝光和执行结果完整保存。
+- 能力评定依赖独立证据及关键验收要求；重复题或提示后的答案不冒充新的独立证据。
+- 完整目标达成还需要整体范围核查，近期几个技能通过不会自动表示课程全部完成。
+- 活动和已提交成绩保留；出现新的失败时增加证据，导师选择必要的补救。
+- 请求回执幂等，过期题目和修改已提交答案会被拒绝。
+- 状态采用版本化原子快照；模型等待和用户思考期间不占用写锁。
+- 刷新、重放和查看进度不调用模型。多门课程可并行，同课程在 CLI 和网页间的当前处理互斥；查询不会打断正在运行的教学。
+
+## 实践执行
+
+macOS 使用操作系统沙箱限制文件与网络访问；JavaScript 使用 Node，Python 使用实际解释器，Go 编译为 WASI/wasm32 后在 Node WASI 中运行。代码任务采用标准输入输出，不提供网络、cgo 或任意 shell 命令。
+
+参考程序在发布前也运行检查，学生程序使用完整输入输出比较并结合独立量规评阅。当前其他系统缺少隔离适配器时，导师选择开放任务，不直接以本机用户权限运行生成代码。
+
+## 设置与数据
+
+模型设置保存在 data/model-config.json；网页保存优先于环境变量，环境变量优先于 .env。教学和内容核验推理档位可分别配置，默认使用轻量推理。可用 TUTOR_AGENT_MODEL / TUTOR_REVIEW_MODEL / TUTOR_GRADER_MODEL 等环境配置指定同一渠道中的不同角色模型。
+
+新学习数据保存在 courses/<id>/state.json，正文、原始证据及量规在内容寻址的 assets/，失败生成任务在 tasks/，未提交输入在 drafts/。模型会话在 data/sessions/，全局用量账在 data/model-usage.json。
+
+默认整回合最多 16 次模型请求、6 个业务工具步骤；学习判断可批量原子提交，保留步骤用于教学和修复。TUTOR_SESSION_COST_LIMIT / TUTOR_DAILY_COST_LIMIT 控制估算预算，TUTOR_DAILY_REQUEST_LIMIT 限制包含未知用量的请求数。统计覆盖生成、核验、判分和内部重试；估算费用不等于实际账单。
+
+本次重构已清空旧学习和运行数据，保留连接设置。新版本不读取旧 YAML 课程，也不提供旧 RPC / flow 接口。
+
+## 验证
+
+~~~sh
+npm test
+npm run typecheck
+npm run eval:agent
+npm run eval:agent -- --live --goal "学习目标" --background "已有基础"
+~~~
+
+真实模型验收使用独立目录，可通过 --work、--answer、--message、--resume 继续。工程模拟数据不会进入正常课程列表，也不能用来宣称真人已经学会。
+
+详细架构见 [设计说明](docs/design.md)，实施方案见 [重构计划](docs/agent-refactor-plan-2026-11-20.md)，最终验证和实际限制见 [验收记录](docs/agent-refactor-acceptance-2026-11-23.md)。
