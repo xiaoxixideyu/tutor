@@ -115,10 +115,10 @@ export async function browser(t: TestContext, url: string) {
       await new Promise((resolve) => setTimeout(resolve, 30))
     }
   }
-  async function screenshot(file: string) {
+  async function screenshot(file: string, fullPage = true) {
     const result = await command(
       'Page.captureScreenshot',
-      { format: 'png', captureBeyondViewport: true },
+      { format: 'png', captureBeyondViewport: fullPage },
       sessionId,
     )
     fs.writeFileSync(file, Buffer.from(result.data, 'base64'))

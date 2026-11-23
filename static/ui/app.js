@@ -23,7 +23,10 @@
     pendingStart = null,
     settings = null,
     busyStart = 0,
-    phase = ''
+    phase = '',
+    requestInFlight = false,
+    pauseInFlight = false,
+    lastAction = ''
   let seen = new Set(),
     timeline = null,
     questionPanel = null,
@@ -80,7 +83,8 @@
     canvas.innerHTML = '<div class="loading">正在读取学习记录…</div>'
   }
   function failure(error, retry) {
-    canvas.innerHTML = '<div class="notice error"><h3>暂时没能打开</h3><p>' + esc(error.message) + '</p></div>'
+    canvas.innerHTML =
+      '<div class="notice error"><h3>暂时没能打开</h3><p>' + esc(error.message) + '</p></div>'
     if (retry) canvas.firstChild.appendChild(button('重试', retry))
   }
   function drawer(open) {
@@ -182,7 +186,9 @@
     )
   }
   function bindNew() {
-    canvas.querySelectorAll('[data-new]').forEach((node) => node.addEventListener('click', () => navigate('#/new')))
+    canvas
+      .querySelectorAll('[data-new]')
+      .forEach((node) => node.addEventListener('click', () => navigate('#/new')))
   }
   async function today(version) {
     title.textContent = '今天'
@@ -308,25 +314,81 @@
       }
     })
   }
+  function isBusy() {
+    return (
+      requestInFlight || pauseInFlight || current?.tutorStatus === 'working' || current?.serverBusy === true
+    )
+  }
+  function placeStatus() {
+    const box = canvas.querySelector('#tutor-status'),
+      anchor = canvas.querySelector('#tutor-status-anchor')
+    if (!box || !anchor || !current) return
+    box.classList.remove('floating')
+    box.style.left = ''
+    box.style.width = ''
+    anchor.style.minHeight = ''
+    const height = box.offsetHeight,
+      rect = anchor.getBoundingClientRect()
+    if (isBusy() && (rect.top < 8 || rect.top + height > window.innerHeight - 12)) {
+      anchor.style.minHeight = height + 18 + 'px'
+      const panel = canvas.querySelector('.study-panel').getBoundingClientRect()
+      box.style.left = Math.max(12, panel.left) + 'px'
+      box.style.width = Math.min(panel.width, window.innerWidth - Math.max(12, panel.left) - 12) + 'px'
+      box.classList.add('floating')
+    }
+  }
   function status() {
     const box = canvas.querySelector('#tutor-status')
     if (!box || !current) return
-    const busy = current.tutorStatus === 'working' || current.serverBusy === true
+    const busy = isBusy()
     if (busy && !busyStart) busyStart = Date.now()
     if (!busy) busyStart = 0
     box.classList.toggle('busy', busy)
-    box.querySelector('.phase').textContent = busy
-      ? phase || '导师正在准备下一步'
-      : current.tutorStatus === 'failed'
-        ? '本轮未完成，进度已保存'
-        : current.tutorStatus === 'paused'
-          ? '已暂停，随时可以继续'
-          : '轮到你了'
-    box.querySelector('.elapsed').textContent = busyStart ? Math.floor((Date.now() - busyStart) / 1000) + ' 秒' : ''
-    canvas.querySelector('#pause-study').disabled = !busy && current.active?.status !== 'active'
+    const message = pauseInFlight
+      ? '正在暂停，进度会保留…'
+      : busy
+        ? requestInFlight && current.tutorStatus !== 'working' && !current.serverBusy
+          ? '正在确认提交状态…'
+          : phase || '导师正在准备下一步'
+        : current.tutorStatus === 'failed'
+          ? '本轮未完成，进度已保存'
+          : current.tutorStatus === 'paused'
+            ? '已暂停，随时可以继续'
+            : '轮到你了'
+    if (box.querySelector('.phase').textContent !== message) box.querySelector('.phase').textContent = message
+    box.querySelector('.elapsed').textContent = busyStart
+      ? Math.floor((Date.now() - busyStart) / 1000) + ' 秒'
+      : ''
+    canvas.querySelector('#pause-study').disabled =
+      requestInFlight || pauseInFlight || (!busy && current.active?.status !== 'active')
+    canvas.querySelector('#refresh-study').disabled = requestInFlight || pauseInFlight
+    const pause = box.querySelector('.pause-processing')
+    pause.hidden = !busy
+    pause.disabled = requestInFlight || pauseInFlight
     const send = canvas.querySelector('.send-message')
-    if (send) send.disabled = busy
+    if (send) {
+      send.disabled = busy
+      send.textContent = busy
+        ? requestInFlight && lastAction === 'message'
+          ? '发送中…'
+          : '处理中…'
+        : '发送 →'
+      send.setAttribute('aria-busy', String(busy))
+    }
+    const submit = canvas.querySelector('.submit-answer')
+    if (submit) {
+      submit.textContent = busy
+        ? requestInFlight && lastAction === 'answer'
+          ? '提交中…'
+          : lastAction === 'answer'
+            ? '作答处理中…'
+            : '导师处理中…'
+        : '提交本次作答 →'
+      submit.setAttribute('aria-busy', String(busy))
+    }
     canvas.querySelectorAll('.quick button').forEach((node) => (node.disabled = busy))
+    canvas.querySelectorAll('[data-intent]').forEach((node) => (node.disabled = busy))
+    placeStatus()
   }
   function renderProfile() {
     if (!current || !profilePanel) return
@@ -343,7 +405,9 @@
       ' 分钟' +
       (current.goal.deadline ? ' · ' + esc(current.goal.deadline) : '') +
       '</p><span class="badge">' +
-      (current.goalSupported ? '完整目标已验证' : current.supported + ' / ' + current.total + ' 项当前目标已验证') +
+      (current.goalSupported
+        ? '完整目标已验证'
+        : current.supported + ' / ' + current.total + ' 项当前目标已验证') +
       '</span></div>' +
       '<div class="side-card"><h3>能力证据</h3>' +
       (current.skills.filter((skill) => skill.required).length
@@ -368,7 +432,10 @@
                       skill.criteria
                         .map(
                           (criterion) =>
-                            '<li>' + esc(criterion.description) + (criterion.critical ? '（关键）' : '') + '</li>',
+                            '<li>' +
+                            esc(criterion.description) +
+                            (criterion.critical ? '（关键）' : '') +
+                            '</li>',
                         )
                         .join('') +
                       '</ul>' +
@@ -397,7 +464,9 @@
                 '<div class="hypothesis">' +
                 esc(hypothesis.description) +
                 '<small>' +
-                (hypothesis.status === 'confirmed' ? '已确认的原因' : '待验证：' + esc(hypothesis.nextCheck)) +
+                (hypothesis.status === 'confirmed'
+                  ? '已确认的原因'
+                  : '待验证：' + esc(hypothesis.nextCheck)) +
                 '</small></div>',
             )
             .join('') +
@@ -464,23 +533,29 @@
           '%</div>' +
           md(grade.feedback) +
           '<small>' +
-          esc(event.data.independent ? '本次保留为独立作答证据。' : '本次是练习证据，掌握判断还需要独立验证。') +
+          esc(
+            event.data.independent ? '本次保留为独立作答证据。' : '本次是练习证据，掌握判断还需要独立验证。',
+          ) +
           '</small></div>',
       )
     }
     if (node) {
       timeline.appendChild(node)
       while (timeline.children.length > 100) timeline.firstElementChild.remove()
+      placeStatus()
     }
   }
   async function sendTurn(message, intent = 'learn') {
-    if (!current || current.tutorStatus === 'working' || current.serverBusy) return
+    if (!current || isBusy()) return
     if (!configured) {
       drawer(true)
       return
     }
     const id = current.id
     const elapsed = activeElapsed()
+    requestInFlight = true
+    lastAction = 'message'
+    phase = '正在发送，等待导师处理…'
     try {
       current.tutorStatus = 'working'
       current.serverBusy = true
@@ -493,13 +568,24 @@
         expectedRevision: current.revision,
         activeMs: elapsed,
       })
+      if (current?.id !== id) return false
       if (questionPanel) {
         questionPanel.dataset.elapsed = '0'
         questionPanel.dataset.started = ''
       }
+      await refreshCourse()
+      return true
     } catch (error) {
+      if (current?.id !== id) return false
       toast(error.message)
       await refreshCourse()
+      return false
+    } finally {
+      if (current?.id === id) {
+        requestInFlight = false
+        renderQuestion()
+        status()
+      }
     }
   }
   function activeElapsed() {
@@ -507,7 +593,10 @@
     if (!panel) return 0
     const saved = Number(panel.dataset.elapsed ?? 0)
     return (
-      saved + (!document.hidden && panel.dataset.started ? Math.max(0, Date.now() - Number(panel.dataset.started)) : 0)
+      saved +
+      (!document.hidden && panel.dataset.started
+        ? Math.max(0, Date.now() - Number(panel.dataset.started))
+        : 0)
     )
   }
   function toggleQuestion(disabled) {
@@ -515,7 +604,8 @@
     if (questionPanel) {
       if (!running && questionPanel.dataset.started) {
         questionPanel.dataset.elapsed = String(
-          Number(questionPanel.dataset.elapsed ?? 0) + Math.max(0, Date.now() - Number(questionPanel.dataset.started)),
+          Number(questionPanel.dataset.elapsed ?? 0) +
+            Math.max(0, Date.now() - Number(questionPanel.dataset.started)),
         )
         questionPanel.dataset.started = ''
       } else if (running && !questionPanel.dataset.started) questionPanel.dataset.started = String(Date.now())
@@ -527,7 +617,7 @@
   function renderQuestion() {
     if (!current || !questionPanel) return
     const active = current.active
-    const busy = current.tutorStatus === 'working' || current.serverBusy === true
+    const busy = isBusy()
     if (current.pendingAnswer) {
       const key = 'pending:' + current.pendingAnswer.requestId
       if (questionPanel.dataset.key !== key) {
@@ -565,7 +655,8 @@
       if (questionPanel.dataset.key !== key) {
         questionPanel.dataset.key = key
         questionPanel.dataset.started = String(Date.now())
-        questionPanel.innerHTML = '<div class="completed-card"><p>可以说说你的理解，也可以让导师继续安排。</p></div>'
+        questionPanel.innerHTML =
+          '<div class="completed-card"><p>可以说说你的理解，也可以让导师继续安排。</p></div>'
         questionPanel.firstChild.appendChild(
           button(
             active.status === 'paused' ? '恢复这一节 →' : '继续 →',
@@ -662,7 +753,9 @@
         choice.classList.toggle('selected', choice.dataset.letter === answer)
         choice.addEventListener('click', () => {
           remember(choice.dataset.letter)
-          form.querySelectorAll('.choice').forEach((node) => node.classList.toggle('selected', node === choice))
+          form
+            .querySelectorAll('.choice')
+            .forEach((node) => node.classList.toggle('selected', node === choice))
           errorBox.hidden = true
         })
       })
@@ -682,9 +775,12 @@
           }
         })
     }
-    form.querySelector('.hint-button').addEventListener('click', () => sendTurn('这道题我还没想明白，请给一个提示。'))
+    form
+      .querySelector('.hint-button')
+      .addEventListener('click', () => sendTurn('这道题我还没想明白，请给一个提示。'))
     form.addEventListener('submit', async (event) => {
       event.preventDefault()
+      if (isBusy()) return
       clearTimeout(saveTimer)
       if (!answer.trim()) {
         errorBox.textContent = '请先完成作答。'
@@ -694,7 +790,13 @@
       const previous = attempts.get(key),
         requestId = previous?.answer === answer ? previous.requestId : uid()
       attempts.set(key, { answer, requestId })
+      const id = current.id
+      requestInFlight = true
+      lastAction = 'answer'
+      phase = '正在提交作答，等待评阅…'
+      current.serverBusy = true
       toggleQuestion(true)
+      status()
       errorBox.hidden = true
       try {
         await api('/api/courses/' + current.id + '/answer', {
@@ -706,26 +808,66 @@
           expectedRevision: current.revision,
           activeMs: activeElapsed(),
         })
+        if (current?.id !== id) return
         drafts.delete(key)
         try {
           sessionStorage.removeItem('tutor:draft:' + key)
         } catch {}
+        await refreshCourse()
       } catch (error) {
+        if (current?.id !== id) return
         errorBox.textContent = error.message
         errorBox.hidden = false
         await refreshCourse()
-        toggleQuestion(current?.tutorStatus === 'working')
+      } finally {
+        if (current?.id === id) {
+          requestInFlight = false
+          renderQuestion()
+          status()
+        }
       }
     })
     toggleQuestion(busy)
   }
   async function resume() {
-    if (!current) return
+    if (!current || isBusy()) return
+    const id = current.id
+    requestInFlight = true
+    lastAction = 'resume'
+    phase = '正在恢复本次处理…'
+    status()
     try {
       await api('/api/courses/' + current.id + '/resume', { requestId: uid() })
+      await refreshCourse()
     } catch (error) {
       toast(error.message)
       await refreshCourse()
+    } finally {
+      if (current?.id === id) {
+        requestInFlight = false
+        renderQuestion()
+        status()
+      }
+    }
+  }
+  async function pauseStudy() {
+    if (!current || requestInFlight || pauseInFlight) return
+    const id = current.id
+    pauseInFlight = true
+    phase = '正在暂停，进度会保留…'
+    status()
+    try {
+      await api('/api/courses/' + id + '/pause', { requestId: uid() })
+      await refreshCourse()
+      if (current?.id === id && current.tutorStatus === 'paused') toast('已暂停，进度已保存。')
+    } catch (error) {
+      toast(error.message)
+    } finally {
+      if (current?.id === id) {
+        pauseInFlight = false
+        renderQuestion()
+        status()
+      }
     }
   }
   function notices() {
@@ -791,13 +933,16 @@
   }
   function applySnapshot(value) {
     if (!current || value.course.id !== current.id) return
+    if (value.course.revision < current.revision) return
     current = value.course
     current.serverBusy = !!value.job
+    if (value.job) phase = value.job.phase
     if (value.job && !busyStart) busyStart = Date.now()
     status()
     renderProfile()
     renderQuestion()
     notices()
+    status()
   }
   async function refreshCourse() {
     if (!current) return
@@ -819,6 +964,9 @@
     seen = new Set()
     phase = ''
     busyStart = 0
+    requestInFlight = false
+    pauseInFlight = false
+    lastAction = ''
     title.textContent = current.title
     canvas.innerHTML =
       '<div class="learning-head"><div><div class="eyebrow">YOUR LEARNING</div><h1>' +
@@ -836,20 +984,15 @@
       ]
         .map(([intent, label]) => '<button data-intent="' + intent + '">' + label + '</button>')
         .join('') +
-      '</div><div id="tutor-status" class="tutor-status"><span class="status-dot"></span><span class="phase"></span><span class="elapsed"></span></div><div id="study-notices"></div><div class="timeline" id="timeline"></div><div id="question-panel"></div><div class="composer"><textarea id="feedback-input" rows="2" placeholder="说说你的理解、卡住的地方，或者希望怎么学…"></textarea><div class="composer-foot"><div class="quick"><button data-feedback="我有点跟不上，请换个更具体的讲法。">换个讲法</button><button data-feedback="我想先看一个实际例子。">看个例子</button><button data-feedback="我想独立试一次，不要先告诉我答案。">独立试试</button></div><button class="send-message">发送 →</button></div></div></section><aside class="profile-panel" id="profile-panel"></aside></div>'
+      '</div><div id="study-notices"></div><div class="timeline" id="timeline"></div><div id="question-panel"></div><div id="tutor-status-anchor"><div id="tutor-status" class="tutor-status"><span class="status-dot" aria-hidden="true"></span><span class="phase" role="status" aria-live="polite"></span><span class="elapsed"></span><button type="button" class="pause-processing" hidden>暂停</button></div></div><div class="composer"><textarea id="feedback-input" rows="2" placeholder="说说你的理解、卡住的地方，或者希望怎么学…"></textarea><div class="composer-foot"><div class="quick"><button data-feedback="我有点跟不上，请换个更具体的讲法。">换个讲法</button><button data-feedback="我想先看一个实际例子。">看个例子</button><button data-feedback="我想独立试一次，不要先告诉我答案。">独立试试</button></div><button class="send-message">发送 →</button></div></div></section><aside class="profile-panel" id="profile-panel"></aside></div>'
     timeline = canvas.querySelector('#timeline')
     questionPanel = canvas.querySelector('#question-panel')
     profilePanel = canvas.querySelector('#profile-panel')
     composer = canvas.querySelector('#feedback-input')
     result.events.forEach(appendEvent)
     applySnapshot(result)
-    canvas.querySelector('#pause-study').addEventListener('click', async () => {
-      try {
-        await api('/api/courses/' + id + '/pause', { requestId: uid() })
-      } catch (error) {
-        toast(error.message)
-      }
-    })
+    canvas.querySelector('#pause-study').addEventListener('click', pauseStudy)
+    canvas.querySelector('.pause-processing').addEventListener('click', pauseStudy)
     canvas.querySelector('#refresh-study').addEventListener('click', () => {
       source?.close()
       loadCourse(id)
@@ -860,11 +1003,13 @@
     canvas
       .querySelectorAll('[data-feedback]')
       .forEach((node) => node.addEventListener('click', () => sendTurn(node.dataset.feedback)))
-    function sendFeedback() {
+    async function sendFeedback() {
       const message = composer.value.trim()
-      if (!message) return
-      composer.value = ''
-      sendTurn(message)
+      if (!message || isBusy()) return
+      const id = current.id
+      if (await sendTurn(message)) {
+        if (current?.id === id && composer.value.trim() === message) composer.value = ''
+      }
     }
     canvas.querySelector('.send-message').addEventListener('click', sendFeedback)
     composer.addEventListener('keydown', (event) => {
@@ -896,8 +1041,8 @@
       }
     }
     source.onerror = () => {
-      const indicator = canvas.querySelector('#tutor-status .phase')
-      if (indicator) indicator.textContent = '连接正在恢复，学习记录仍在'
+      phase = '连接正在恢复，学习记录仍在'
+      status()
     }
     refreshNav()
     if (pendingStart?.id === id) {
@@ -946,8 +1091,10 @@
   }
   const timer = setInterval(status, 1000)
   document.addEventListener('visibilitychange', () => {
-    if (current) toggleQuestion(current.tutorStatus === 'working')
+    if (current) toggleQuestion(isBusy())
   })
+  window.addEventListener('scroll', placeStatus, { passive: true })
+  window.addEventListener('resize', placeStatus)
   window.addEventListener('hashchange', route)
   window.addEventListener('beforeunload', () => {
     source?.close()

@@ -534,6 +534,53 @@ button.secondary:hover {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
+.tutor-status .phase {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tutor-status .status-dot,
+.tutor-status .elapsed {
+  flex-shrink: 0;
+}
+.tutor-status.floating {
+  position: fixed;
+  bottom: 16px;
+  z-index: 15;
+  margin: 0;
+  background: #f9fcf7;
+  box-shadow: 0 8px 30px #173c3324;
+}
+.pause-processing {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid #c5d5c7;
+  border-radius: 7px;
+  background: white;
+  color: var(--green);
+}
+.submit-answer[aria-busy='true']::before,
+.send-message[aria-busy='true']::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: request-spin 0.8s linear infinite;
+}
+@keyframes request-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tutor-status.busy .status-dot,
+  .submit-answer[aria-busy='true']::before,
+  .send-message[aria-busy='true']::before {
+    animation: none;
+  }
+}
 .timeline {
   display: flex;
   flex-direction: column;
@@ -783,6 +830,9 @@ button.secondary:hover {
   background: #f3f6ee;
 }
 .composer .send-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 15px;
   font-size: 11px;
   border-radius: 8px;

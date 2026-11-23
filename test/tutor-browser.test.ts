@@ -1,8 +1,25 @@
 import { it } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createTutorServer } from '../src/server/http.ts'
-import { activity, SKILL, scriptedTransport, systemFixture, toolReply } from './fixtures/tutor.ts'
+import { activity, SKILL, scriptedTransport, systemFixture, toolReply, ROOT } from './fixtures/tutor.ts'
+
+function longHistory(system: ReturnType<typeof systemFixture>['system']) {
+  for (let index = 0; index < 18; index++)
+    system.service.message(
+      'alpha',
+      '此前的讨论 ' +
+        (index + 1) +
+        '\n\n' +
+        '我们已经讨论过这个例子，接下来根据你的回答继续调整学习安排。'.repeat(8),
+      'history-' + index,
+      'history',
+      system.repository.read('alpha').revision,
+      '前期讨论',
+    )
+}
 import { browser, hasChrome } from './fixtures/browser.ts'
 import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
 import { ESCAPED_LESSON } from './fixtures/markdown.ts'
@@ -246,3 +263,177 @@ it('设置页能切换判断方式，连接测试不启用配置，保存后可�
   assert.equal(await page.evaluate('document.querySelector(".typesafe-fields").hidden'), true)
   assert.equal(calls, 1)
 })
+
+it('长对话底部提交后立即显示处理状态，滚动历史时仍能暂停并恢复', { skip: !hasChrome }, async (t) => {
+  let release!: () => void
+  const grading = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  t.after(() => release())
+  const transport = scriptedTransport([toolReply('continue_activity', { reason: '继续下一题' })])
+  const fixture = systemFixture(t, async (request, signal, onChunk) => {
+    if (
+      request.messages.some((message) => message.role === 'system' && message.content?.includes('独立阅卷员'))
+    ) {
+      await new Promise<void>((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        grading.then(resolve)
+      })
+    }
+    return transport(request, signal, onChunk)
+  })
+  const app = createTutorServer(fixture.options)
+  app.system.service.create({ id: 'alpha', goal: '掌握整数加法' })
+  app.system.service.updateCurriculum('alpha', { skills: [SKILL], reason: '近期目标' }, 'seed', 0)
+  longHistory(app.system)
+  const content = activity()
+  content.questions[0].type = 'open'
+  content.questions.push({ ...content.questions[0], id: 'q2', prompt: '5+6=?', answer: '11' })
+  app.system.service.presentActivity(
+    'alpha',
+    content,
+    'present',
+    app.system.repository.read('alpha').revision,
+    'seed',
+  )
+  app.server.listen(0, '127.0.0.1')
+  await once(app.server, 'listening')
+  t.after(async () => {
+    app.server.closeAllConnections()
+    await app.close()
+  })
+  const base = 'http://127.0.0.1:' + (app.server.address() as { port: number }).port
+  const page = await browser(t, base + '/app.html#/course/alpha')
+  await page.wait('!!document.querySelector(".answer-box")')
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await page.wait('innerWidth === 1280')
+  const immediate = await page.evaluate<{
+    label: string
+    busy: string
+    disabled: boolean
+    visible: boolean
+    scroll: number
+  }>(
+    'window.scrollTo(0,document.body.scrollHeight);window.__fetch=window.fetch;window.fetch=async(url,options)=>{const response=await window.__fetch(url,options);if(String(url).endsWith("/answer"))await new Promise(resolve=>window.__releaseAnswer=resolve);return response};document.querySelector(".answer-box").value="5";document.querySelector(".answer-box").dispatchEvent(new Event("input"));document.querySelector("#answer-form").requestSubmit();(()=>{const submit=document.querySelector(".submit-answer"),rect=document.querySelector("#tutor-status").getBoundingClientRect();return{label:submit.textContent,busy:submit.getAttribute("aria-busy"),disabled:submit.disabled,visible:rect.top>=0&&rect.bottom<=innerHeight,scroll:scrollY}})()',
+  )
+  assert.equal(immediate.busy, 'true')
+  assert.match(immediate.label, /提交中/)
+  assert.equal(immediate.disabled, true)
+  assert.equal(immediate.visible, true)
+  assert.ok(immediate.scroll > 1500)
+  await page.wait('typeof window.__releaseAnswer === "function"')
+  await page.evaluate('window.__releaseAnswer()')
+  await page.wait(
+    '!document.querySelector(".pause-processing").disabled && parseInt(document.querySelector("#tutor-status .elapsed").textContent)>=1',
+  )
+  await page.evaluate('window.scrollTo(0,100)')
+  await page.wait('document.querySelector("#tutor-status").classList.contains("floating")')
+  const floating = await page.evaluate(
+    '(()=>{const r=document.querySelector("#tutor-status").getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight})()',
+  )
+  assert.equal(floating, true)
+  fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/interaction-status-busy.png'), false)
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  })
+  await page.wait(
+    'document.querySelector("#rail").getBoundingClientRect().right<=1 && document.querySelector("#tutor-status").getBoundingClientRect().right<=innerWidth',
+  )
+  assert.equal(
+    await page.evaluate(
+      'document.body.scrollWidth<=innerWidth && document.querySelector("#tutor-status").getBoundingClientRect().left>=0',
+    ),
+    true,
+  )
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/interaction-status-mobile.png'), false)
+  await page.evaluate('document.querySelector(".pause-processing").click()')
+  await page.wait(
+    'document.querySelector("#tutor-status .phase").textContent.includes("已暂停") && !document.querySelector("#tutor-status").classList.contains("floating")',
+  )
+  const paused = app.system.repository.read('alpha')
+  assert.equal(paused.pendingAnswer!.questionId, 'q1')
+  assert.equal(
+    app.system.repository.asset<{ answer: string }>('alpha', paused.pendingAnswer!.asset).answer,
+    '5',
+  )
+  release()
+  await page.evaluate(
+    'window.scrollTo(0,document.body.scrollHeight);[...document.querySelectorAll("#question-panel button")].find(button=>button.textContent.includes("恢复评分")).click()',
+  )
+  await page.wait(
+    'document.querySelector(".question-prompt")?.textContent.includes("5+6") && !document.querySelector(".submit-answer").disabled',
+  )
+  assert.equal(
+    app.system.repository.read('alpha').evidence.filter((item) => item.kind === 'answer').length,
+    1,
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector(".send-message").getAttribute("aria-busy")'),
+    'false',
+  )
+})
+
+it(
+  '反馈发送的等待提示靠近输入区，提前到达的 SSE 完成不会让按钮或状态卡住',
+  { skip: !hasChrome },
+  async (t) => {
+    const fixture = systemFixture(
+      t,
+      scriptedTransport([
+        toolReply('ask_learner', { question: '我们按这个思路继续看一个例子。', reason: '回答学员反馈' }),
+      ]),
+    )
+    const app = createTutorServer(fixture.options)
+    app.system.service.create({ id: 'alpha', goal: '掌握整数加法' })
+    app.system.service.updateCurriculum('alpha', { skills: [SKILL], reason: '近期目标' }, 'seed', 0)
+    longHistory(app.system)
+    app.server.listen(0, '127.0.0.1')
+    await once(app.server, 'listening')
+    t.after(async () => {
+      app.server.closeAllConnections()
+      await app.close()
+    })
+    const page = await browser(
+      t,
+      'http://127.0.0.1:' + (app.server.address() as { port: number }).port + '/app.html#/course/alpha',
+    )
+    await page.wait('!!document.querySelector("#feedback-input")')
+    const immediate = await page.evaluate<{ label: string; busy: string; visible: boolean }>(
+      'window.scrollTo(0,document.body.scrollHeight);window.__fetch=window.fetch;window.fetch=async(url,options)=>{const response=await window.__fetch(url,options);if(String(url).endsWith("/turn"))await new Promise(resolve=>window.__releaseTurn=resolve);return response};document.querySelector("#feedback-input").value="请进一步解释";document.querySelector(".send-message").click();(()=>{const button=document.querySelector(".send-message"),r=document.querySelector("#tutor-status").getBoundingClientRect();return{label:button.textContent,busy:button.getAttribute("aria-busy"),visible:r.top>=0&&r.bottom<=innerHeight}})()',
+    )
+    assert.match(immediate.label, /发送中/)
+    assert.equal(immediate.busy, 'true')
+    assert.equal(immediate.visible, true)
+    await page.wait(
+      'typeof window.__releaseTurn === "function" && document.body.innerText.includes("我们按这个思路继续看一个例子")',
+    )
+    assert.equal(await page.evaluate('document.querySelector(".send-message").disabled'), true)
+    await page.evaluate('window.__releaseTurn()')
+    await page.wait(
+      '!document.querySelector(".send-message").disabled && document.querySelector("#feedback-input").value === ""',
+    )
+    assert.equal(
+      await page.evaluate('document.querySelector(".send-message").getAttribute("aria-busy")'),
+      'false',
+    )
+    assert.equal(
+      await page.evaluate('document.querySelector("#tutor-status .phase").textContent'),
+      '轮到你了',
+    )
+    assert.equal(
+      app.system.repository
+        .read('alpha')
+        .evidence.filter((item) => item.kind === 'feedback' && item.summary === '请进一步解释').length,
+      1,
+    )
+  },
+)
