@@ -596,6 +596,28 @@ button.secondary:hover {
 .message ol {
   padding-left: 23px;
 }
+.message li + li,
+.question-prompt li + li {
+  margin-top: 7px;
+}
+.message blockquote,
+.question-prompt blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  border-left: 3px solid #b7cdbd;
+  border-radius: 0 8px 8px 0;
+  background: #f5f8f3;
+  color: #365448;
+}
+.message blockquote p,
+.question-prompt blockquote p {
+  margin: 0;
+}
+.message hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 16px 0;
+}
 .message pre,
 .question-card pre {
   max-width: 100%;

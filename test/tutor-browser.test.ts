@@ -5,6 +5,7 @@ import { createTutorServer } from '../src/server/http.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply } from './fixtures/tutor.ts'
 import { browser, hasChrome } from './fixtures/browser.ts'
 import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
+import { ESCAPED_LESSON } from './fixtures/markdown.ts'
 
 it('网页能创建目标、接受 agent 活动、选择答案并显示真实反馈', { skip: !hasChrome }, async (t) => {
   const content = activity()
@@ -49,6 +50,58 @@ it('网页能创建目标、接受 agent 活动、选择答案并显示真实反
   await page.wait('!!document.querySelector(".message.grade")')
   assert.match(await page.evaluate<string>('document.body.innerText'), /100%/)
   assert.equal(app.system.service.view(courseId).supported, 0)
+})
+
+it('已保存的双转义教学活动显示为段落、列表和引用，刷新不改写原文', { skip: !hasChrome }, async (t) => {
+  const fixture = systemFixture(t, scriptedTransport([]))
+  const app = createTutorServer(fixture.options)
+  app.system.service.create({ id: 'alpha', goal: '学会英语闲聊中的回应与具体追问' })
+  const skill = {
+    ...SKILL,
+    id: 'followup',
+    title: '回应与追问',
+    description: '回应信息并提出相关的具体问题',
+    criteria: [{ id: 'followup-structure', description: '回应、个人细节和相关追问完整', critical: true }],
+  }
+  app.system.service.updateCurriculum('alpha', { skills: [skill], reason: '显示验证' }, 'seed', 0)
+  const content = activity('', '', {
+    kind: 'practice',
+    title: '接住话轮：先回应，再具体追问',
+    body: ESCAPED_LESSON,
+    skillIds: ['followup'],
+    questions: [
+      {
+        id: 'q1',
+        type: 'open',
+        prompt: '请写三句英语回复',
+        answer: 'That sounds busy. I also changed jobs last year. What do you like most about your new team?',
+        criterionIds: ['followup-structure'],
+        dimension: 'application',
+        difficulty: 2,
+      },
+    ],
+  })
+  app.system.service.presentActivity('alpha', content, 'present', 1, 'display-test')
+  const revision = app.system.repository.read('alpha').revision
+  app.server.listen(0, '127.0.0.1')
+  await once(app.server, 'listening')
+  t.after(async () => {
+    app.server.closeAllConnections()
+    await app.close()
+  })
+  const page = await browser(
+    t,
+    'http://127.0.0.1:' + (app.server.address() as { port: number }).port + '/app.html#/course/alpha',
+  )
+  await page.wait('!!document.querySelector(".message blockquote")')
+  assert.equal(await page.evaluate('document.querySelectorAll(".message ol li").length'), 3)
+  assert.equal(await page.evaluate('document.querySelectorAll(".message ul li").length'), 3)
+  assert.equal(await page.evaluate('document.querySelector(".message").innerText.includes("\\\\n")'), false)
+  await page.evaluate('document.querySelector("#refresh-study").click()')
+  await page.wait('!!document.querySelector(".message blockquote")')
+  assert.equal(app.system.service.view('alpha').active!.body, ESCAPED_LESSON)
+  assert.equal(app.system.repository.read('alpha').revision, revision)
+  assert.equal(app.system.usageLedger.read().length, 0)
 })
 
 it('提交失败恢复控件，刷新与 SSE 重连不复制反馈', { skip: !hasChrome }, async (t) => {
