@@ -433,7 +433,7 @@ button.secondary:hover {
 }
 .form-card textarea:focus,
 .field input:focus,
-.composer textarea:focus,
+.reply-card textarea:focus,
 .answer-box:focus {
   border-color: #8ca995;
   outline: 1px solid #8ca995;
@@ -505,6 +505,65 @@ button.secondary:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
   gap: 24px;
+}
+.learning-tools {
+  position: relative;
+  flex-shrink: 0;
+}
+.learning-tools > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+  font-size: 12px;
+  color: var(--muted);
+}
+.learning-tools > summary::-webkit-details-marker {
+  display: none;
+}
+.learning-tool-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: 215px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 10px 30px #173c331c;
+}
+.learning-tool-menu button {
+  display: block;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.learning-tool-menu button:hover {
+  background: var(--soft);
+}
+.interaction-surface {
+  margin-top: 20px;
+}
+.interaction-surface .question-card {
+  margin: 0;
+}
+.interaction-surface #tutor-status-anchor {
+  margin-top: 14px;
+}
+.reply-card .question-prompt {
+  margin-bottom: 16px;
+}
+.cancel-feedback {
+  color: var(--muted);
+  font-size: 12px;
+}
+.interaction-surface .send-message {
+  min-width: 120px;
 }
 .study-panel {
   min-width: 0;
@@ -792,52 +851,6 @@ button.secondary:hover {
   color: var(--red);
   font-size: 12px;
   margin-top: 12px;
-}
-.composer {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: white;
-  padding: 14px;
-  margin-top: 22px;
-}
-.composer textarea {
-  width: 100%;
-  min-height: 55px;
-  resize: vertical;
-  background: transparent;
-  border: 0;
-  padding: 5px 7px;
-  color: var(--ink);
-  font-size: 13px;
-  outline: 0;
-}
-.composer-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 8px;
-}
-.composer .quick {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.composer .quick button {
-  font-size: 10px;
-  color: #77877b;
-  padding: 5px 8px;
-  border-radius: 6px;
-  background: #f3f6ee;
-}
-.composer .send-message {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 15px;
-  font-size: 11px;
-  border-radius: 8px;
-  background: var(--green);
-  color: white;
 }
 .profile-panel {
   min-width: 0;

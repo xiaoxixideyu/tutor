@@ -26,14 +26,18 @@
     phase = '',
     requestInFlight = false,
     pauseInFlight = false,
-    lastAction = ''
+    lastAction = '',
+    interactionOverride = '',
+    interactionError = ''
   let seen = new Set(),
     timeline = null,
-    questionPanel = null,
-    profilePanel = null,
-    composer = null
+    interactionPanel = null,
+    profilePanel = null
   const drafts = new Map(),
-    attempts = new Map()
+    attempts = new Map(),
+    draftVersions = new Map(),
+    draftQueues = new Map(),
+    draftTimers = new Map()
   async function api(path, body, method, timeout = 10000) {
     const response = await fetch(path, {
       method: method ?? (body ? 'POST' : 'GET'),
@@ -350,11 +354,13 @@
         ? requestInFlight && current.tutorStatus !== 'working' && !current.serverBusy
           ? '正在确认提交状态…'
           : phase || '导师正在准备下一步'
-        : current.tutorStatus === 'failed'
-          ? '本轮未完成，进度已保存'
-          : current.tutorStatus === 'paused'
-            ? '已暂停，随时可以继续'
-            : '轮到你了'
+        : current.interaction?.kind === 'complete'
+          ? '本次学习已结束'
+          : current.tutorStatus === 'failed'
+            ? '本轮未完成，进度已保存'
+            : current.tutorStatus === 'paused'
+              ? '已暂停，随时可以继续'
+              : '轮到你了'
     if (box.querySelector('.phase').textContent !== message) box.querySelector('.phase').textContent = message
     box.querySelector('.elapsed').textContent = busyStart
       ? Math.floor((Date.now() - busyStart) / 1000) + ' 秒'
@@ -372,7 +378,7 @@
         ? requestInFlight && lastAction === 'message'
           ? '发送中…'
           : '处理中…'
-        : '发送 →'
+        : (send.dataset.idleLabel ?? '回复导师 →')
       send.setAttribute('aria-busy', String(busy))
     }
     const submit = canvas.querySelector('.submit-answer')
@@ -388,6 +394,7 @@
     }
     canvas.querySelectorAll('.quick button').forEach((node) => (node.disabled = busy))
     canvas.querySelectorAll('[data-intent]').forEach((node) => (node.disabled = busy))
+    canvas.querySelectorAll('[data-open-feedback], [data-feedback]').forEach((node) => (node.disabled = busy))
     placeStatus()
   }
   function renderProfile() {
@@ -555,12 +562,14 @@
     const elapsed = activeElapsed()
     requestInFlight = true
     lastAction = 'message'
+    interactionError = ''
     phase = '正在发送，等待导师处理…'
     try {
       current.tutorStatus = 'working'
       current.serverBusy = true
+      renderInteraction()
       status()
-      toggleQuestion(true)
+      toggleInteraction(true)
       await api('/api/courses/' + id + '/turn', {
         requestId: uid(),
         message,
@@ -569,27 +578,28 @@
         activeMs: elapsed,
       })
       if (current?.id !== id) return false
-      if (questionPanel) {
-        questionPanel.dataset.elapsed = '0'
-        questionPanel.dataset.started = ''
+      if (interactionPanel) {
+        interactionPanel.dataset.elapsed = '0'
+        interactionPanel.dataset.started = ''
       }
       await refreshCourse()
       return true
     } catch (error) {
       if (current?.id !== id) return false
+      interactionError = error.message
       toast(error.message)
       await refreshCourse()
       return false
     } finally {
       if (current?.id === id) {
         requestInFlight = false
-        renderQuestion()
+        renderInteraction()
         status()
       }
     }
   }
   function activeElapsed() {
-    const panel = questionPanel
+    const panel = interactionPanel
     if (!panel) return 0
     const saved = Number(panel.dataset.elapsed ?? 0)
     return (
@@ -599,89 +609,286 @@
         : 0)
     )
   }
-  function toggleQuestion(disabled) {
-    const running = !disabled && current.active?.status === 'active' && !document.hidden
-    if (questionPanel) {
-      if (!running && questionPanel.dataset.started) {
-        questionPanel.dataset.elapsed = String(
-          Number(questionPanel.dataset.elapsed ?? 0) +
-            Math.max(0, Date.now() - Number(questionPanel.dataset.started)),
+  function toggleInteraction(disabled) {
+    const running =
+      !disabled &&
+      ['answer', 'continue'].includes(interactionPanel?.dataset.mode) &&
+      current.active?.status === 'active' &&
+      !document.hidden
+    if (interactionPanel) {
+      if (!running && interactionPanel.dataset.started) {
+        interactionPanel.dataset.elapsed = String(
+          Number(interactionPanel.dataset.elapsed ?? 0) +
+            Math.max(0, Date.now() - Number(interactionPanel.dataset.started)),
         )
-        questionPanel.dataset.started = ''
-      } else if (running && !questionPanel.dataset.started) questionPanel.dataset.started = String(Date.now())
+        interactionPanel.dataset.started = ''
+      } else if (running && !interactionPanel.dataset.started)
+        interactionPanel.dataset.started = String(Date.now())
     }
-    questionPanel
+    interactionPanel
       ?.querySelectorAll('button,input,textarea')
-      .forEach((node) => (node.disabled = disabled || current.active?.status !== 'active'))
+      .forEach(
+        (node) =>
+          (node.disabled =
+            disabled || (interactionPanel.dataset.mode === 'answer' && current.active?.status !== 'active')),
+      )
   }
-  function renderQuestion() {
-    if (!current || !questionPanel) return
-    const active = current.active
-    const busy = isBusy()
-    if (current.pendingAnswer) {
-      const key = 'pending:' + current.pendingAnswer.requestId
-      if (questionPanel.dataset.key !== key) {
-        questionPanel.dataset.key = key
-        questionPanel.innerHTML =
-          '<div class="notice"><h3>作答已保存</h3><p>评分尚未完成，恢复会沿用同一份作答。</p></div>'
-        questionPanel.firstChild.appendChild(button('恢复评分', () => resume(), true))
+  function selectedInteraction() {
+    if (isBusy()) return { kind: 'waiting' }
+    if (interactionOverride === 'feedback') return { kind: 'feedback', key: 'feedback:' + current.id }
+    if (current.interaction) return current.interaction
+    if (current.pendingAnswer || ['paused', 'failed'].includes(current.tutorStatus))
+      return {
+        kind: 'resume',
+        label: current.pendingAnswer ? '恢复评分' : '继续本次学习',
+        message: '从已保存的断点继续。',
       }
-      questionPanel.querySelector('button').disabled = busy
+    if (current.proposals.length) return { kind: 'proposal', proposalId: current.proposals[0].id }
+    if (current.active?.question && current.active.status === 'active') return { kind: 'answer' }
+    if (current.goalSupported || current.nextSuggestion)
+      return { kind: 'complete', message: '本次学习已结束', nextLabel: current.nextSuggestion?.label }
+    return { kind: 'continue', label: current.active ? '看懂了，继续' : '继续学习', intent: 'learn' }
+  }
+  function renderReply(interaction) {
+    const feedback = interaction.kind === 'feedback'
+    const key = (feedback ? 'feedback:' : 'reply:') + current.id + ':' + interaction.key
+    if (interactionPanel.dataset.key === key) {
+      const error = interactionPanel.querySelector('.question-error')
+      if (error) {
+        error.textContent = interactionError
+        error.hidden = !interactionError
+      }
+      toggleInteraction(false)
       return
     }
-    if (!active) {
-      const key = 'idle:' + current.tutorStatus
-      if (questionPanel.dataset.key !== key) {
-        questionPanel.dataset.key = key
-        questionPanel.innerHTML =
+    toggleInteraction(true)
+    interactionPanel.dataset.key = key
+    interactionPanel.dataset.mode = feedback ? 'feedback' : 'reply'
+    interactionPanel.innerHTML =
+      '<form class="question-card reply-card"><div class="question-meta"><span>' +
+      (feedback ? '告诉导师你遇到的问题' : '回复导师') +
+      '</span></div>' +
+      (interaction.prompt ? '<div class="question-prompt">' + md(interaction.prompt) + '</div>' : '') +
+      '<textarea id="feedback-input" class="answer-box" rows="3" placeholder="' +
+      (feedback ? '描述卡住的地方，导师会调整当前任务…' : '在这里回答导师的问题…') +
+      '"></textarea><div class="question-actions">' +
+      (feedback ? '<button type="button" class="cancel-feedback">返回当前任务</button>' : '<span></span>') +
+      '<button type="submit" class="primary send-message" data-idle-label="' +
+      (feedback ? '发送反馈 →' : '回复导师 →') +
+      '">' +
+      (feedback ? '发送反馈 →' : '回复导师 →') +
+      '</button></div><div class="question-error" hidden></div></form>'
+    const form = interactionPanel.querySelector('form'),
+      input = form.querySelector('textarea'),
+      error = form.querySelector('.question-error')
+    const id = current.id
+    let value = drafts.get(key) ?? ''
+    try {
+      value = value || sessionStorage.getItem('tutor:reply:' + key) || ''
+    } catch {}
+    input.value = value
+    error.textContent = interactionError
+    error.hidden = !interactionError
+    const remember = () => {
+      drafts.set(key, input.value)
+      try {
+        sessionStorage.setItem('tutor:reply:' + key, input.value)
+      } catch {}
+      interactionError = ''
+      error.hidden = true
+    }
+    input.addEventListener('input', remember)
+    if (feedback)
+      form.querySelector('.cancel-feedback').addEventListener('click', () => {
+        remember()
+        interactionOverride = ''
+        interactionError = ''
+        renderInteraction()
+        status()
+      })
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      if (isBusy()) return
+      const message = input.value.trim()
+      if (!message) {
+        interactionError = '请填写你的回复。'
+        error.textContent = '请填写你的回复。'
+        error.hidden = false
+        return
+      }
+      remember()
+      if (await sendTurn(message)) {
+        drafts.delete(key)
+        try {
+          sessionStorage.removeItem('tutor:reply:' + key)
+        } catch {}
+        if (current?.id === id) {
+          interactionOverride = ''
+          renderInteraction()
+          status()
+        }
+      }
+    })
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        form.requestSubmit()
+      }
+    })
+    toggleInteraction(false)
+  }
+  function renderProposal(interaction) {
+    const proposal = current.proposals.find((item) => item.id === interaction.proposalId)
+    if (!proposal) return
+    const key = 'proposal:' + proposal.id
+    if (interactionPanel.dataset.key === key) return
+    toggleInteraction(true)
+    interactionPanel.dataset.key = key
+    interactionPanel.dataset.mode = 'proposal'
+    interactionPanel.innerHTML =
+      '<div class="proposal-card"><h3>请确认学习目标</h3>' +
+      md(proposal.explanation) +
+      '<strong>' +
+      esc(proposal.goal.text) +
+      '</strong><p>每天 ' +
+      proposal.goal.dailyMinutes +
+      ' 分钟' +
+      (proposal.goal.deadline ? ' · ' + esc(proposal.goal.deadline) : '') +
+      '</p><div class="proposal-actions"></div></div>'
+    for (const [accept, label] of [
+      [true, '采用这个建议'],
+      [false, '保留原目标'],
+    ])
+      interactionPanel.querySelector('.proposal-actions').appendChild(
+        button(
+          label,
+          async () => {
+            if (isBusy()) return
+            const id = current.id
+            requestInFlight = true
+            lastAction = 'goal'
+            interactionError = ''
+            phase = '正在保存目标选择…'
+            renderInteraction()
+            status()
+            let saved = false
+            try {
+              await api('/api/courses/' + id + '/goal', {
+                requestId: uid(),
+                proposalId: proposal.id,
+                accept,
+                expectedRevision: current.revision,
+              })
+              saved = true
+              await refreshCourse()
+            } catch (error) {
+              interactionError = error.message
+              toast(error.message)
+              await refreshCourse()
+            } finally {
+              if (current?.id === id) {
+                requestInFlight = false
+                renderInteraction()
+                status()
+              }
+            }
+            if (saved && current?.id === id)
+              sendTurn(accept ? '请按我接受的目标继续安排。' : '保留原目标，请按原目标继续安排。')
+          },
+          accept,
+        ),
+      )
+  }
+  function renderInteraction() {
+    if (!current || !interactionPanel) return
+    const active = current.active
+    const interaction = selectedInteraction(),
+      busy = isBusy()
+    if (interaction.kind === 'waiting') {
+      if (requestInFlight && ['answer', 'reply', 'feedback'].includes(interactionPanel.dataset.mode)) {
+        toggleInteraction(true)
+        return
+      }
+      toggleInteraction(true)
+      interactionPanel.dataset.key = 'waiting'
+      interactionPanel.dataset.mode = 'waiting'
+      interactionPanel.innerHTML = ''
+      return
+    }
+    if (interaction.kind === 'reply' || interaction.kind === 'feedback') {
+      renderReply(interaction)
+      return
+    }
+    if (interaction.kind === 'proposal') {
+      renderProposal(interaction)
+      return
+    }
+    if (interaction.kind !== 'answer') {
+      const key =
+        interaction.kind +
+        ':' +
+        (active?.id ?? '') +
+        ':' +
+        (interaction.label ?? '') +
+        ':' +
+        (interaction.nextLabel ?? '')
+      if (interactionPanel.dataset.key !== key) {
+        toggleInteraction(true)
+        interactionPanel.dataset.key = key
+        interactionPanel.dataset.mode = interaction.kind
+        interactionPanel.innerHTML =
           '<div class="completed-card"><h3>' +
           esc(
-            current.goalSupported
-              ? '这个学习目标已经通过验证'
-              : current.tutorStatus === 'working'
-                ? '导师正在选择下一步'
-                : '下一步，继续取得真实能力',
+            interaction.kind === 'complete'
+              ? interaction.message
+              : interaction.kind === 'resume'
+                ? '继续已保存的学习'
+                : active
+                  ? '准备好后继续'
+                  : '开始下一步学习',
           ) +
-          '</h3><p>' +
-          esc(current.nextSuggestion?.label ?? '导师会根据刚才的表现继续安排。') +
-          '</p></div>'
-        questionPanel.firstChild.appendChild(button('继续学习 →', () => sendTurn(''), true))
-      }
-      questionPanel.querySelector('button').disabled = busy
-      return
-    }
-    if (!active.question) {
-      const key = 'explanation:' + active.id + ':' + active.status
-      if (questionPanel.dataset.key !== key) {
-        questionPanel.dataset.key = key
-        questionPanel.dataset.started = String(Date.now())
-        questionPanel.innerHTML =
-          '<div class="completed-card"><p>可以说说你的理解，也可以让导师继续安排。</p></div>'
-        questionPanel.firstChild.appendChild(
+          '</h3>' +
+          (interaction.kind === 'complete' && interaction.nextLabel
+            ? '<p>下次安排：' + esc(interaction.nextLabel) + '</p>'
+            : interaction.kind === 'resume'
+              ? '<p>' + esc(interaction.message) + '</p>'
+              : '') +
+          (current.tutorStatus === 'failed'
+            ? '<details><summary>查看具体原因</summary><p>' + esc(current.tutorError ?? '') + '</p></details>'
+            : '') +
+          '</div>'
+        interactionPanel.firstChild.appendChild(
           button(
-            active.status === 'paused' ? '恢复这一节 →' : '继续 →',
-            () => (active.status === 'paused' ? resume() : sendTurn('')),
+            interaction.kind === 'complete' ? '返回首页' : interaction.label,
+            () =>
+              interaction.kind === 'complete'
+                ? navigate('#/')
+                : interaction.kind === 'resume'
+                  ? resume()
+                  : sendTurn('', interaction.intent),
             true,
           ),
         )
       }
-      questionPanel.querySelector('button').disabled = busy
+      toggleInteraction(false)
       return
     }
+    if (!active?.question) return
     const question = active.question,
       key = active.id + ':' + question.id
-    if (questionPanel.dataset.key === key) {
-      toggleQuestion(busy)
+    if (interactionPanel.dataset.key === key) {
+      toggleInteraction(busy)
       return
     }
-    questionPanel.dataset.key = key
-    questionPanel.dataset.elapsed = '0'
-    questionPanel.dataset.started = busy ? '' : String(Date.now())
+    interactionPanel.dataset.key = key
+    interactionPanel.dataset.mode = 'answer'
+    interactionPanel.dataset.elapsed = '0'
+    interactionPanel.dataset.started = busy ? '' : String(Date.now())
     let saved = drafts.get(key) ?? active.draft?.text ?? ''
     try {
       saved = saved || sessionStorage.getItem('tutor:draft:' + key) || ''
     } catch {}
-    questionPanel.innerHTML =
+    interactionPanel.innerHTML =
       '<form class="question-card" id="answer-form"><div class="question-meta"><span>' +
       esc(kinds[active.kind]) +
       '</span><span>第 ' +
@@ -718,35 +925,41 @@
               : '写出你的理解、推导或方案。') +
           '"></textarea>') +
       '<div class="question-actions"><button type="button" class="hint-button">需要一点提示</button><button class="primary submit-answer" type="submit">提交本次作答 →</button></div><div class="question-error" hidden></div></form>'
-    const form = questionPanel.querySelector('form'),
+    const form = interactionPanel.querySelector('form'),
       errorBox = form.querySelector('.question-error')
+    errorBox.textContent = interactionError
+    errorBox.hidden = !interactionError
     let answer = saved
-    let draftVersion = active.draft?.version ?? 0,
-      saveTimer,
-      saveChain = Promise.resolve()
+    draftVersions.set(key, Math.max(draftVersions.get(key) ?? 0, active.draft?.version ?? 0))
     const courseId = current.id
     function remember(value) {
       answer = value
+      interactionError = ''
+      errorBox.hidden = true
       drafts.set(key, value)
       try {
         sessionStorage.setItem('tutor:draft:' + key, value)
       } catch {}
-      clearTimeout(saveTimer)
-      saveTimer = setTimeout(() => {
-        saveChain = saveChain
-          .catch(() => {})
-          .then(async () => {
-            const result = await api('/api/courses/' + courseId + '/draft', {
-              requestId: uid(),
-              activityId: active.id,
-              questionId: question.id,
-              answer: value,
-              draftVersion,
+      clearTimeout(draftTimers.get(key))
+      draftTimers.set(
+        key,
+        setTimeout(() => {
+          const saveChain = (draftQueues.get(key) ?? Promise.resolve())
+            .catch(() => {})
+            .then(async () => {
+              const result = await api('/api/courses/' + courseId + '/draft', {
+                requestId: uid(),
+                activityId: active.id,
+                questionId: question.id,
+                answer: value,
+                draftVersion: draftVersions.get(key) ?? 0,
+              })
+              draftVersions.set(key, result.draft.version)
             })
-            draftVersion = result.draft.version
-          })
-          .catch(() => {})
-      }, 300)
+            .catch(() => {})
+          draftQueues.set(key, saveChain)
+        }, 300),
+      )
     }
     if (question.type === 'choice') {
       form.querySelectorAll('.choice').forEach((choice) => {
@@ -781,8 +994,10 @@
     form.addEventListener('submit', async (event) => {
       event.preventDefault()
       if (isBusy()) return
-      clearTimeout(saveTimer)
+      clearTimeout(draftTimers.get(key))
+      draftTimers.delete(key)
       if (!answer.trim()) {
+        interactionError = '请先完成作答。'
         errorBox.textContent = '请先完成作答。'
         errorBox.hidden = false
         return
@@ -793,9 +1008,11 @@
       const id = current.id
       requestInFlight = true
       lastAction = 'answer'
+      interactionError = ''
       phase = '正在提交作答，等待评阅…'
       current.serverBusy = true
-      toggleQuestion(true)
+      toggleInteraction(true)
+      renderInteraction()
       status()
       errorBox.hidden = true
       try {
@@ -816,25 +1033,28 @@
         await refreshCourse()
       } catch (error) {
         if (current?.id !== id) return
+        interactionError = error.message
         errorBox.textContent = error.message
         errorBox.hidden = false
         await refreshCourse()
       } finally {
         if (current?.id === id) {
           requestInFlight = false
-          renderQuestion()
+          renderInteraction()
           status()
         }
       }
     })
-    toggleQuestion(busy)
+    toggleInteraction(busy)
   }
   async function resume() {
     if (!current || isBusy()) return
     const id = current.id
     requestInFlight = true
     lastAction = 'resume'
+    interactionError = ''
     phase = '正在恢复本次处理…'
+    renderInteraction()
     status()
     try {
       await api('/api/courses/' + current.id + '/resume', { requestId: uid() })
@@ -845,7 +1065,7 @@
     } finally {
       if (current?.id === id) {
         requestInFlight = false
-        renderQuestion()
+        renderInteraction()
         status()
       }
     }
@@ -865,70 +1085,9 @@
     } finally {
       if (current?.id === id) {
         pauseInFlight = false
-        renderQuestion()
+        renderInteraction()
         status()
       }
-    }
-  }
-  function notices() {
-    const container = canvas.querySelector('#study-notices')
-    if (!container || !current) return
-    container.innerHTML = ''
-    if (current.tutorStatus === 'failed') {
-      const card = window.TutorDom.el(
-        '<div class="notice error"><h3>本轮还没有完成</h3><p>已完成的内容和作答都已保存，可以从断点继续。</p><details><summary>查看具体原因</summary><p>' +
-          esc(current.tutorError ?? '') +
-          '</p></details></div>',
-      )
-      card.appendChild(button('恢复本次 →', () => resume(), true))
-      if (current.contentFailures.length)
-        card.appendChild(
-          button('让导师修复', () => sendTurn('请修复最近没有通过内容核对的任务，并继续学习。', 'repair')),
-        )
-      container.appendChild(card)
-    } else if (current.tutorStatus === 'paused') {
-      const card = window.TutorDom.el('<div class="notice"><p>已暂停，恢复后沿用原有活动和作答。</p></div>')
-      card.appendChild(button('继续这一节 →', () => resume(), true))
-      container.appendChild(card)
-    }
-    for (const proposal of current.proposals) {
-      const card = window.TutorDom.el(
-        '<div class="proposal-card"><h3>导师建议调整目标</h3><p>' +
-          esc(proposal.explanation) +
-          '</p><strong>' +
-          esc(proposal.goal.text) +
-          '</strong><p>每天 ' +
-          proposal.goal.dailyMinutes +
-          ' 分钟' +
-          (proposal.goal.deadline ? ' · ' + esc(proposal.goal.deadline) : '') +
-          '</p><div class="proposal-actions"></div></div>',
-      )
-      for (const [accept, label] of [
-        [true, '采用这个建议'],
-        [false, '保留原目标'],
-      ])
-        card.querySelector('.proposal-actions').appendChild(
-          button(
-            label,
-            async () => {
-              try {
-                await api('/api/courses/' + current.id + '/goal', {
-                  requestId: uid(),
-                  proposalId: proposal.id,
-                  accept,
-                  expectedRevision: current.revision,
-                })
-                await refreshCourse()
-                if (accept) sendTurn('请按我接受的目标继续安排。')
-              } catch (error) {
-                toast(error.message)
-                await refreshCourse()
-              }
-            },
-            accept,
-          ),
-        )
-      container.appendChild(card)
     }
   }
   function applySnapshot(value) {
@@ -940,8 +1099,7 @@
     if (value.job && !busyStart) busyStart = Date.now()
     status()
     renderProfile()
-    renderQuestion()
-    notices()
+    renderInteraction()
     status()
   }
   async function refreshCourse() {
@@ -967,13 +1125,15 @@
     requestInFlight = false
     pauseInFlight = false
     lastAction = ''
+    interactionOverride = ''
+    interactionError = ''
     title.textContent = current.title
     canvas.innerHTML =
       '<div class="learning-head"><div><div class="eyebrow">YOUR LEARNING</div><h1>' +
       esc(current.title) +
       '</h1><div class="goal-summary">' +
       esc(current.goal.text) +
-      '</div></div><div class="head-actions"><button id="pause-study">暂停一下</button><button id="refresh-study">重新连接</button></div></div><div class="learning-layout"><section class="study-panel"><div class="toolbar">' +
+      '</div></div><details class="learning-tools"><summary>更多操作</summary><div class="learning-tool-menu"><button data-open-feedback>告诉导师我卡住了</button><button data-feedback="我有点跟不上，请换个更具体的讲法。">换个讲法</button><button data-feedback="我想先看一个实际例子。">看个例子</button>' +
       [
         ['learn', '继续学习'],
         ['practice', '做个任务'],
@@ -984,11 +1144,10 @@
       ]
         .map(([intent, label]) => '<button data-intent="' + intent + '">' + label + '</button>')
         .join('') +
-      '</div><div id="study-notices"></div><div class="timeline" id="timeline"></div><div id="question-panel"></div><div id="tutor-status-anchor"><div id="tutor-status" class="tutor-status"><span class="status-dot" aria-hidden="true"></span><span class="phase" role="status" aria-live="polite"></span><span class="elapsed"></span><button type="button" class="pause-processing" hidden>暂停</button></div></div><div class="composer"><textarea id="feedback-input" rows="2" placeholder="说说你的理解、卡住的地方，或者希望怎么学…"></textarea><div class="composer-foot"><div class="quick"><button data-feedback="我有点跟不上，请换个更具体的讲法。">换个讲法</button><button data-feedback="我想先看一个实际例子。">看个例子</button><button data-feedback="我想独立试一次，不要先告诉我答案。">独立试试</button></div><button class="send-message">发送 →</button></div></div></section><aside class="profile-panel" id="profile-panel"></aside></div>'
+      '<button id="pause-study">暂停本次学习</button><button id="refresh-study">重新连接</button></div></details></div><div class="learning-layout"><section class="study-panel"><div class="timeline" id="timeline"></div><section class="interaction-surface" aria-label="当前操作"><div id="interaction-panel"></div><div id="tutor-status-anchor"><div id="tutor-status" class="tutor-status"><span class="status-dot" aria-hidden="true"></span><span class="phase" role="status" aria-live="polite"></span><span class="elapsed"></span><button type="button" class="pause-processing" hidden>暂停</button></div></div></section></section><aside class="profile-panel" id="profile-panel"></aside></div>'
     timeline = canvas.querySelector('#timeline')
-    questionPanel = canvas.querySelector('#question-panel')
+    interactionPanel = canvas.querySelector('#interaction-panel')
     profilePanel = canvas.querySelector('#profile-panel')
-    composer = canvas.querySelector('#feedback-input')
     result.events.forEach(appendEvent)
     applySnapshot(result)
     canvas.querySelector('#pause-study').addEventListener('click', pauseStudy)
@@ -997,26 +1156,24 @@
       source?.close()
       loadCourse(id)
     })
-    canvas
-      .querySelectorAll('[data-intent]')
-      .forEach((node) => node.addEventListener('click', () => sendTurn('', node.dataset.intent)))
-    canvas
-      .querySelectorAll('[data-feedback]')
-      .forEach((node) => node.addEventListener('click', () => sendTurn(node.dataset.feedback)))
-    async function sendFeedback() {
-      const message = composer.value.trim()
-      if (!message || isBusy()) return
-      const id = current.id
-      if (await sendTurn(message)) {
-        if (current?.id === id && composer.value.trim() === message) composer.value = ''
-      }
-    }
-    canvas.querySelector('.send-message').addEventListener('click', sendFeedback)
-    composer.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault()
-        sendFeedback()
-      }
+    canvas.querySelectorAll('[data-intent]').forEach((node) =>
+      node.addEventListener('click', () => {
+        interactionOverride = ''
+        canvas.querySelector('.learning-tools').open = false
+        sendTurn('', node.dataset.intent)
+      }),
+    )
+    canvas.querySelectorAll('[data-feedback]').forEach((node) =>
+      node.addEventListener('click', () => {
+        canvas.querySelector('.learning-tools').open = false
+        sendTurn(node.dataset.feedback)
+      }),
+    )
+    canvas.querySelector('[data-open-feedback]').addEventListener('click', () => {
+      interactionOverride = 'feedback'
+      canvas.querySelector('.learning-tools').open = false
+      renderInteraction()
+      status()
     })
     source?.close()
     const cursor = result.events.at(-1)?.seq ?? -1
@@ -1059,9 +1216,8 @@
     source = null
     current = null
     timeline = null
-    questionPanel = null
+    interactionPanel = null
     profilePanel = null
-    composer = null
     seen = new Set()
     const hash = location.hash.replace(/^#\/?/, '')
     document
@@ -1091,7 +1247,7 @@
   }
   const timer = setInterval(status, 1000)
   document.addEventListener('visibilitychange', () => {
-    if (current) toggleQuestion(isBusy())
+    if (current) toggleInteraction(isBusy())
   })
   window.addEventListener('scroll', placeStatus, { passive: true })
   window.addEventListener('resize', placeStatus)

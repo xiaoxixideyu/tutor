@@ -192,6 +192,20 @@ export interface Receipt {
   result: unknown
 }
 
+export type LearnerTurn =
+  | { kind: 'activity'; at: string; day: string }
+  | { kind: 'reply'; at: string; day: string; promptAsset: string; turnId: string }
+  | { kind: 'complete'; at: string; day: string }
+
+export type LearnerInteraction =
+  | { kind: 'waiting' }
+  | { kind: 'answer'; activityId: string; questionId: string }
+  | { kind: 'reply'; prompt: string; key: string }
+  | { kind: 'continue'; label: string; intent: LearningIntent }
+  | { kind: 'complete'; message: string; nextLabel?: string; nextDate?: string }
+  | { kind: 'resume'; label: string; message: string }
+  | { kind: 'proposal'; proposalId: string }
+
 export type TeachingEventType =
   | 'course_created'
   | 'curriculum_updated'
@@ -272,7 +286,14 @@ export interface CourseState {
   sessionId?: string
   tutorStatus: 'idle' | 'working' | 'paused' | 'failed'
   tutorError?: string
-  nextSuggestion?: { label: string; reason: string; intent: LearningIntent; basedOnRevision: number; date: string }
+  learnerTurn?: LearnerTurn
+  nextSuggestion?: {
+    label: string
+    reason: string
+    intent: LearningIntent
+    basedOnRevision: number
+    date: string
+  }
   goalCoverage?: { goalHash: string; skillsHash: string; complete: boolean; reason: string }
   reviewPlan?: { skillIds: string[]; date: string; reason: string }[]
   contentFailures?: { taskId: string; kind: 'activity' | 'curriculum'; issues: string[]; at: string }[]
@@ -294,6 +315,11 @@ export class DomainError extends Error {
   }
 }
 
-export function domainAssert(condition: unknown, code: string, message: string, status = 400): asserts condition {
+export function domainAssert(
+  condition: unknown,
+  code: string,
+  message: string,
+  status = 400,
+): asserts condition {
   if (!condition) throw new DomainError(code, message, status)
 }

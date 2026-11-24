@@ -23,7 +23,11 @@ export const ACTIVITY_KINDS: ActivityKind[] = [
 ]
 
 export function object(value: unknown, label = '数据'): Record<string, unknown> {
-  domainAssert(value && typeof value === 'object' && !Array.isArray(value), 'INVALID_INPUT', label + '必须是对象')
+  domainAssert(
+    value && typeof value === 'object' && !Array.isArray(value),
+    'INVALID_INPUT',
+    label + '必须是对象',
+  )
   return value as Record<string, unknown>
 }
 
@@ -50,7 +54,13 @@ export function strings(value: unknown, label: string, limit = 30): string[] {
   return value.map((item) => text(item, label, 2000))
 }
 
-export function integer(value: unknown, label: string, minimum: number, maximum: number, fallback?: number): number {
+export function integer(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+  fallback?: number,
+): number {
   const result = value === undefined && fallback !== undefined ? fallback : value
   domainAssert(
     typeof result === 'number' && Number.isSafeInteger(result) && result >= minimum && result <= maximum,
@@ -124,7 +134,11 @@ export function problemFingerprint(question: Question): string {
 function criterion(value: unknown): Criterion {
   const raw = object(value, '验收标准')
   domainAssert(typeof raw.critical === 'boolean', 'INVALID_INPUT', '验收标准必须声明是否为关键要求')
-  return { id: id(raw.id, '标准标识'), description: text(raw.description, '验收标准', 800), critical: raw.critical }
+  return {
+    id: id(raw.id, '标准标识'),
+    description: text(raw.description, '验收标准', 800),
+    critical: raw.critical,
+  }
 }
 
 export function parseSkills(value: unknown, previous: Skill[] = []): Skill[] {
@@ -162,7 +176,11 @@ export function parseSkills(value: unknown, previous: Skill[] = []): Skill[] {
       required: raw.required !== false,
     }
   })
-  domainAssert(new Set(added.map((item) => item.id)).size === added.length, 'INVALID_INPUT', '技能标识不能重复')
+  domainAssert(
+    new Set(added.map((item) => item.id)).size === added.length,
+    'INVALID_INPUT',
+    '技能标识不能重复',
+  )
   const map = new Map(previous.map((item) => [item.id, item]))
   for (const skill of added) map.set(skill.id, skill)
   const all = [...map.values()]
@@ -171,7 +189,8 @@ export function parseSkills(value: unknown, previous: Skill[] = []): Skill[] {
   for (const skill of all) {
     for (const prerequisite of skill.prerequisites)
       domainAssert(map.has(prerequisite), 'UNKNOWN_SKILL', '前置技能不存在：' + prerequisite)
-    for (const related of skill.related) domainAssert(map.has(related), 'UNKNOWN_SKILL', '关联技能不存在：' + related)
+    for (const related of skill.related)
+      domainAssert(map.has(related), 'UNKNOWN_SKILL', '关联技能不存在：' + related)
   }
   const visiting = new Set<string>(),
     complete = new Set<string>()
@@ -207,10 +226,18 @@ export function parseActivity(value: unknown, state: CourseState): ActivityConte
     'INVALID_INPUT',
     '活动必须提供 questions 数组，最多十题',
   )
-  domainAssert(raw.kind === 'explanation' || raw.questions.length > 0, 'INVALID_INPUT', '检验活动不能没有题目')
+  domainAssert(
+    raw.kind === 'explanation' || raw.questions.length > 0,
+    'INVALID_INPUT',
+    '检验活动不能没有题目',
+  )
   const questions: Question[] = raw.questions.map((value) => {
     const q = object(value, '题目')
-    domainAssert(['choice', 'numeric', 'open', 'code'].includes(q.type as string), 'INVALID_INPUT', '题型不合法')
+    domainAssert(
+      ['choice', 'numeric', 'open', 'code'].includes(q.type as string),
+      'INVALID_INPUT',
+      '题型不合法',
+    )
     const criterionIds = strings(q.criterionIds, '题目标准', 12)
     domainAssert(
       criterionIds.length > 0 && new Set(criterionIds).size === criterionIds.length,
@@ -240,7 +267,11 @@ export function parseActivity(value: unknown, state: CourseState): ActivityConte
       question.answer = question.answer.toUpperCase()
     }
     if (type === 'numeric') {
-      domainAssert(numericAnswer(question.answer) !== undefined, 'INVALID_INPUT', '数值题参考答案必须是一个有效数值')
+      domainAssert(
+        numericAnswer(question.answer) !== undefined,
+        'INVALID_INPUT',
+        '数值题参考答案必须是一个有效数值',
+      )
       question.accept = strings(q.accept, '等价答案', 10)
       domainAssert(
         question.accept.every((item) => numericAnswer(item) === numericAnswer(question.answer)),
@@ -263,7 +294,10 @@ export function parseActivity(value: unknown, state: CourseState): ActivityConte
       question.starterCode = text(q.starterCode ?? '', '初始代码', 20000, true)
       question.tests = q.tests.map((item) => {
         const test = object(item, '输入输出检查')
-        return { input: text(test.input, '输入', 8000, true), output: text(test.output, '预期输出', 8000, true) }
+        return {
+          input: text(test.input, '输入', 8000, true),
+          output: text(test.output, '预期输出', 8000, true),
+        }
       })
     }
     return question
@@ -340,4 +374,29 @@ export function validateState(value: unknown): asserts value is CourseState {
       '待评分作答丢失活动',
       500,
     )
+  if (data.learnerTurn) {
+    const turn = object(data.learnerTurn, '学员交互')
+    domainAssert(
+      ['activity', 'reply', 'complete'].includes(turn.kind as string),
+      'INVALID_STATE',
+      '学员交互类型不合法',
+      500,
+    )
+    domainAssert(
+      typeof turn.at === 'string' && Number.isFinite(Date.parse(turn.at)),
+      'INVALID_STATE',
+      '学员交互时间不合法',
+      500,
+    )
+    domainAssert(!!date(turn.day, '学员交互日期'), 'INVALID_STATE', '学员交互缺少日期', 500)
+    if (turn.kind === 'reply') {
+      domainAssert(
+        typeof turn.promptAsset === 'string' && /^[a-f0-9]{64}$/.test(turn.promptAsset),
+        'INVALID_STATE',
+        '导师问题缺少原文引用',
+        500,
+      )
+      text(turn.turnId, '交互回合', 512)
+    }
+  }
 }

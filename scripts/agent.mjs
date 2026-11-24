@@ -13,8 +13,14 @@ const env = readModelEnvironment(root, process.env)
 if (mode === 'serve') {
   await import('./serve.mjs')
 } else {
-  const system = new TutorSystem({ root, coursesRoot: env.TUTOR_COURSES_ROOT, dataRoot: env.TUTOR_DATA_ROOT, env })
-  const out = (value) => process.stdout.write(String(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '') + '\n')
+  const system = new TutorSystem({
+    root,
+    coursesRoot: env.TUTOR_COURSES_ROOT,
+    dataRoot: env.TUTOR_DATA_ROOT,
+    env,
+  })
+  const out = (value) =>
+    process.stdout.write(String(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '') + '\n')
   async function interact(courseId, intent) {
     const io = createCliIO(),
       initial = system.service.view(courseId)
@@ -47,12 +53,25 @@ if (mode === 'serve') {
       while (!io.signal.aborted) {
         await system.wait(courseId)
         const state = system.service.view(courseId)
+        const interaction = state.interaction
+        if (interaction.kind === 'complete') {
+          out(interaction.message)
+          if (interaction.nextLabel) out('下次安排：' + interaction.nextLabel)
+          break
+        }
         if (state.tutorStatus === 'failed') {
           out('本轮未完成，原始作答和完成步骤已保存：' + state.tutorError)
           out('输入 /continue 恢复，或 /pause 暂停。')
         }
         if (state.tutorStatus === 'paused') out('本次已暂停。输入 /continue 继续。')
-        const question = state.active?.question
+        const question = interaction.kind === 'answer' ? state.active?.question : null
+        if (interaction.kind === 'reply') out('\n回复导师：' + interaction.prompt)
+        if (interaction.kind === 'continue') out('\n按回车' + interaction.label + '。')
+        if (interaction.kind === 'proposal') {
+          const proposal = state.proposals.find((item) => item.id === interaction.proposalId)
+          out('\n请确认学习目标：' + proposal.goal.text + '\n' + proposal.explanation)
+          out('输入 /accept 采用建议，或 /keep 保留原目标。')
+        }
         if (question) {
           out('\n第 ' + (state.active.index + 1) + '/' + state.active.total + ' 题：\n' + question.prompt)
           for (const [index, choice] of (question.choices ?? []).entries())
@@ -72,13 +91,36 @@ if (mode === 'serve') {
           continue
         }
         if (line.trim() === '/hint') {
-          system.start(courseId, { requestId: randomUUID(), message: '请对当前题给一个提示。', intent: 'learn' })
+          system.start(courseId, {
+            requestId: randomUUID(),
+            message: '请对当前题给一个提示。',
+            intent: 'learn',
+          })
           continue
         }
         if (line.startsWith('/say ')) {
           system.start(courseId, { requestId: randomUUID(), message: line.slice(5), intent: 'learn' })
           continue
         }
+        if (interaction.kind === 'proposal') {
+          if (!['/accept', '/keep'].includes(line.trim())) {
+            out('请用 /accept 或 /keep 回应当前目标建议。')
+            continue
+          }
+          const accept = line.trim() === '/accept'
+          system.resolveGoal(courseId, interaction.proposalId, accept, randomUUID(), state.revision)
+          system.start(courseId, {
+            requestId: randomUUID(),
+            intent,
+            message: accept ? '请按接受的目标继续。' : '保留原目标，请继续安排。',
+          })
+          continue
+        }
+        if (interaction.kind === 'resume') {
+          out('输入 /continue 从断点恢复。')
+          continue
+        }
+        if (interaction.kind === 'reply' && !line.trim()) continue
         if (!question) {
           system.start(courseId, { requestId: randomUUID(), message: line, intent })
           continue

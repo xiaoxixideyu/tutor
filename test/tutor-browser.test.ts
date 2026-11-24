@@ -1,4 +1,4 @@
-import { it } from 'node:test'
+import { it, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import fs from 'node:fs'
@@ -20,6 +20,116 @@ function longHistory(system: ReturnType<typeof systemFixture>['system']) {
       '前期讨论',
     )
 }
+
+async function interactionApp(t: TestContext, actions: ReturnType<typeof toolReply>[], content = activity()) {
+  const fixture = systemFixture(t, scriptedTransport(actions))
+  const app = createTutorServer({ ...fixture.options, today: () => '2026-11-24' })
+  app.system.service.create({ id: 'alpha', goal: '掌握整数加法' })
+  app.system.service.updateCurriculum('alpha', { skills: [SKILL], reason: '近期目标' }, 'seed', 0)
+  app.system.service.presentActivity('alpha', content, 'present', 1, 'seed')
+  app.server.listen(0, '127.0.0.1')
+  await once(app.server, 'listening')
+  t.after(async () => {
+    app.server.closeAllConnections()
+    await app.close()
+  })
+  return { app, base: 'http://127.0.0.1:' + (app.server.address() as { port: number }).port }
+}
+
+it('有题时仅保留一个作答区，反馈作为次级操作且返回后草稿不丢', { skip: !hasChrome }, async (t) => {
+  const content = activity()
+  content.questions[0].type = 'open'
+  const { app, base } = await interactionApp(t, [], content)
+  const page = await browser(t, base + '/app.html#/course/alpha')
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await page.wait('!!document.querySelector("#answer-form")')
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 1)
+  assert.equal(await page.evaluate('!!document.querySelector("#feedback-input")'), false)
+  assert.equal(await page.evaluate('document.querySelector(".learning-tools").open'), false)
+  await page.evaluate(
+    'document.querySelector(".answer-box").value="进行中的答案";document.querySelector(".answer-box").dispatchEvent(new Event("input"));document.querySelector(".learning-tools").open=true;document.querySelector("[data-open-feedback]").click()',
+  )
+  await page.wait('!!document.querySelector("#feedback-input")')
+  assert.equal(await page.evaluate('!!document.querySelector("#answer-form")'), false)
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 1)
+  await page.evaluate('document.querySelector(".cancel-feedback").click()')
+  await page.wait('document.querySelector(".answer-box")?.value === "进行中的答案"')
+  await page.evaluate(
+    'document.querySelector(".answer-box").value="补全后的答案";document.querySelector(".answer-box").dispatchEvent(new Event("input"))',
+  )
+  await page.wait(
+    '(async()=>{const r=await fetch("/api/courses/alpha").then(r=>r.json());return r.course.active.draft.text==="补全后的答案"})()',
+  )
+  await page.evaluate('document.querySelector("#refresh-study").click()')
+  await page.wait('document.querySelector(".answer-box")?.value === "补全后的答案"')
+  assert.equal(await page.evaluate('!!document.querySelector("#feedback-input")'), false)
+  fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/single-interaction-answer.png'), false)
+  assert.equal(app.system.usageLedger.read().length, 0)
+})
+
+it('导师中途澄清时只有回复入口，回复后才回到同一道题', { skip: !hasChrome }, async (t) => {
+  const { app, base } = await interactionApp(t, [
+    toolReply('ask_learner', { question: '你想用加法解决什么问题？', reason: '澄清目标用途' }),
+    toolReply('continue_activity', { reason: '用途已明确，继续原题' }),
+  ])
+  app.system.start('alpha', { requestId: 'clarify' })
+  await app.system.wait('alpha')
+  const page = await browser(t, base + '/app.html#/course/alpha')
+  await page.wait('!!document.querySelector("#feedback-input")')
+  assert.equal(await page.evaluate('!!document.querySelector("#answer-form")'), false)
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 1)
+  await page.evaluate(
+    'document.querySelector("#feedback-input").value="购物计算";document.querySelector("#feedback-input").dispatchEvent(new Event("input"));document.querySelector(".reply-card").requestSubmit()',
+  )
+  await page.wait(
+    '!!document.querySelector("#answer-form") && !document.querySelector(".submit-answer").disabled',
+  )
+  assert.equal(await page.evaluate('!!document.querySelector("#feedback-input")'), false)
+  assert.equal(app.system.service.view('alpha').active!.question!.id, 'q1')
+})
+
+it('只读讲解只有继续操作，本次结束只显示完成操作', { skip: !hasChrome }, async (t) => {
+  const explanation = activity('', '', { kind: 'explanation', questions: [] })
+  const { app, base } = await interactionApp(
+    t,
+    [
+      toolReply('finish_session', {
+        outcome: 'time_up',
+        reason: '今天的学习到这里',
+        nextLabel: '无提示练习',
+        nextIntent: 'assess',
+        nextDate: '2026-11-26',
+      }),
+    ],
+    explanation,
+  )
+  const page = await browser(t, base + '/app.html#/course/alpha')
+  await page.wait('!!document.querySelector(".completed-card button")')
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 0)
+  assert.match(
+    await page.evaluate<string>('document.querySelector(".completed-card button").textContent'),
+    /继续/,
+  )
+  await page.evaluate('document.querySelector(".completed-card button").click()')
+  await page.wait('document.querySelector(".completed-card button")?.textContent === "返回首页"')
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 0)
+  assert.equal(
+    await page.evaluate('document.querySelectorAll(".interaction-surface button.primary").length'),
+    1,
+  )
+  fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/single-interaction-complete.png'), false)
+  const calls = app.system.usageLedger.read().length
+  await page.evaluate('document.querySelector(".completed-card button").click()')
+  await page.wait('location.hash === "#/"')
+  assert.equal(app.system.usageLedger.read().length, calls)
+})
 import { browser, hasChrome } from './fixtures/browser.ts'
 import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
 import { ESCAPED_LESSON } from './fixtures/markdown.ts'
@@ -367,7 +477,7 @@ it('长对话底部提交后立即显示处理状态，滚动历史时仍能暂�
   )
   release()
   await page.evaluate(
-    'window.scrollTo(0,document.body.scrollHeight);[...document.querySelectorAll("#question-panel button")].find(button=>button.textContent.includes("恢复评分")).click()',
+    'window.scrollTo(0,document.body.scrollHeight);[...document.querySelectorAll("#interaction-panel button")].find(button=>button.textContent.includes("恢复评分")).click()',
   )
   await page.wait(
     'document.querySelector(".question-prompt")?.textContent.includes("5+6") && !document.querySelector(".submit-answer").disabled',
@@ -377,7 +487,7 @@ it('长对话底部提交后立即显示处理状态，滚动历史时仍能暂�
     1,
   )
   assert.equal(
-    await page.evaluate('document.querySelector(".send-message").getAttribute("aria-busy")'),
+    await page.evaluate('document.querySelector(".submit-answer").getAttribute("aria-busy")'),
     'false',
   )
 })

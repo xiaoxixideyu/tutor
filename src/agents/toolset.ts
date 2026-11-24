@@ -74,7 +74,11 @@ function tool(
   properties: Record<string, unknown>,
   required = Object.keys(properties),
 ): ApiToolDef {
-  return { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } }
+  return {
+    name,
+    description,
+    parameters: { type: 'object', properties, required, additionalProperties: false },
+  }
 }
 
 export const TUTOR_TOOLS: ApiToolDef[] = [
@@ -110,13 +114,25 @@ export const TUTOR_TOOLS: ApiToolDef[] = [
       reason: string,
     },
   ),
-  tool('inspect_learning_state', '读取精简的目标、证据、画像与活动。初始消息已经包含，不要重复读取。', {}, []),
-  tool('update_curriculum', '在原目标内增加或细化近期技能。需可观察标准，不删除已有证据、不降低已定义要求。', {
-    skills: { type: 'array', items: skill, minItems: 1, maxItems: 24 },
-    reason: string,
-  }),
+  tool(
+    'inspect_learning_state',
+    '读取精简的目标、证据、画像与活动。初始消息已经包含，不要重复读取。',
+    {},
+    [],
+  ),
+  tool(
+    'update_curriculum',
+    '在原目标内增加或细化近期技能。需可观察标准，不删除已有证据、不降低已定义要求。',
+    {
+      skills: { type: 'array', items: skill, minItems: 1, maxItems: 24 },
+      reason: string,
+    },
+  ),
   tool('present_activity', '展示已核对的教学活动并交回学员。用于讲解、诊断、练习、独立测评、回忆和迁移。', {
-    kind: { type: 'string', enum: ['explanation', 'diagnostic', 'practice', 'assessment', 'recall', 'transfer'] },
+    kind: {
+      type: 'string',
+      enum: ['explanation', 'diagnostic', 'practice', 'assessment', 'recall', 'transfer'],
+    },
     title: string,
     body: string,
     skillIds: stringArray,
@@ -132,10 +148,17 @@ export const TUTOR_TOOLS: ApiToolDef[] = [
     hint: string,
     reason: string,
   }),
-  tool('resume_activity', '恢复已经暂停的活动和未完成题目，交回学员。', { activityId: string, reason: string }),
-  tool('continue_activity', '依据最新作答，继续已准备活动的下一题，交回学员。需要换策略时可改用其他教学能力。', {
+  tool('resume_activity', '恢复已经暂停的活动和未完成题目，交回学员。', {
+    activityId: string,
     reason: string,
   }),
+  tool(
+    'continue_activity',
+    '依据最新作答，继续已准备活动的下一题，交回学员。需要换策略时可改用其他教学能力。',
+    {
+      reason: string,
+    },
+  ),
   tool('record_hypothesis', '依据真实作答或反馈记录待验证的能力缺口、误解或偏好假设。', {
     description: string,
     evidenceIds: stringArray,
@@ -181,9 +204,13 @@ export const TUTOR_TOOLS: ApiToolDef[] = [
     explanation: string,
     reason: string,
   }),
-  tool('verify_goal_coverage', '独立核对当前技能与验收标准是否覆盖完整用户目标。近期局部安排不能冒充课程完成。', {
-    reason: string,
-  }),
+  tool(
+    'verify_goal_coverage',
+    '独立核对当前技能与验收标准是否覆盖完整用户目标。近期局部安排不能冒充课程完成。',
+    {
+      reason: string,
+    },
+  ),
   tool(
     'fetch_source',
     '读取并保存真实资料正文。只允许公共 HTTP/HTTPS 来源。',
@@ -194,13 +221,25 @@ export const TUTOR_TOOLS: ApiToolDef[] = [
     query: string,
     reason: string,
   }),
-  tool('repair_content', '按独立审查意见实际修复失败任务，再核对新版本。', { taskId: string, reason: string }),
-  tool('finish_session', '结束或暂停本次学习，给出明确的下次行动。goal_met 必须已验证完整目标。', {
-    outcome: { type: 'string', enum: ['session_complete', 'time_up', 'paused', 'goal_met'] },
+  tool('repair_content', '按独立审查意见实际修复失败任务，再核对新版本。', {
+    taskId: string,
     reason: string,
-    nextLabel: string,
-    nextIntent: { type: 'string', enum: ['learn', 'review', 'practice', 'assess', 'exam', 'research', 'repair'] },
   }),
+  tool(
+    'finish_session',
+    '结束或暂停本次学习，给出明确的下次行动。goal_met 必须已验证完整目标。',
+    {
+      outcome: { type: 'string', enum: ['session_complete', 'time_up', 'paused', 'goal_met'] },
+      reason: string,
+      nextLabel: string,
+      nextIntent: {
+        type: 'string',
+        enum: ['learn', 'review', 'practice', 'assess', 'exam', 'research', 'repair'],
+      },
+      nextDate: string,
+    },
+    ['outcome', 'reason', 'nextLabel', 'nextIntent'],
+  ),
 ]
 
 export class TutorToolset implements RuntimeToolset {
@@ -235,7 +274,12 @@ export class TutorToolset implements RuntimeToolset {
     return TUTOR_TOOLS
   }
 
-  async call(name: string, argumentsText: string, signal: AbortSignal, callId: string): Promise<RuntimeToolResult> {
+  async call(
+    name: string,
+    argumentsText: string,
+    signal: AbortSignal,
+    callId: string,
+  ): Promise<RuntimeToolResult> {
     if (this.yielded)
       return {
         text: JSON.stringify({ error: 'TURN_YIELDED', message: '本回合已交回用户' }),
@@ -258,7 +302,12 @@ export class TutorToolset implements RuntimeToolset {
       }
       const raw = object(parsed)
       const state = this.service.repository.read(this.courseId)
-      domainAssert(state.revision === this.revision, 'STALE_REVISION', '学习状态已变化，请重新观察当前状态', 409)
+      domainAssert(
+        state.revision === this.revision,
+        'STALE_REVISION',
+        '学习状态已变化，请重新观察当前状态',
+        409,
+      )
       const requestId = this.turnId + ':' + (callId || randomUUID())
       if (name !== 'inspect_learning_state') {
         const reason = text(raw.reason ?? raw.rationale, '教学决策依据', 1600)
@@ -408,7 +457,11 @@ export class TutorToolset implements RuntimeToolset {
             const hypothesis = next.hypotheses.find((item) => item.id === raw.hypothesisId)
             domainAssert(hypothesis, 'UNKNOWN_HYPOTHESIS', '观察记录不存在')
             const evidenceIds = strings(raw.evidenceIds, '验证证据', 30)
-            domainAssert(['confirmed', 'resolved'].includes(raw.status as string), 'INVALID_INPUT', '观察状态不合法')
+            domainAssert(
+              ['confirmed', 'resolved'].includes(raw.status as string),
+              'INVALID_INPUT',
+              '观察状态不合法',
+            )
             domainAssert(
               evidenceIds.length > 0 &&
                 evidenceIds.every((id) => next.evidence.some((item) => item.id === id)) &&
@@ -436,7 +489,7 @@ export class TutorToolset implements RuntimeToolset {
         )
         await this.capabilities.validation.activity(state, current.content)
         signal.throwIfAborted()
-        this.markYielded(requestId)
+        this.markYielded(requestId, true)
         this.yielded = true
         return { activityId: current.record.id, index: current.record.index }
       }
@@ -455,7 +508,10 @@ export class TutorToolset implements RuntimeToolset {
           background: raw.background,
           preferences: raw.preferences,
           original: cited.map((id) =>
-            this.service.repository.asset(this.courseId, state.evidence.find((item) => item.id === id)!.asset),
+            this.service.repository.asset(
+              this.courseId,
+              state.evidence.find((item) => item.id === id)!.asset,
+            ),
           ),
         })
         signal.throwIfAborted()
@@ -494,7 +550,9 @@ export class TutorToolset implements RuntimeToolset {
             const day = date(raw.date, '复习日期')
             domainAssert(day, 'INVALID_INPUT', '需提供复习日期')
             next.reviewPlan = [
-              ...(next.reviewPlan ?? []).filter((item) => !item.skillIds.some((skill) => skillIds.includes(skill))),
+              ...(next.reviewPlan ?? []).filter(
+                (item) => !item.skillIds.some((skill) => skillIds.includes(skill)),
+              ),
               { skillIds, date: day, reason: text(raw.reason, '复习依据', 1200) },
             ]
             return { planned: skillIds, date: day }
@@ -535,7 +593,8 @@ export class TutorToolset implements RuntimeToolset {
       case 'repair_content': {
         const repaired = await this.capabilities.repair(state, text(raw.taskId, '失败任务标识', 64), signal)
         if (repaired.kind === 'curriculum')
-          return this.service.updateCurriculum(this.courseId, repaired.content, requestId, this.revision).result
+          return this.service.updateCurriculum(this.courseId, repaired.content, requestId, this.revision)
+            .result
         const result = this.service.presentActivity(
           this.courseId,
           repaired.content as import('../domain/model.ts').ActivityContent,
@@ -556,7 +615,9 @@ export class TutorToolset implements RuntimeToolset {
         if (outcome === 'goal_met')
           domainAssert(goalSupported(state), 'INSUFFICIENT_EVIDENCE', '尚未通过完整目标覆盖和能力证据检验')
         domainAssert(
-          ['learn', 'review', 'practice', 'assess', 'exam', 'research', 'repair'].includes(raw.nextIntent as string),
+          ['learn', 'review', 'practice', 'assess', 'exam', 'research', 'repair'].includes(
+            raw.nextIntent as string,
+          ),
           'INVALID_INPUT',
           '下次行动类型不合法',
         )
@@ -567,16 +628,18 @@ export class TutorToolset implements RuntimeToolset {
             const active = this.service.activity(next)
             if (active?.record.status === 'active') active.record.status = 'paused'
             if (next.turns[this.turnId]) next.turns[this.turnId].yielded = true
+            next.learnerTurn = { kind: 'complete', at: new Date().toISOString(), day: this.service.today() }
             next.nextSuggestion = {
               label: text(raw.nextLabel, '下次行动', 300),
               reason: text(raw.reason, '安排依据', 1600),
               intent: raw.nextIntent as LearningIntent,
               basedOnRevision: next.revision + 1,
-              date: new Date().toISOString().slice(0, 10),
+              date: date(raw.nextDate, '下次学习日期') ?? this.service.today(),
             }
             addEvent(next, 'tutor_message', {
               asset: this.service.repository.putAsset(this.courseId, {
-                text: text(raw.reason, '本次结果', 1600) + '\n下一步：' + text(raw.nextLabel, '下次行动', 300),
+                text:
+                  text(raw.reason, '本次结果', 1600) + '\n下一步：' + text(raw.nextLabel, '下次行动', 300),
               }),
               outcome,
             })
@@ -592,12 +655,14 @@ export class TutorToolset implements RuntimeToolset {
     }
   }
 
-  private markYielded(requestId: string): void {
+  private markYielded(requestId: string, activity = false): void {
     const result = this.service.repository.transact(
       this.courseId,
       { requestId: 'yield:' + requestId, input: { turnId: this.turnId } },
       (state) => {
         if (state.turns[this.turnId]) state.turns[this.turnId].yielded = true
+        if (activity)
+          state.learnerTurn = { kind: 'activity', at: new Date().toISOString(), day: this.service.today() }
         return { yielded: true }
       },
     )

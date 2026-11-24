@@ -476,6 +476,26 @@ export class TutorSystem {
         .reverse()
         .find(([, turn]) => turn.status !== 'completed')
       const pausedActivity = this.service.activity(state)
+      if (
+        state.tutorStatus === 'paused' &&
+        state.learnerTurn?.kind === 'reply' &&
+        (!unfinished || unfinished[1].yielded)
+      ) {
+        this.repository.transact(
+          courseId,
+          { requestId: 'resume-reply:' + requestId, input: { requestId } },
+          (next) => {
+            next.tutorStatus = 'idle'
+            const active = this.service.activity(next)
+            if (active?.record.status === 'paused') active.record.status = 'active'
+            delete next.tutorError
+            addEvent(next, 'tutor_ready', { paused: false, restoredReply: true })
+            return { resumed: true }
+          },
+        )
+        this.notify(courseId)
+        return { job: null, completed: true, resumed: true }
+      }
       if (pausedActivity?.record.status === 'paused' && (!unfinished || unfinished[1].yielded)) {
         this.service.beginTurn(courseId, {
           requestId,
