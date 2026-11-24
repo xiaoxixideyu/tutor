@@ -48,6 +48,9 @@ it('新 API 从空白目标开始，创建、agent 教学、评分和回放形�
   await app.system.wait('alpha')
   const first = (await request('/api/courses/alpha')).value
   assert.equal(first.course.active.question.id, 'q1')
+  assert.equal(first.course.interaction.kind, 'answer')
+  assert.deepEqual((await request('/api/courses')).value.courses[0].interaction, { kind: 'answer' })
+  assert.deepEqual((await request('/api/today')).value.courses[0].interaction, { kind: 'answer' })
   assert.equal('answer' in first.course.active.question, false)
   assert.ok(first.events.some((event: any) => event.type === 'activity_presented' && event.data.body))
   const input = {
@@ -61,6 +64,8 @@ it('新 API 从空白目标开始，创建、agent 教学、评分和回放形�
   assert.equal((await request('/api/courses/alpha/answer', input)).status, 202)
   await app.system.wait('alpha')
   const complete = (await request('/api/courses/alpha')).value
+  assert.equal(complete.course.interaction.kind, 'reply')
+  assert.deepEqual((await request('/api/courses')).value.courses[0].interaction, { kind: 'reply' })
   assert.equal(complete.course.evidence.filter((item: any) => item.kind === 'answer').length, 1)
   assert.equal(complete.course.goalSupported, false)
   assert.equal((await request('/api/courses/alpha/answer', input)).value.duplicate, true)

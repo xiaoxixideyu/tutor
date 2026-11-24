@@ -20,6 +20,8 @@
     current = null,
     source = null,
     routeVersion = 0,
+    navVersion = 0,
+    navMarkup = '',
     pendingStart = null,
     settings = null,
     busyStart = 0,
@@ -114,34 +116,79 @@
       rail.classList.remove('open')
     }
   })
+  function coursePresentation(course) {
+    const unavailable = { status: '状态待检查', action: '查看详情', tone: 'paused' }
+    if (course.error) return unavailable
+    const states = {
+      waiting: { status: '正在处理', action: '查看进度', tone: '' },
+      answer: { status: '等待作答', action: '去作答', tone: '' },
+      reply: { status: '等待回复', action: '去回复', tone: '' },
+      resume: {
+        status: course.tutorStatus === 'failed' ? '需要恢复' : '已暂停',
+        action: '查看断点',
+        tone: 'paused',
+      },
+      proposal: { status: '等待确认', action: '确认目标', tone: '' },
+      complete: {
+        status: course.goalSupported ? '目标已验证' : '本次已结束',
+        action: '查看本次',
+        tone: 'finished',
+      },
+      continue: { status: '可以开始', action: '进入学习', tone: '' },
+    }
+    return states[course.interaction?.kind] ?? unavailable
+  }
+  function renderCourseNav() {
+    const markup = courses.length
+      ? courses
+          .map(
+            (course) =>
+              '<a href="' +
+              courseHref(course.id) +
+              '" class="' +
+              (current?.id === course.id ? 'active' : '') +
+              '"><strong>' +
+              esc(course.title) +
+              '</strong><small>' +
+              esc(coursePresentation(course).status) +
+              '</small></a>',
+          )
+          .join('')
+      : '<small class="rail-caption">从一个真实目标开始</small>'
+    if (markup !== navMarkup) {
+      nav.innerHTML = markup
+      navMarkup = markup
+    }
+  }
+  function syncCourseCards(list) {
+    const byId = new Map(list.map((course) => [course.id, course]))
+    canvas.querySelectorAll('.course-card[data-course-id]').forEach((card) => {
+      const course = byId.get(card.dataset.courseId)
+      if (!course) return
+      const presentation = coursePresentation(course)
+      const badge = card.querySelector('.badge')
+      badge.textContent = presentation.status
+      badge.className = 'badge ' + presentation.tone
+      card.querySelector('.course-entry').textContent = presentation.action + ' →'
+      const supported = course.supported ?? 0,
+        total = course.total ?? 0
+      card.querySelector('.course-progress i').style.width =
+        (total ? Math.round((supported / total) * 100) : 0) + '%'
+      card.querySelector('.course-evidence').textContent = supported + ' / ' + total + ' 项当前目标已独立验证'
+    })
+  }
   async function refreshNav() {
+    const version = ++navVersion
     try {
       const [result, config] = await Promise.all([api('/api/courses'), api('/api/model-config')])
+      if (version !== navVersion) return
       courses = result.courses
       configured = config.config.configured
       document.getElementById('connection-state').textContent = configured ? '模型已配置' : '模型尚未配置'
-      nav.innerHTML = courses.length
-        ? courses
-            .map(
-              (course) =>
-                '<a href="' +
-                courseHref(course.id) +
-                '" class="' +
-                (current?.id === course.id ? 'active' : '') +
-                '"><strong>' +
-                esc(course.title) +
-                '</strong><small>' +
-                esc(
-                  course.tutorStatus === 'working'
-                    ? '导师准备中'
-                    : (course.active?.title ??
-                        (course.total ? '已验证 ' + course.supported + ' 项目标' : '目标已记下')),
-                ) +
-                '</small></a>',
-            )
-            .join('')
-        : '<small class="rail-caption">从一个真实目标开始</small>'
+      renderCourseNav()
+      syncCourseCards(courses)
     } catch {
+      if (version !== navVersion) return
       document.getElementById('connection-state').textContent = '连接暂时中断'
     }
   }
@@ -155,34 +202,31 @@
           const supported = course.supported ?? 0,
             total = course.total ?? 0,
             pct = total ? Math.round((supported / total) * 100) : 0
+          const presentation = coursePresentation(course)
           return (
-            '<a class="course-card" href="' +
+            '<a class="course-card" data-course-id="' +
+            esc(course.id) +
+            '" href="' +
             courseHref(course.id) +
             '"><div class="course-top"><span>' +
             esc(course.deadline ? '目标日期 ' + course.deadline : '按你的节奏') +
             '</span><span class="badge ' +
-            (course.active?.status === 'paused' ? 'paused' : '') +
+            presentation.tone +
             '">' +
-            esc(
-              course.goalSupported
-                ? '目标已验证'
-                : course.tutorStatus === 'working'
-                  ? '导师准备中'
-                  : course.active?.status === 'paused'
-                    ? '可以继续'
-                    : '正在学习',
-            ) +
+            esc(presentation.status) +
             '</span></div><h3>' +
             esc(course.title) +
             '</h3><p>' +
             esc(course.goal ?? course.error ?? '') +
             '</p><div class="course-progress"><i style="width:' +
             pct +
-            '%"></i></div><div class="course-bottom"><span>' +
+            '%"></i></div><div class="course-bottom"><span class="course-evidence">' +
             supported +
             ' / ' +
             total +
-            ' 项当前目标已独立验证</span><span>继续 →</span></div></a>'
+            ' 项当前目标已独立验证</span><span class="course-entry">' +
+            esc(presentation.action) +
+            ' →</span></div></a>'
           )
         })
         .join('') +
@@ -196,10 +240,13 @@
   }
   async function today(version) {
     title.textContent = '今天'
+    const summaryVersion = ++navVersion
     const result = await api('/api/today')
     if (version !== routeVersion) return
-    courses = result.courses
-    configured = result.configured
+    if (summaryVersion === navVersion) {
+      courses = result.courses
+      configured = result.configured
+    }
     const date = new Date(result.today + 'T12:00:00').toLocaleDateString('zh-CN', {
       month: 'long',
       day: 'numeric',
@@ -225,6 +272,7 @@
         : '') +
       '<div class="section-head"><h2>我的学习目标</h2><button data-new>＋ 新目标</button></div>' +
       cards(courses)
+    renderCourseNav()
     bindNew()
     if (!courses.length) return
     let selected = recommendation
@@ -273,14 +321,16 @@
   }
   async function courseList(version) {
     title.textContent = '我的课程'
+    const summaryVersion = ++navVersion
     const result = await api('/api/courses')
     if (version !== routeVersion) return
-    courses = result.courses
+    if (summaryVersion === navVersion) courses = result.courses
     canvas.innerHTML =
       '<div class="hero"><div class="eyebrow">MY LEARNING</div><h1>每个目标，都有自己的路径。</h1><p>课程会随你取得的学习证据逐步调整。</p></div><div class="section-head"><h2>' +
       courses.length +
       ' 个学习目标</h2><button data-new>＋ 新目标</button></div>' +
       cards(courses)
+    renderCourseNav()
     bindNew()
   }
   function createCourse() {
@@ -1246,8 +1296,12 @@
     }
   }
   const timer = setInterval(status, 1000)
+  const summaryTimer = setInterval(() => {
+    if (!document.hidden && !current && canvas.querySelector('.course-card')) refreshNav()
+  }, 5000)
   document.addEventListener('visibilitychange', () => {
     if (current) toggleInteraction(isBusy())
+    else if (!document.hidden && canvas.querySelector('.course-card')) refreshNav()
   })
   window.addEventListener('scroll', placeStatus, { passive: true })
   window.addEventListener('resize', placeStatus)
@@ -1255,6 +1309,7 @@
   window.addEventListener('beforeunload', () => {
     source?.close()
     clearInterval(timer)
+    clearInterval(summaryTimer)
   })
   const ready = refreshNav().then(() => route())
   window.TutorApp = { ready, api, navigate, refresh: route }

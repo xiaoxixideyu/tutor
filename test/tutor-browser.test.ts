@@ -3,8 +3,12 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
+import { TutorSystem } from '../src/application/tutor-system.ts'
 import { createTutorServer } from '../src/server/http.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply, ROOT } from './fixtures/tutor.ts'
+import { browser, hasChrome } from './fixtures/browser.ts'
+import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
+import { ESCAPED_LESSON } from './fixtures/markdown.ts'
 
 function longHistory(system: ReturnType<typeof systemFixture>['system']) {
   for (let index = 0; index < 18; index++)
@@ -23,7 +27,8 @@ function longHistory(system: ReturnType<typeof systemFixture>['system']) {
 
 async function interactionApp(t: TestContext, actions: ReturnType<typeof toolReply>[], content = activity()) {
   const fixture = systemFixture(t, scriptedTransport(actions))
-  const app = createTutorServer({ ...fixture.options, today: () => '2026-11-24' })
+  const options = { ...fixture.options, today: () => '2026-11-24' }
+  const app = createTutorServer(options)
   app.system.service.create({ id: 'alpha', goal: '掌握整数加法' })
   app.system.service.updateCurriculum('alpha', { skills: [SKILL], reason: '近期目标' }, 'seed', 0)
   app.system.service.presentActivity('alpha', content, 'present', 1, 'seed')
@@ -33,7 +38,7 @@ async function interactionApp(t: TestContext, actions: ReturnType<typeof toolRep
     app.server.closeAllConnections()
     await app.close()
   })
-  return { app, base: 'http://127.0.0.1:' + (app.server.address() as { port: number }).port }
+  return { app, options, base: 'http://127.0.0.1:' + (app.server.address() as { port: number }).port }
 }
 
 it('有题时仅保留一个作答区，反馈作为次级操作且返回后草稿不丢', { skip: !hasChrome }, async (t) => {
@@ -130,9 +135,109 @@ it('只读讲解只有继续操作，本次结束只显示完成操作', { skip:
   await page.wait('location.hash === "#/"')
   assert.equal(app.system.usageLedger.read().length, calls)
 })
-import { browser, hasChrome } from './fixtures/browser.ts'
-import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
-import { ESCAPED_LESSON } from './fixtures/markdown.ts'
+
+it(
+  '本次结束而目标未验证时，首页、列表和详情显示同一状态，查看不开始新学习',
+  { skip: !hasChrome },
+  async (t) => {
+    const { app, base } = await interactionApp(t, [
+      toolReply('finish_session', {
+        outcome: 'time_up',
+        reason: '今天的时间已用完',
+        nextLabel: '无提示练习',
+        nextIntent: 'assess',
+        nextDate: '2026-11-26',
+      }),
+    ])
+    app.system.start('alpha', { requestId: 'finish', message: '今天先到这里' })
+    await app.system.wait('alpha')
+    assert.equal(app.system.service.view('alpha').goalSupported, false)
+    const before = app.system.repository.read('alpha')
+    const used = app.system.usageLedger.read().length
+    const page = await browser(t, base + '/app.html')
+    await page.command('Emulation.setDeviceMetricsOverride', {
+      width: 1280,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await page.wait('document.querySelector(".course-card .badge")?.textContent === "本次已结束"')
+    assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '查看本次 →')
+    assert.equal(await page.evaluate('document.querySelector("#course-nav small").textContent'), '本次已结束')
+    assert.match(
+      await page.evaluate<string>('document.querySelector(".course-evidence").textContent'),
+      /0 \/ 1/,
+    )
+    fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
+    await page.screenshot(path.join(ROOT, 'data/evals/ui/course-summary-complete.png'))
+    await page.evaluate('document.querySelector("[data-nav=courses]").click()')
+    await page.wait(
+      'document.getElementById("page-title").textContent === "我的课程" && !!document.querySelector(".course-card")',
+    )
+    assert.equal(
+      await page.evaluate('document.querySelector(".course-card .badge").textContent'),
+      '本次已结束',
+    )
+    assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '查看本次 →')
+    await page.evaluate('document.querySelector(".course-card").click()')
+    await page.wait('document.querySelector(".completed-card button")?.textContent === "返回首页"')
+    assert.equal(
+      await page.evaluate('document.querySelector(".completed-card h3").textContent'),
+      '本次学习已结束',
+    )
+    assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 0)
+    await page.screenshot(path.join(ROOT, 'data/evals/ui/course-summary-detail-complete.png'))
+    await page.evaluate('document.querySelector(".completed-card button").click()')
+    await page.wait(
+      'location.hash === "#/" && document.querySelector(".course-card .badge")?.textContent === "本次已结束"',
+    )
+    assert.equal(app.system.usageLedger.read().length, used)
+    assert.deepEqual(app.system.repository.read('alpha'), before)
+  },
+)
+
+it(
+  '已打开的首页自动跟随其他入口从作答到回复再到结束，摘要刷新不调用模型',
+  { skip: !hasChrome },
+  async (t) => {
+    const { app, base, options } = await interactionApp(t, [
+      toolReply('ask_learner', { question: '你想在哪个场景应用加法？', reason: '澄清用途' }),
+      toolReply('finish_session', {
+        outcome: 'time_up',
+        reason: '本次到这里，下次独立检验',
+        nextLabel: '购物计算',
+        nextIntent: 'assess',
+        nextDate: '2026-11-26',
+      }),
+    ])
+    const peer = new TutorSystem(options)
+    t.after(() => peer.close())
+    const page = await browser(t, base + '/app.html')
+    await page.wait('document.querySelector(".course-card .badge")?.textContent === "等待作答"')
+    assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '去作答 →')
+    peer.start('alpha', { requestId: 'peer-clarify', message: '请先了解我的用途' })
+    await peer.wait('alpha')
+    assert.equal(peer.service.view('alpha').interaction.kind, 'reply')
+    const reply = peer.repository.read('alpha')
+    const used = peer.usageLedger.read().length
+    await page.wait('document.querySelector(".course-card .badge")?.textContent === "等待回复"', 9000)
+    assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '去回复 →')
+    assert.equal(await page.evaluate('document.querySelector("#course-nav small").textContent'), '等待回复')
+    assert.equal(peer.usageLedger.read().length, used)
+    assert.deepEqual(peer.repository.read('alpha'), reply)
+    peer.start('alpha', { requestId: 'peer-finish', message: '今天先结束，下次练购物计算' })
+    await peer.wait('alpha')
+    assert.equal(peer.service.view('alpha').interaction.kind, 'complete')
+    const ended = peer.repository.read('alpha')
+    const after = peer.usageLedger.read().length
+    await page.wait('document.querySelector(".course-card .badge")?.textContent === "本次已结束"', 9000)
+    assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '查看本次 →')
+    assert.equal(await page.evaluate('document.querySelector("#course-nav small").textContent'), '本次已结束')
+    assert.equal(peer.usageLedger.read().length, after)
+    assert.deepEqual(peer.repository.read('alpha'), ended)
+    assert.equal(app.system.activeJobs().length, 0)
+  },
+)
 
 it('网页能创建目标、接受 agent 活动、选择答案并显示真实反馈', { skip: !hasChrome }, async (t) => {
   const content = activity()

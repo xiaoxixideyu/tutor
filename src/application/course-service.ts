@@ -53,7 +53,7 @@ export class CourseService {
     return this.day()
   }
 
-  interaction(state: CourseState): LearnerInteraction {
+  interaction(state: CourseState, includePrompt = true): LearnerInteraction {
     if (state.tutorStatus === 'working') return { kind: 'waiting' }
     if (state.pendingAnswer)
       return { kind: 'resume', label: '恢复评分', message: '作答已保存，恢复后继续评阅同一份作答。' }
@@ -110,7 +110,7 @@ export class CourseService {
     if (turn?.kind === 'reply')
       return {
         kind: 'reply',
-        prompt: this.repository.asset<{ text: string }>(state.id, turn.promptAsset).text,
+        prompt: includePrompt ? this.repository.asset<{ text: string }>(state.id, turn.promptAsset).text : '',
         key: turn.turnId,
       }
     const active = this.activity(state)
@@ -275,6 +275,7 @@ export class CourseService {
           total: state.skills.filter((skill) => skill.required).length,
           goalSupported: goalSupported(state),
           tutorStatus: state.tutorStatus,
+          interaction: { kind: this.interaction(state, false).kind },
           nextSuggestion: state.nextSuggestion ?? null,
           active: active
             ? { id: active.record.id, title: active.content.title, status: active.record.status }
