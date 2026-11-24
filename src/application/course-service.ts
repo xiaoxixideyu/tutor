@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { localDate } from '../core/dates.ts'
-import { competencyEligibility, competencyStatus, goalSupported, updateMemory } from '../domain/evidence.ts'
+import {
+  competencyEligibility,
+  competencyStatus,
+  goalSupported,
+  learningProgress,
+  updateMemory,
+} from '../domain/evidence.ts'
 import {
   digest,
   id,
@@ -166,6 +172,7 @@ export class CourseService {
   view(courseId: string) {
     const state = this.repository.read(courseId)
     const active = this.activity(state)
+    const progress = learningProgress(state)
     const skills = state.skills.map((skill) => ({
       ...skill,
       status: competencyStatus(state, skill),
@@ -184,8 +191,9 @@ export class CourseService {
       goal: state.goal,
       learner: state.learner,
       skills,
-      supported: skills.filter((skill) => skill.required && skill.status === 'supported').length,
-      total: skills.filter((skill) => skill.required).length,
+      supported: progress.supported,
+      total: progress.total,
+      progress,
       goalSupported: goalSupported(state),
       tutorStatus: state.tutorStatus,
       tutorError: state.tutorError ?? null,
@@ -261,6 +269,7 @@ export class CourseService {
       try {
         const state = this.repository.read(courseId)
         const active = this.activity(state)
+        const progress = learningProgress(state)
         return {
           id: state.id,
           title: state.title,
@@ -269,10 +278,9 @@ export class CourseService {
           deadline: state.goal.deadline,
           priority: state.goal.priority,
           updatedAt: state.updatedAt,
-          supported: state.skills.filter(
-            (skill) => skill.required && competencyStatus(state, skill) === 'supported',
-          ).length,
-          total: state.skills.filter((skill) => skill.required).length,
+          supported: progress.supported,
+          total: progress.total,
+          progress,
           goalSupported: goalSupported(state),
           tutorStatus: state.tutorStatus,
           interaction: { kind: this.interaction(state, false).kind },

@@ -14,7 +14,7 @@
     recall: '回忆巩固',
     transfer: '迁移应用',
   }
-  const statuses = { supported: '独立证据已支持', developing: '正在建立能力', needs_evidence: '还需独立验证' }
+  const statuses = { supported: '已独立达标', developing: '正在建立能力', needs_evidence: '还需验证' }
   let courses = [],
     configured = false,
     current = null,
@@ -138,6 +138,41 @@
     }
     return states[course.interaction?.kind] ?? unavailable
   }
+  function progressMarkup(course) {
+    const progress = course.progress
+    if (!progress) return '<p class="progress-pending">学习进展正在读取…</p>'
+    const states = []
+    if (progress.developing)
+      states.push(
+        '<span class="progress-developing"><strong>' +
+          progress.developing +
+          '</strong> 项能力正在提升</span>',
+      )
+    if (progress.needsEvidence)
+      states.push(
+        '<span class="progress-pending"><strong>' + progress.needsEvidence + '</strong> 项能力待验证</span>',
+      )
+    if (progress.total)
+      states.push(
+        '<span class="progress-supported">已独立达标 <strong>' + progress.supported + '</strong> 项</span>',
+      )
+    else states.push('<span class="progress-pending">导师会逐步确定学习重点</span>')
+    return (
+      '<div class="learning-progress" aria-label="学习进展">' +
+      (progress.completedAnswers
+        ? '<p class="learning-effort">累计完成 <strong>' + progress.completedAnswers + '</strong> 次作答</p>'
+        : '') +
+      '<div class="learning-states">' +
+      states.join('') +
+      '</div></div>'
+    )
+  }
+  function assessmentText(value) {
+    return String(value).replace(
+      /\b(developing|needs_evidence|supported)\b/g,
+      (status) => '“' + statuses[status] + '”',
+    )
+  }
   function renderCourseNav() {
     const markup = courses.length
       ? courses
@@ -167,14 +202,13 @@
       if (!course) return
       const presentation = coursePresentation(course)
       const badge = card.querySelector('.badge')
-      badge.textContent = presentation.status
-      badge.className = 'badge ' + presentation.tone
-      card.querySelector('.course-entry').textContent = presentation.action + ' →'
-      const supported = course.supported ?? 0,
-        total = course.total ?? 0
-      card.querySelector('.course-progress i').style.width =
-        (total ? Math.round((supported / total) * 100) : 0) + '%'
-      card.querySelector('.course-evidence').textContent = supported + ' / ' + total + ' 项当前目标已独立验证'
+      if (badge.textContent !== presentation.status) badge.textContent = presentation.status
+      if (badge.className !== 'badge ' + presentation.tone) badge.className = 'badge ' + presentation.tone
+      const entry = card.querySelector('.course-entry')
+      if (entry.textContent !== presentation.action + ' →') entry.textContent = presentation.action + ' →'
+      const progress = card.querySelector('.course-learning'),
+        markup = progressMarkup(course)
+      if (progress.innerHTML !== markup) progress.innerHTML = markup
     })
   }
   async function refreshNav() {
@@ -199,9 +233,6 @@
       '<div class="course-grid">' +
       list
         .map((course) => {
-          const supported = course.supported ?? 0,
-            total = course.total ?? 0,
-            pct = total ? Math.round((supported / total) * 100) : 0
           const presentation = coursePresentation(course)
           return (
             '<a class="course-card" data-course-id="' +
@@ -218,13 +249,9 @@
             esc(course.title) +
             '</h3><p>' +
             esc(course.goal ?? course.error ?? '') +
-            '</p><div class="course-progress"><i style="width:' +
-            pct +
-            '%"></i></div><div class="course-bottom"><span class="course-evidence">' +
-            supported +
-            ' / ' +
-            total +
-            ' 项当前目标已独立验证</span><span class="course-entry">' +
+            '</p><div class="course-learning">' +
+            progressMarkup(course) +
+            '</div><div class="course-bottom"><span class="course-entry">' +
             esc(presentation.action) +
             ' →</span></div></a>'
           )
@@ -449,6 +476,11 @@
   }
   function renderProfile() {
     if (!current || !profilePanel) return
+    const expanded = new Set(
+      [...profilePanel.querySelectorAll('details[data-skill-id][open]')].map(
+        (details) => details.dataset.skillId,
+      ),
+    )
     const groups = new Map()
     for (const skill of current.skills.filter((skill) => skill.required)) {
       if (!groups.has(skill.unit)) groups.set(skill.unit, [])
@@ -461,12 +493,11 @@
       current.goal.dailyMinutes +
       ' 分钟' +
       (current.goal.deadline ? ' · ' + esc(current.goal.deadline) : '') +
-      '</p><span class="badge">' +
-      (current.goalSupported
-        ? '完整目标已验证'
-        : current.supported + ' / ' + current.total + ' 项当前目标已验证') +
-      '</span></div>' +
-      '<div class="side-card"><h3>能力证据</h3>' +
+      '</p>' +
+      progressMarkup(current) +
+      (current.goalSupported ? '<p class="goal-supported">学习目标已通过完整验证</p>' : '') +
+      '</div>' +
+      '<div class="side-card"><h3>能力进展</h3><p class="progress-explanation">作答记录会保留每次练习；独立达标需要在无提示的新任务中满足验证要求。</p>' +
       (current.skills.filter((skill) => skill.required).length
         ? [...groups.entries()]
             .map(
@@ -481,11 +512,26 @@
                       skill.status +
                       '"></span><span>' +
                       esc(skill.title) +
-                      '</span></div><small>' +
+                      '</span></div><small class="skill-status">' +
                       esc(statuses[skill.status]) +
-                      ' · ' +
+                      '</small><small class="skill-evidence-count">已完成 ' +
                       skill.evidenceCount +
-                      ' 条作答记录</small><details><summary>查看验证要求</summary><ul>' +
+                      ' 次相关作答</small><details data-skill-id="' +
+                      esc(skill.id) +
+                      '"' +
+                      (expanded.has(skill.id) ? ' open' : '') +
+                      '><summary>查看进展与验证要求</summary><p class="skill-observation"><strong>导师评估：</strong>' +
+                      esc(
+                        assessmentText(
+                          skill.judgment?.reason ??
+                            (skill.evidenceCount
+                              ? '已有相关作答记录，导师会结合后续表现评估是否达标。'
+                              : '还未完成相关作答，导师会结合目标安排练习。'),
+                        ),
+                      ) +
+                      '</p><p>独立验证需要至少 ' +
+                      skill.evidencePolicy.independentSamples +
+                      ' 个不同任务中的成功表现。</p><ul>' +
                       skill.criteria
                         .map(
                           (criterion) =>
@@ -496,7 +542,13 @@
                         )
                         .join('') +
                       '</ul>' +
-                      skill.eligibility.reasons.map((reason) => '<p>' + esc(reason) + '</p>').join('') +
+                      (skill.status === 'supported'
+                        ? '<p class="skill-verified">已满足当前验证要求。</p>'
+                        : skill.eligibility.eligible
+                          ? '<p>已有满足验证要求的独立作答，等待导师确认达标。</p>'
+                          : skill.eligibility.reasons
+                              .map((reason) => '<p>' + esc(reason) + '</p>')
+                              .join('')) +
                       '</details></div>',
                   )
                   .join(''),

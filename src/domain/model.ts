@@ -5,6 +5,14 @@ export type QuestionType = 'choice' | 'numeric' | 'open' | 'code'
 export type CodeLanguage = 'javascript' | 'python' | 'go'
 export type CompetencyStatus = 'needs_evidence' | 'developing' | 'supported'
 
+export interface LearningProgress {
+  completedAnswers: number
+  developing: number
+  supported: number
+  needsEvidence: number
+  total: number
+}
+
 export interface LearningGoal {
   text: string
   exclusions: string[]

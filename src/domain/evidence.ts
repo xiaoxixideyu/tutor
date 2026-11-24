@@ -1,6 +1,14 @@
 import { matchesRuleAnswer } from '../core/rule-grading.ts'
 import { addDays, daysBetween, gradeForScore, intervalDays, nextStability } from '../core/scheduler.ts'
-import type { AnswerEvidence, CourseState, Grade, MemoryState, Question, Skill } from './model.ts'
+import type {
+  AnswerEvidence,
+  CourseState,
+  Grade,
+  LearningProgress,
+  MemoryState,
+  Question,
+  Skill,
+} from './model.ts'
 import { digest } from './validation.ts'
 
 export function gradeObjective(question: Question, answer: string): Grade {
@@ -74,7 +82,9 @@ export function competencyEligibility(
   for (const criterion of skill.criteria) {
     const covered = all.filter((item) => item.grade.criteria.some((result) => result.id === criterion.id))
     const latest = covered.at(-1)
-    if (!covered.some((item) => item.grade.criteria.some((result) => result.id === criterion.id && result.met))) {
+    if (
+      !covered.some((item) => item.grade.criteria.some((result) => result.id === criterion.id && result.met))
+    ) {
       reasons.push('尚未验证：' + criterion.description)
     } else if (
       criterion.critical &&
@@ -93,7 +103,10 @@ export function competencyEligibility(
   return { eligible: reasons.length === 0, reasons, evidenceIds: all.map((item) => item.id) }
 }
 
-export function competencyStatus(state: CourseState, skill: Skill): 'supported' | 'developing' | 'needs_evidence' {
+export function competencyStatus(
+  state: CourseState,
+  skill: Skill,
+): 'supported' | 'developing' | 'needs_evidence' {
   const judgment = state.judgments[skill.id]
   if (judgment?.status === 'supported')
     return competencyEligibility(state, skill).eligible ? 'supported' : 'needs_evidence'
@@ -103,6 +116,19 @@ export function competencyStatus(state: CourseState, skill: Skill): 'supported' 
       ? 'developing'
       : 'needs_evidence')
   )
+}
+
+export function learningProgress(state: CourseState): LearningProgress {
+  const statuses = state.skills
+    .filter((skill) => skill.required)
+    .map((skill) => competencyStatus(state, skill))
+  return {
+    completedAnswers: state.evidence.filter((evidence) => evidence.kind === 'answer').length,
+    developing: statuses.filter((status) => status === 'developing').length,
+    supported: statuses.filter((status) => status === 'supported').length,
+    needsEvidence: statuses.filter((status) => status === 'needs_evidence').length,
+    total: statuses.length,
+  }
 }
 
 export function updateMemory(previous: MemoryState | undefined, score: number, day: string): MemoryState {

@@ -6,8 +6,11 @@ import type { LearnerInteraction } from '../src/domain/model.ts'
 import { activity, SKILL, scriptedTransport, systemFixture, toolReply, setup } from './fixtures/tutor.ts'
 
 function assertSummary(service: CourseService, kind: LearnerInteraction['kind']) {
-  assert.equal(service.view('alpha').interaction.kind, kind)
-  assert.deepEqual(service.list()[0].interaction, { kind })
+  const view = service.view('alpha')
+  const summary = service.list()[0]
+  assert.equal(view.interaction.kind, kind)
+  assert.deepEqual(summary.interaction, { kind })
+  assert.deepEqual(summary.progress, view.progress)
 }
 
 it('导师澄清覆盖已有作答入口，回复后才重新交回原题', async (t) => {

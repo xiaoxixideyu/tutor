@@ -5,7 +5,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { TutorSystem } from '../src/application/tutor-system.ts'
 import { createTutorServer } from '../src/server/http.ts'
-import { activity, SKILL, scriptedTransport, systemFixture, toolReply, ROOT } from './fixtures/tutor.ts'
+import {
+  activity,
+  SKILL,
+  scriptedTransport,
+  systemFixture,
+  toolReply,
+  submit,
+  ROOT,
+} from './fixtures/tutor.ts'
 import { browser, hasChrome } from './fixtures/browser.ts'
 import { judgmentFetch, noulReply } from './fixtures/judgment.ts'
 import { ESCAPED_LESSON } from './fixtures/markdown.ts'
@@ -164,10 +172,11 @@ it(
     await page.wait('document.querySelector(".course-card .badge")?.textContent === "本次已结束"')
     assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '查看本次 →')
     assert.equal(await page.evaluate('document.querySelector("#course-nav small").textContent'), '本次已结束')
-    assert.match(
-      await page.evaluate<string>('document.querySelector(".course-evidence").textContent'),
-      /0 \/ 1/,
+    assert.equal(
+      await page.evaluate('document.querySelector(".course-card .progress-supported").textContent'),
+      '已独立达标 0 项',
     )
+    assert.equal(await page.evaluate('!!document.querySelector(".course-progress")'), false)
     fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
     await page.screenshot(path.join(ROOT, 'data/evals/ui/course-summary-complete.png'))
     await page.evaluate('document.querySelector("[data-nav=courses]").click()')
@@ -215,6 +224,7 @@ it(
     const page = await browser(t, base + '/app.html')
     await page.wait('document.querySelector(".course-card .badge")?.textContent === "等待作答"')
     assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '去作答 →')
+    submit(peer.service, 'alpha')
     peer.start('alpha', { requestId: 'peer-clarify', message: '请先了解我的用途' })
     await peer.wait('alpha')
     assert.equal(peer.service.view('alpha').interaction.kind, 'reply')
@@ -223,6 +233,14 @@ it(
     await page.wait('document.querySelector(".course-card .badge")?.textContent === "等待回复"', 9000)
     assert.equal(await page.evaluate('document.querySelector(".course-entry").textContent'), '去回复 →')
     assert.equal(await page.evaluate('document.querySelector("#course-nav small").textContent'), '等待回复')
+    assert.equal(
+      await page.evaluate('document.querySelector(".learning-effort").textContent'),
+      '累计完成 1 次作答',
+    )
+    assert.equal(
+      await page.evaluate('document.querySelector(".progress-developing").textContent'),
+      '1 项能力正在提升',
+    )
     assert.equal(peer.usageLedger.read().length, used)
     assert.deepEqual(peer.repository.read('alpha'), reply)
     peer.start('alpha', { requestId: 'peer-finish', message: '今天先结束，下次练购物计算' })
@@ -238,6 +256,118 @@ it(
     assert.equal(app.system.activeJobs().length, 0)
   },
 )
+
+it('练习成果与独立达标分别展示，能力评估更新保留展开内容和当前回复', { skip: !hasChrome }, async (t) => {
+  const { app, base } = await interactionApp(
+    t,
+    [toolReply('ask_learner', { question: '下次想用哪类应用任务验证？', reason: '等待学员反馈' })],
+    activity('2+3=?', '5', { kind: 'practice' }),
+  )
+  const view = app.system.service.view('alpha')
+  app.system.answer('alpha', {
+    requestId: 'practice',
+    activityId: view.active!.id,
+    questionId: 'q1',
+    contentHash: view.active!.contentHash,
+    answer: '5',
+    expectedRevision: view.revision,
+  })
+  await app.system.wait('alpha')
+  const evidenceIds = app.system.repository
+    .read('alpha')
+    .evidence.filter((item) => item.kind === 'answer')
+    .map((item) => item.id)
+  const observation = '练习能得到正确结果，保留 developing，下一步需要在新任务中独立验证。'
+  app.system.service.recordJudgment(
+    'alpha',
+    { skillId: SKILL.id, status: 'developing', evidenceIds, reason: observation },
+    'observe',
+    app.system.repository.read('alpha').revision,
+  )
+  app.system.service.create({ id: 'beta', goal: '准备一个新的学习目标' })
+  const used = app.system.usageLedger.read().length
+  const page = await browser(t, base + '/app.html')
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await page.wait(
+    'document.querySelector("[data-course-id=alpha] .learning-effort")?.textContent === "累计完成 1 次作答"',
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector("[data-course-id=alpha] .progress-developing").textContent'),
+    '1 项能力正在提升',
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector("[data-course-id=alpha] .progress-supported").textContent'),
+    '已独立达标 0 项',
+  )
+  assert.match(
+    await page.evaluate<string>(
+      'document.querySelector("[data-course-id=beta] .course-learning").textContent',
+    ),
+    /逐步确定学习重点/,
+  )
+  assert.equal(await page.evaluate('document.querySelectorAll(".course-progress").length'), 0)
+  assert.doesNotMatch(
+    await page.evaluate<string>('document.querySelector("[data-course-id=beta]").textContent'),
+    /0\s*\/\s*0/,
+  )
+  fs.mkdirSync(path.join(ROOT, 'data/evals/ui'), { recursive: true })
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/learning-progress-home.png'), false)
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  })
+  await page.wait('document.querySelector("#rail").getBoundingClientRect().right <= 1')
+  await page.evaluate('document.querySelector("[data-course-id=alpha]").scrollIntoView({block:"center"})')
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true)
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/learning-progress-mobile.png'), false)
+  await page.command('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await page.evaluate('document.querySelector("[data-course-id=alpha]").click()')
+  await page.wait(
+    '!!document.querySelector("#feedback-input") && !!document.querySelector("details[data-skill-id]")',
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector("#profile-panel .learning-effort").textContent'),
+    '累计完成 1 次作答',
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector(".skill-evidence-count").textContent'),
+    '已完成 1 次相关作答',
+  )
+  const visibleObservation = await page.evaluate<string>(
+    'document.querySelector(".skill-observation").textContent',
+  )
+    assert.match(visibleObservation, /保留\s*“正在建立能力”/)
+  assert.doesNotMatch(visibleObservation, /\bdeveloping\b/)
+  assert.equal(app.system.repository.read('alpha').judgments[SKILL.id].reason, observation)
+  await page.evaluate(
+    'document.querySelector("details[data-skill-id] summary").click();document.querySelector("#feedback-input").value="稍后继续";document.querySelector("#feedback-input").dispatchEvent(new Event("input"))',
+  )
+  const updated = '已保留这次练习成果，下次将在不同情境中确认独立完成能力。'
+  app.system.service.recordJudgment(
+    'alpha',
+    { skillId: SKILL.id, status: 'developing', evidenceIds, reason: updated },
+    'update-observation',
+    app.system.repository.read('alpha').revision,
+  )
+  await page.wait('document.querySelector(".skill-observation")?.textContent.includes("不同情境")')
+  assert.equal(await page.evaluate('document.querySelector("details[data-skill-id]").open'), true)
+  assert.equal(await page.evaluate('document.querySelector("#feedback-input").value'), '稍后继续')
+  assert.equal(await page.evaluate('document.querySelectorAll(".interaction-surface textarea").length'), 1)
+  await page.screenshot(path.join(ROOT, 'data/evals/ui/learning-progress-detail.png'), false)
+  assert.equal(app.system.usageLedger.read().length, used)
+})
 
 it('网页能创建目标、接受 agent 活动、选择答案并显示真实反馈', { skip: !hasChrome }, async (t) => {
   const content = activity()

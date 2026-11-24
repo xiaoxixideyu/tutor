@@ -357,22 +357,45 @@ button.secondary:hover {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.course-progress {
-  height: 4px;
-  background: #eef1ea;
-  border-radius: 10px;
-  margin: 20px 0 10px;
-  overflow: hidden;
+.course-learning {
+  margin: 19px 0 13px;
 }
-.course-progress i {
-  height: 100%;
+.learning-progress {
+  font-size: 11px;
+  line-height: 1.7;
+}
+.course-card .learning-effort,
+.side-card .learning-effort {
   display: block;
-  background: #709a79;
-  border-radius: 10px;
+  margin: 0 0 7px;
+  color: var(--ink);
+}
+.learning-effort strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+.learning-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+}
+.learning-states strong {
+  font-weight: 500;
+}
+.progress-developing {
+  color: #8b7443;
+}
+.progress-supported,
+.side-card .goal-supported,
+.side-card .skill-verified {
+  color: #52735b;
+}
+.progress-pending {
+  color: var(--muted);
 }
 .course-bottom {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   font-size: 11px;
   color: var(--muted);
 }
@@ -872,6 +895,18 @@ button.secondary:hover {
   color: var(--muted);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+.side-card .learning-progress {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 13px;
+}
+.side-card .progress-explanation {
+  line-height: 1.7;
+}
+.side-card .skill-observation {
+  color: var(--ink);
+  line-height: 1.7;
 }
 .skill-row {
   padding: 10px 0;
